@@ -35,6 +35,16 @@ static uint64_t ame156_mach_ms(void) {
 
 @implementation TrackedTextField
 
+- (BOOL)resignFirstResponder {
+    // SDLのtext-input更新やIMEの候補確定に伴う一時的なresign要求では、
+    // ユーザーが入力中の標準キーボードを閉じない。明示的なキーボード
+    // トグル時はSurfaceViewControllerがこのフラグを一時的に解除する。
+    if (self.preventUnexpectedResign && self.isFirstResponder) {
+        return NO;
+    }
+    return [super resignFirstResponder];
+}
+
 - (void)sendMultiBackspaces:(int)times {
     for (int i = 0; i < times; i++) {
         self.sendKey(GLFW_KEY_BACKSPACE, 0, 1, 0);

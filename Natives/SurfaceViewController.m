@@ -1105,6 +1105,7 @@ static UIView *findSDL_uikitview(UIView *root);
     self.inputTextField.delegate = self;
     self.inputTextField.font = [UIFont fontWithName:@"Menlo-Regular" size:20];
     self.inputTextField.clearsOnBeginEditing = YES;
+    self.inputTextField.preventUnexpectedResign = YES;
     self.inputTextField.textAlignment = NSTextAlignmentCenter;
     self.inputTextField.sendChar = ^(jchar keychar){ CallbackBridge_nativeSendChar(keychar); };
     self.inputTextField.sendCharMods = ^(jchar keychar, int mods){ CallbackBridge_nativeSendCharMods(keychar, mods); };
@@ -1907,9 +1908,12 @@ static BOOL ame87_mcVersionRequiresTextureBuffer(NSString *mcVersionId) {
 
     if (gestureRecognizer.state == UIGestureRecognizerStateBegan) {
         if (self.inputTextField.isFirstResponder) {
+            self.inputTextField.preventUnexpectedResign = NO;
             [self.inputTextField resignFirstResponder];
+            self.inputTextField.preventUnexpectedResign = YES;
             self.inputTextField.alpha = 1.0f;
         } else {
+            self.inputTextField.preventUnexpectedResign = YES;
             [self.inputTextField becomeFirstResponder];
             self.inputTextField.text = @" ";
         }
@@ -2164,9 +2168,12 @@ static BOOL ame87_mcVersionRequiresTextureBuffer(NSString *mcVersionId) {
                 case SPECIALBTN_KEYBOARD:
                     if (held == 0) {
                         if (self.inputTextField.isFirstResponder) {
+                            self.inputTextField.preventUnexpectedResign = NO;
                             [self.inputTextField resignFirstResponder];
+                            self.inputTextField.preventUnexpectedResign = YES;
                             self.inputTextField.alpha = 1.0f;
                         } else {
+                            self.inputTextField.preventUnexpectedResign = YES;
                             [self.inputTextField becomeFirstResponder];
                             self.inputTextField.text = @" ";
                         }
