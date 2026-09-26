@@ -1237,7 +1237,17 @@ static bool dlsym_EGL() {
     //     mg_init_gles 引导完成前避免触发前端内部的 LOAD_EGL 一次性初始化）。
     //   - 其余渲染器（gl4es / ANGLE / LTW）：全部从 ANGLE 解析。
     const char *renderer = getenv("AMETHYST_RENDERER");
-    const char *eglLibrary = isSelfEglRenderer(renderer) ? renderer : RENDERER_NAME_MTL_ANGLE;
+    // SFPEW 叠加模式下 AMETHYST_RENDERER 已换成 libSimpleFPEWrapper.dylib，但 EGL
+    // 基础设施必须由真后端提供（对齐安卓：POJAVEXEC_EGL 不变，只换 renderLibrary）。
+    // 真后端名在 AMETHYST_SFPEW_BACKEND（JavaLauncher.m 设置）：
+    //   - MobileGlues：与单独使用时一致，EGL 走 ANGLE
+    //   - MobileGL(-gles)：自带 EGL，从 libMobileGL.dylib 解析
+    const char *eglRenderer = renderer;
+    if (isSFPEWRenderer(renderer)) {
+        const char *sfpewBackend = getenv("AMETHYST_SFPEW_BACKEND");
+        if (sfpewBackend != NULL && sfpewBackend[0] != '\0') eglRenderer = sfpewBackend;
+    }
+    const char *eglLibrary = isSelfEglRenderer(eglRenderer) ? eglRenderer : RENDERER_NAME_MTL_ANGLE;
     NSString *eglPath = [NSString stringWithFormat:@"@rpath/%s", eglLibrary ?: ""];
     void* dl_handle = dlopen(eglPath.UTF8String, RTLD_NOW | RTLD_GLOBAL);
     if (!dl_handle) {
@@ -1248,8 +1258,13 @@ static bool dlsym_EGL() {
 
     // Task 36：MobileGlues 前端 EGL 准备（不改变任何行为，仅记录句柄/符号，
     // 真正的指针切换发生在 ame_mgBootstrap 成功之后）。
-    if (renderer && strcmp(renderer, RENDERER_NAME_MOBILEGLUES) == 0 &&
-        !isSelfEglRenderer(renderer)) {
+    // SFPEW 叠加时 AMETHYST_RENDERER 已是 libSimpleFPEWrapper.dylib，这里必须按
+    // 真后端（eglRenderer）判定，否则前端镜像不加载 → ame_mg_handle 为 NULL →
+    // bootstrap 跳过 → MobileGlues 的 LOAD_EGL 静态指针在后端句柄 `egl` 仍为 NULL
+    // 时被永久初始化成 NULL（static 局部变量只初始化一次，事后 mg_init_gles 也
+    // 救不回来）→ eglCreateContext/eglMakeCurrent 全部失败 → 无当前上下文。
+    if (eglRenderer && strcmp(eglRenderer, RENDERER_NAME_MOBILEGLUES) == 0 &&
+        !isSelfEglRenderer(eglRenderer)) {
         ame_mg_angle_handle = dl_handle;
         void *mg = dlopen("@rpath/" RENDERER_NAME_MOBILEGLUES, RTLD_NOW | RTLD_LOCAL);
         if (!mg) {
@@ -1314,6 +1329,22 @@ static bool dlsym_EGL() {
         NSLog(@"EGLBridge: LTW mode active, eglCreateContext/Destroy/MakeCurrent resolved from libltw.dylib");
     }
 
+    // SFPEW：与 LTW 同构的部分拦截层。基础设施（display / config / surface）
+    // 仍从 ANGLE 解析，生命周期 wrapper 从 libSimpleFPEWrapper.dylib 取，
+    // 否则固定管线仿真根本不会被安装（SFPEW 静默降级为透传）。
+    BOOL useSFPEW = renderer && isSFPEWRenderer(renderer);
+    void *sfpew_handle = NULL;
+    if (useSFPEW) {
+        sfpew_handle = dlopen("@rpath/" RENDERER_NAME_SFPEW, RTLD_NOW | RTLD_LOCAL);
+        if (!sfpew_handle) {
+            NSLog(@"EGLBridge: SFPEW renderer selected but failed to load %s: %s",
+                  RENDERER_NAME_SFPEW, dlerror() ?: "unknown dlopen error");
+            return false;
+        }
+        NSLog(@"EGLBridge: SFPEW mode active, lifecycle EGL resolved from %s",
+              RENDERER_NAME_SFPEW);
+    }
+
     memset(&handle, 0, sizeof(handle));
     handle.eglBindAPI = load_egl_symbol(dl_handle, "eglBindAPI");
     handle.eglChooseConfig = load_egl_symbol(dl_handle, "eglChooseConfig");
@@ -1322,6 +1353,12 @@ static bool dlsym_EGL() {
         handle.eglCreateContext = load_egl_symbol(ltw_handle, "eglCreateContext");
         handle.eglDestroyContext = load_egl_symbol(ltw_handle, "eglDestroyContext");
         handle.eglMakeCurrent = load_egl_symbol(ltw_handle, "eglMakeCurrent");
+    } else if (useSFPEW && sfpew_handle) {
+        // 从 SFPEW 解析三个 wrapper（关键：FPE 的 GL 入口转译表在
+        // eglCreateContext / eglMakeCurrent 里安装，直接调 ANGLE 的会绕过它）
+        handle.eglCreateContext = load_egl_symbol(sfpew_handle, "eglCreateContext");
+        handle.eglDestroyContext = load_egl_symbol(sfpew_handle, "eglDestroyContext");
+        handle.eglMakeCurrent = load_egl_symbol(sfpew_handle, "eglMakeCurrent");
     } else {
         handle.eglCreateContext = load_egl_symbol(dl_handle, "eglCreateContext");
         handle.eglDestroyContext = load_egl_symbol(dl_handle, "eglDestroyContext");
@@ -1336,6 +1373,12 @@ static bool dlsym_EGL() {
     handle.eglGetPlatformDisplay = load_egl_symbol(dl_handle, "eglGetPlatformDisplay");
     handle.eglInitialize = load_egl_symbol(dl_handle, "eglInitialize");
     handle.eglSwapBuffers = load_egl_symbol(dl_handle, "eglSwapBuffers");
+    if (useSFPEW && sfpew_handle) {
+        // SFPEW 的 swap 先 flush 再交给后端，绕过它会导致 FPE 的立即模式
+        // 绘制与后端的提交顺序错乱。
+        void *sfpewSwap = load_egl_symbol(sfpew_handle, "eglSwapBuffers");
+        if (sfpewSwap) handle.eglSwapBuffers = sfpewSwap;
+    }
     handle.eglReleaseThread = load_egl_symbol(dl_handle, "eglReleaseThread");
     handle.eglSwapInterval = load_egl_symbol(dl_handle, "eglSwapInterval");
     handle.eglTerminate = load_egl_symbol(dl_handle, "eglTerminate");
@@ -1401,6 +1444,17 @@ static BOOL ame_mgBootstrap(EGLDisplay dpy, EGLConfig config) {
     // 4) 把生命周期 EGL 切换到 MobileGlues 前端（此后 eglCreateContext 会建立
     //    MGContext 记录、eglMakeCurrent 会绑定 g_current_ctx 与每上下文子系统，
     //    eglSwapBuffers 走 presentSurface）。任一符号缺失则单独回退 raw。
+    // SFPEW 叠加时生命周期指针必须留在 SFPEW 上：SFPEW 的 wrapper 会转发给
+    // MobileGlues 前端（它 dlopen 的后端就是 libmobileglues.dylib），直接换成
+    // 前端会把 SFPEW 整层绕开，固定管线仿真根本不安装。此时 bootstrap 的价值
+    // 是「mg_init_gles 已跑、MG 后端句柄已绑定」，而非切换函数指针。
+    if (isSFPEWRenderer(getenv("AMETHYST_RENDERER"))) {
+        NSLog(@"[MG-Bridge] bootstrap: mg_init_gles done under SFPEW overlay -- "
+              @"lifecycle EGL stays on SFPEW (it forwards to the MobileGlues frontend)");
+        ame_mgFrontendActive = YES;
+        return YES;
+    }
+
     void *fn = NULL;
     #define AME_MG_SWAP(field, name)                                                  \
         do {                                                                          \
@@ -1443,10 +1497,22 @@ gl_render_window_t* gl_init_context(gl_render_window_t *share) {
     gl_render_window_t* bundle = calloc(1, sizeof(gl_render_window_t));
 
     NSString *renderer = NSProcessInfo.processInfo.environment[@"AMETHYST_RENDERER"];
+    // SFPEW 叠加模式下 AMETHYST_RENDERER 已被换成 libSimpleFPEWrapper.dylib，但
+    // 「导出的是 desktop OpenGL 还是 OpenGL ES」取决于真后端，与 dlsym_EGL() 里
+    // EGL 来源的判定必须一致（真后端名在 AMETHYST_SFPEW_BACKEND）。
+    // 若按 SFPEW 判定，MobileGL-gles（desktop GL）会被当成 ES 后端：
+    // eglChooseConfig 请求 EGL_OPENGL_ES3_BIT、eglBindAPI(EGL_OPENGL_ES_API)，
+    // 而 MobileGL 导出的是 desktop OpenGL → 上下文类型不匹配 →
+    // glCheckFramebufferStatus 返回垃圾值（如 0x582B0D8）崩溃。
+    const char *apiRenderer = renderer.UTF8String;
+    if (isSFPEWRenderer(apiRenderer)) {
+        const char *sfpewBackend = getenv("AMETHYST_SFPEW_BACKEND");
+        if (sfpewBackend != NULL && sfpewBackend[0] != '\0') apiRenderer = sfpewBackend;
+    }
     // ANGLE / Mithril / MobileGL 导出的都是 desktop OpenGL，走 EGL_OPENGL_BIT +
     // eglBindAPI(EGL_OPENGL_API)；其余（gl4es / MobileGlues / LTW）是 OpenGL ES。
-    BOOL desktopGL = isDesktopGLRenderer(renderer.UTF8String);
-    BOOL mobileGL = isMobileGLRenderer(renderer.UTF8String);
+    BOOL desktopGL = isDesktopGLRenderer(apiRenderer);
+    BOOL mobileGL = isMobileGLRenderer(apiRenderer);
 
     const EGLint attribs[] = {
         EGL_RED_SIZE, 8,
