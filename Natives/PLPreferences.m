@@ -178,6 +178,9 @@ NSString *const PREF_MOD_MIRROR = @"general.mod_mirror";
             @"appicon": @"AppIcon-Light",
             @"ui_layout": @"vs",
             @"ui_theme": @"dark",
+            // Display language: Japanese is the product default. "default"
+            // explicitly selects the original English interface.
+            @"language": @"ja",
             @"multi_threaded": @NO,
             // 自定义外观颜色（hex 字符串，空串=使用默认深色毛玻璃/白色文字）
             @"text_color": @"",

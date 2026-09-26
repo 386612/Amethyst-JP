@@ -16,6 +16,13 @@ extern UIWindow *mainWindow;
 
 @implementation SceneDelegate
 
+- (UIViewController *)newLauncherRootViewController {
+    NSString *layout = getPrefObject(@"general.ui_layout");
+    return [layout isEqualToString:@"card"]
+        ? [[LauncherCardLayoutViewController alloc] init]
+        : [[LauncherRootViewController alloc] init];
+}
+
 - (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)connectionOptions {
     UIWindowScene *windowScene = (UIWindowScene *)scene;
     
@@ -42,14 +49,7 @@ extern UIWindow *mainWindow;
     mainWindow = self.window;
 
     // 根据设置选择布局：默认 VS 三栏布局，可切换为卡片式便当盒布局
-    NSString *layout = getPrefObject(@"general.ui_layout");
-    UIViewController *rootVC;
-    if ([layout isEqualToString:@"card"]) {
-        rootVC = [[LauncherCardLayoutViewController alloc] init];
-    } else {
-        rootVC = [[LauncherRootViewController alloc] init];
-    }
-    self.window.rootViewController = rootVC;
+    self.window.rootViewController = [self newLauncherRootViewController];
 
     // 外观模式（浅色/深色/跟随系统）：读 general.ui_theme 偏好。
     //   light  -> UIUserInterfaceStyleLight
@@ -90,11 +90,18 @@ extern UIWindow *mainWindow;
                                              selector:@selector(applyUITheme:)
                                                  name:@"UIThemeChanged"
                                                object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(applyLanguageChange:)
+                                                 name:@"LauncherLanguageChanged"
+                                               object:nil];
 }
 
 - (void)showTranslationNoticeIfNeeded {
     // 仅当系统语言为英文时提示：部分内容为机翻，可能不够准确，欢迎提交翻译 PR。
     // 用户选择"不再提醒"后通过偏好持久化，下次不再弹出。
+    if (![getPrefObject(@"general.language") isEqualToString:@"default"]) {
+        return;
+    }
     if (![NSLocale.preferredLanguages.firstObject hasPrefix:@"en"]) {
         return;
     }
@@ -141,8 +148,24 @@ extern UIWindow *mainWindow;
     }
 }
 
+- (void)applyLanguageChange:(NSNotification *)notification {
+    // Recreating the root controller is more reliable than reloading visible
+    // table rows: it also refreshes navigation stacks, search placeholders,
+    // alert factories, and any cached label text across the launcher.
+    UIViewController *root = [self newLauncherRootViewController];
+    [UIView transitionWithView:self.window
+                      duration:0.20
+                       options:UIViewAnimationOptionTransitionCrossDissolve
+                    animations:^{
+        self.window.rootViewController = root;
+    } completion:nil];
+    [[BackgroundManager sharedManager] applyBackgroundToWindow:self.window];
+    UIAccessibilityPostNotification(UIAccessibilityScreenChangedNotification, root.view);
+}
+
 - (void)sceneDidDisconnect:(UIScene *)scene {
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"UIThemeChanged" object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:@"LauncherLanguageChanged" object:nil];
 }
 
 - (void)sceneDidBecomeActive:(UIScene *)scene {

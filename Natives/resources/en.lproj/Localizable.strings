@@ -1,6 +1,6 @@
 /*
   Localizable.strings
-  StringLocalization
+  Japanese localization for Air
 */
 
 "game.menu.force_close" = "Force Close";
@@ -14,34 +14,24 @@
 "game.menu.toggle_keyboard" = "Toggle Keyboard";
 "game.menu.resolution" = "Resolution";
 "game.menu.resolution.message" = "Select game resolution scale";
-
 "game.note.airplay" = "Minecraft is being displayed in AirPlay mirrored display";
-
 "game.title.exit_code" = "Game exited with code %d";
-
-// The play button
 "Play" = "Play";
 "Details" = "Details";
-
-// Version categories
 "Installed" = "Installed";
 "Snapshot" = "Snapshot";
 "Releases" = "Releases";
 "Unstable" = "Unstable";
 "Old-beta" = "Old-beta";
 "Old-alpha" = "Old-alpha";
-
-// Custom controls
 "Copy" = "Copy";
 "Edit" = "Edit";
 "Move" = "Move";
 "Remove" = "Remove";
 "Resize" = "Resize";
-// Visibility
 "Always" = "Always";
 "In game" = "In game";
 "In menu" = "In menu";
-
 "custom_controls.button_edit.forward_lock" = "Forward lock";
 "custom_controls.button_edit.name" = "Name";
 "custom_controls.button_edit.size" = "Size";
@@ -60,7 +50,6 @@
 "custom_controls.button_edit.section.input" = "Input";
 "custom_controls.button_edit.section.behavior" = "Behavior";
 "custom_controls.button_edit.section.appearance" = "Appearance";
-
 "custom_controls.button_menu.add_subbutton" = "Add sub-button";
 "custom_controls.control_menu.discard_changes" = "Discard changes";
 "custom_controls.control_menu.exit" = "Exit";
@@ -77,44 +66,34 @@
 "custom_controls.control_menu.add_joystick" = "Add joystick";
 "custom_controls.error.incompatible" = "This control version (code %d) is not implemented in this launcher build.";
 "custom_controls.hint" = "Long-press anywhere on screen for more options";
-
 "init.migrateDir" = "The Amethyst data directory is now %@. All of your existing data has been moved to the new location.";
-
 "java.error.missing_main_class" = "%@ is missing main class attribute. If this is a mod, put it into the “mods” folder of your selected instance.";
 "java.error.missing_runtime" = "%@ requires Java %d or later to run. Please install it first and specify it in Manage Runtimes.";
-
 "launcher.mcl.downloading_file" = "Downloading %@";
 "launcher.mcl.error_download" = "Failed to download %@: %@";
-
 "launcher.menu.custom_controls" = "Custom controls";
 "launcher.menu.install_jar" = "Install .jar";
 "launcher.menu.execute_jar" = "Execute .jar";
 "launcher.menu.import_modpack" = "Import modpack";
-
 "launcher.wait_jit.title" = "Waiting for JIT(Just-in-time)";
 "launcher.wait_jit.message" = "Amethyst relies on JIT(Just-in-time) compilation for Java to work at maximum performance";
 "launcher.wait_jit_trollstore.message" = "If you still see this message, please enable URL Scheme in TrollStore.";
-
 "login.error.username.outOfRange" = "Username must be at least 3 characters and a maximum of 16 characters";
 "login.error.fields.empty" = "Please fill in all fields";
 "login.error.invalid_credentials" = "Invalid username or password";
 "login.error.token_missing" = "Access token or client token is missing";
 "login.error.token_expired" = "Authentication token has expired, please log in again";
 "login.error.invalid_response" = "Invalid server response";
-
 "login.alert.field.username" = "Username";
 "login.alert.field.password" = "Password";
 "login.alert.field.server" = "Server Address";
 "login.error.invalid_server" = "Invalid server address";
-
 "login.jit.checking" = "Checking for JIT";
 "login.jit.enabled" = "JIT has been enabled";
 "login.jit.fail" = "JIT could not be enabled.";
 "login.jit.fail.title" = "JIT could not be enabled on your device.";
 "login.jit.fail.description" = "No integrations could be used to automatically enable JIT on your device, and it must now be enabled manually. Errors have been logged to latestlog.txt.";
 "login.jit.fail.description_unsupported" = "An unsupported installation method has been detected. Please reinstall using one of supported methods.";
-
-// Login buttons
 "login.menu.sendlogs" = "Send your logs";
 "login.option.add" = "Add account";
 "login.option.select" = "Select account";
@@ -122,39 +101,32 @@
 "login.option.microsoft" = "Microsoft account";
 "login.option.local" = "Local account";
 "login.option.3rdparty" = "Third-party account";
-
 "login.warn.title.legacy_device" = "The next release of Amethyst will not be compatible with this device.";
 "login.warn.message.legacy_device" = "To run the next major release, a device capable of running iOS 14 is required.";
 "login.warn.title.legacy_ios" = "The next release of Amethyst will require a system update.";
 "login.warn.message.legacy_ios" = "To run the next major release, this device needs to be running iOS 14 or later.";
 "login.warn.title.limited_ram" = "This device has a limited amount of memory available.";
 "login.warn.message.limited_ram" = "We recommend leaving auto RAM enabled to prevent instability and performance issues.";
-
 "login.warn.title.demomode" = "Your account is Demo";
 "login.warn.message.demomode" = "As a replacement to offline and local mode, demo mode will allow you to sign into a Microsoft account that does not own the game and play the Java Edition trial, introduced in 1.3.1 and newer versions. Older versions contain the full game, as the official launcher does not place these restrictions. See our website to learn more about this transition from offline mode.";
-
 "login.warn.title.localmode" = "About Local Mode";
 "login.warn.message.localmode" = "The updated launcher supports offline mode and can be used to download games. \nYou can still play with an offline account, but it is recommended to support the official version. \nYou can purchase the official Minecraft at https://minecraft.net.";
-
 "login.msa.error.xsts.noxboxacc" = "An Xbox profile is not registered for this Microsoft account. Please make sure that you have made an Xbox profile.\nError code: 2148916233";
 "login.msa.error.xsts.noxbox" = "Xbox Live is currently unavailable in your country.\nError code: 2148916235";
 "login.msa.error.xsts.krverify" = "Your account needs to be verified by your parents before you can continue.\nError code: 2148916236 or 2148916237";
 "login.msa.error.xsts.underage" = "Your account needs to be linked to a parent account before you can continue.\nError code: 2148916238";
-
 "login.msa.progress.acquireAccessToken" = "(1/6) Acquiring the Access token";
 "login.msa.progress.acquireXBLToken" = "(2/6) Acquiring the Xbox Live token";
 "login.msa.progress.acquireXSTS" = "(3/6) Acquiring XSTS";
 "login.msa.progress.acquireXboxProfile" = "(4/6) Acquiring the Xbox profile";
 "login.msa.progress.acquireMCToken" = "(5/6) Acquiring the Minecraft token";
 "login.msa.progress.checkMCProfile" = "(6/6) Checking the Minecraft profile";
-
 "login.3rdparty.progress.auth" = "(1/2) Authenticating with third-party server";
 "login.3rdparty.progress.refresh" = "(2/2) Refreshing third-party authentication";
 "login.3rdparty.2fa.title" = "Two-Factor Authentication";
 "login.3rdparty.2fa.message" = "Please enter your two-factor authentication code";
 "login.3rdparty.2fa.code" = "Authentication code";
 "login.3rdparty.2fa.empty" = "Authentication code cannot be empty";
-
 "News" = "News";
 "preference.title.news_url" = "News URL";
 "preference.detail.news_url" = "Set the URL for the news page";
@@ -162,7 +134,6 @@
 "preference.detail.reset_news_url" = "Reset the news URL to its default value";
 "Profiles" = "Profiles";
 "Settings" = "Settings";
-
 "preference.section.general" = "General Settings";
 "preference.section.ai" = "AI Agent";
 "preference.section.video" = "Video and Audio Settings";
@@ -172,16 +143,11 @@
 "preference.section.control" = "Control customization";
 "preference.section.debug" = "UI Debugging settings";
 "preference.section.footer.debug" = "In addition to debugging these settings may be useful for custom controls. You may need to restart the launcher to make the changes effective.";
-//"preference.section.footer.control" = "";
 "preference.section.java" = "Java Tweaks";
-//"preference.section.footer.java" = "";
-
 "preference.title.confirm" = "Are you sure?";
-
 "preference.title.game_directory" = "Game directory";
 "preference.title.confirm.delete_game_directory" = "The instance %@ will be deleted forever and cannot be restored.";
 "preference.multidir.add_directory" = "Add game directory";
-
 "preference.title.check_sha" = "Check files after downloading";
 "preference.detail.check_sha" = "This option forces launcher to check the file hash if it's available. Prevents broken downloads.";
 "preference.title.cosmetica" = "Cosmetica Capes";
@@ -219,25 +185,19 @@
 "preference.title.appicon-development" = "Penciled Development";
 "preference.title.hidden_sidebar" = "Hide main menu sidebar by default";
 "preference.detail.hidden_sidebar" = "Allows you to hide the sidebar on the main menu by default and when rotating.";
-
 "preference.title.reset_warnings" = "Reset all warnings";
 "preference.title.done.reset_warnings" = "All warnings have been reset.";
-
 "preference.title.reset_settings" = "Reset all settings";
 "preference.title.confirm.reset_settings" = "This will remove all of your custom preferences, including resolution, button size, and Java arguments.";
 "preference.title.done.reset_settings" = "All of the default settings have been restored.";
-
 "preference.title.erase_demo_data" = "Erase Demo game data";
 "preference.title.confirm.erase_demo_data" = "This will erase all Demo game versions and data used for Demo accounts.";
 "preference.title.done.erase_demo_data" = "All of the Demo game data has been erased.";
-
 "preference.title.renderer" = "Renderer";
-
 "preference.title.renderer.release.auto" = "Auto";
 "preference.title.renderer.release.gl4es" = "holy gl4es";
 "preference.title.renderer.release.angle" = "ANGLE";
 "preference.title.renderer.release.zink" = "Zink";
-
 "preference.title.renderer.debug.auto" = "Auto: gl4es or ANGLE";
 "preference.title.renderer.debug.gl4es" = "holy gl4es - exports OpenGL 2.1";
 "preference.title.renderer.debug.angle" = "ANGLE (1.17+) - exports OpenGL 3.2 (Core Profile, limited)";
@@ -248,18 +208,13 @@
 "preference.title.renderer.debug.mithril" = "Mithril (1.17+) - OpenGL 3.3 Core via Vulkan/Metal, EXPERIMENTAL";
 "preference.title.renderer.debug.mobilegl" = "MobileGL Vulkan (1.17+) - OpenGL 3.3 Core, EXPERIMENTAL";
 "preference.title.renderer.debug.mobilegl_gles" = "MobileGL GLES (1.17+) - OpenGL 3.3 Core via OpenGL ES, EXPERIMENTAL";
-
 "preference.detail.renderer" = "Change the OpenGL render engine to use. Zink is temporarily disabled on iOS 16 and later to diagnose issues.";
-
 "preference.title.resolution" = "Resolution (%)";
 "preference.detail.resolution" = "Allows you to decrease the game resolution.";
-
 "preference.title.disable_game_vsync" = "Unlock framerate (disable VSync)";
 "preference.detail.disable_game_vsync" = "Minecraft enables VSync by default, which caps FPS at the screen refresh rate (60 or 120). When enabled, the launcher forces VSync off so the game can exceed the refresh rate. Turn off if you prefer VSync or want to reduce heat/battery drain.";
-
 "preference.title.performance_hud" = "Show Performance HUD";
 "preference.detail.performance_hud" = "When available, show the performance monitoring overlay.";
-
 "preference.title.fullscreen_airplay" = "Fullscreen AirPlay";
 "preference.detail.fullscreen_airplay" = "Allows presenting fullscreen game window on the external display rather than mirroring everything on screen.";
 "preference.title.silence_other_audio" = "Pause audio when game opens";
@@ -268,8 +223,6 @@
 "preference.detail.silence_with_switch" = "Enable to disable audio when Silent Mode is on. Headphones and external speakers are not affected.";
 "preference.title.allow_microphone" = "Allow microphone input";
 "preference.detail.allow_microphone" = "Enable this only if you are using voice chat mod. Silent switch option will be ignored, and audio quality from other apps will be affected.";
-
-/* MobileGlues 设置 */
 "preference.title.enable_angle" = "ANGLE ES Driver";
 "preference.detail.enable_angle" = "Use ANGLE as the OpenGL ES driver instead of the system driver. May improve compatibility on some devices.";
 "preference.title.enable_no_error" = "GL No Error";
@@ -331,20 +284,16 @@
 "preference.detail.virtmouse_enable" = "Enable this option to start with virtual mouse on";
 "preference.title.slideable_hotbar" = "Slideable hotbar";
 "preference.detail.slideable_hotbar" = "Make the hotbar slideable like the mouse wheel";
-
-// Custom mouse pointer
 "preference.title.custom_mouse_pointer" = "Custom Mouse Pointer";
 "preference.detail.custom_mouse_pointer" = "Select a custom image as the in-game mouse pointer appearance.";
 "preference.title.reset_mouse_pointer" = "Reset Mouse Pointer";
 "preference.detail.reset_mouse_pointer" = "Reset the mouse pointer to its default appearance.";
-
 "preference.title.gyroscope_enable" = "Enable gyroscope controls";
 "preference.detail.gyroscope_enable" = "Enabling this will allow you to turn in game by turning your device";
 "preference.title.gyroscope_invert_x_axis" = "Invert gyroscope left and right";
 "preference.detail.gyroscope_invert_x_axis" = "Inverts the X-axis of the gyroscope";
 "preference.title.gyroscope_sensitivity" = "Gyroscope controls sensitivity";
 "preference.detail.gyroscope_sensitivity" = "Adjust the sensitivity of gyroscope controls";
-
 "preference.title.manage_runtime" = "Manage runtimes";
 "preference.title.confirm.delete_runtime" = "%@ will be deleted";
 "preference.manage_runtime.header.default" = "Preferred Java version";
@@ -354,7 +303,6 @@
 "preference.manage_runtime.footer.java8" = "This is the default version for Minecraft 1.16.5 and older.";
 "preference.manage_runtime.footer.java17" = "This is the default version for Minecraft 1.17 and newer.";
 "preference.manage_runtime.header.invalid" = "Invalid runtimes";
-
 "preference.title.java_args" = "JVM Launch arguments";
 "preference.detail.java_args" = "Pass arguments to Java when launching Minecraft. Be careful, this can make the game crash if modified incorrectly.";
 "preference.placeholder.java_args" = "Specify arguments...";
@@ -369,12 +317,10 @@
 "preference.warn.allocated_memory" = "Due to limitations in the operating system itself, this option may cause instability at this and higher values. Proceed with caution.";
 "preference.title.custom_env" = "Environment variables";
 "preference.detail.custom_env" = "This option is under construction. Create and edit custom_env.txt in the meantime.";
-
 "preference.title.debug_skip_wait_jit" = "Skip \"Waiting for JIT\" dialog";
 "preference.detail.debug_skip_wait_jit" = "This does not allow you to launch without JIT, instead this skips debugger check, because check fails on certain jailbreaks.";
 "preference.title.debug_ipad_ui" = "Unlock iPadOS UI";
 "preference.detail.debug_ipad_ui" = "Unlock iPad-exclusive UI (alert, keyboard, etc.) if enabled or iPhone UI if disabled.";
-
 "ai.fix.dash_title" = "AI Repair Dashboard";
 "ai.fix.dash_subtitle" = "Analyze first, then repair. All high-risk actions wait for confirmation.";
 "ai.fix.tile.analyze" = "Analyze";
@@ -401,7 +347,7 @@
 "ai.fix.risk.verify" = "Manual verification required";
 "ai.fix.risk.verify_sub" = "Please restart the game to confirm the result";
 "ai.fix.input_title" = "Instructions & notes";
-"ai.fix.input_placeholder" = "Type something...";
+"ai.fix.input_placeholder" = "Ask me something...";
 "ai.fix.stop" = "Stop";
 "ai.fix.send" = "Send";
 "ai.fix.exit" = "Exit Launcher";
@@ -424,7 +370,7 @@
 "ai.fix.continue" = "Continue";
 "ai.fix.cancel" = "Cancel";
 "ai.fix.please_configure" = "Please complete the API configuration and click \"Save\" button first.";
-"ai.fix.settings_mode" = "You are in AI fix settings mode. After configuration, click the send button to start the conversation.";
+"ai.fix.settings_mode" = "You have entered the AI Repair Settings interface. Once configured, click the Send button to start a conversation.";
 "ai.fix.starting" = "Starting AI fix process...";
 "ai.fix.start_failed" = "Start Failed";
 "ai.fix.tool_success" = "%@ executed successfully";
@@ -432,7 +378,7 @@
 "ai.fix.error" = "Error";
 "ai.fix.completed" = "Completed";
 "ai.fix.modifications" = "Modified %lu file(s)";
-"ai.fix.restart_hint" = "Please restart the game to verify the fix. If the issue persists, you can continue the conversation or submit an issue on GitHub.";
+"ai.fix.restart_hint" = "Please restart the game to verification fix. If the problem remains unresolved, you can continue to talk or submit issues on GitHub";
 "ai.fix.waiting_confirm" = "Waiting for Confirmation";
 "ai.fix.waiting_subtitle" = "This action needs your approval before execution";
 "ai.fix.executing" = "Executing Tool...";
@@ -452,7 +398,6 @@
 "preference.detail.debug_show_layout_bounds" = "Show Clip Borders, Margins";
 "preference.title.debug_show_layout_overlap" = "Layout Overlay Display";
 "preference.detail.debug_show_layout_overlap" = "Override each view with light yellow colors, the deeper the color will overlay";
-
 "preference.profile.title.name" = "Name";
 "preference.profile.title.loader_type" = "Loader type";
 "preference.profile.title.loader_vendor" = "Loader vendor";
@@ -462,7 +407,6 @@
 "preference.profile.title.default_touch_control" = "Touch controls";
 "preference.profile.title.default_gamepad_control" = "Gamepad controls";
 "preference.profile.title.lwjgl_version" = "LWJGL version";
-
 "profile.error.name_exists" = "A profile with that name already exists. Please use another name.";
 "profile.section.instance" = "Game Instance settings";
 "profile.section.profiles" = "Profiles in this instance";
@@ -470,11 +414,9 @@
 "profile.title.separate_preference" = "Isolate settings";
 "profile.detail.separate_preference" = "Enable this option to isolate any changes made in settings. Doing a Reset will restore to global settings instead of default settings.";
 "profile.title.install_fabric_quilt" = "Install Fabric/Quilt";
-
 "controller_configurator.title.current" = "Gamepad configuration file";
 "controller_configurator.title.type.xbox" = "Xbox";
 "controller_configurator.title.type.playstation" = "PlayStation";
-
 "controller_configurator.xbox.title.bumper_left" = "Left bumper";
 "controller_configurator.xbox.title.bumper_right" = "Right bumper";
 "controller_configurator.xbox.title.trigger_left" = "Left trigger";
@@ -491,7 +433,6 @@
 "controller_configurator.xbox.title.dpad_right" = "Right";
 "controller_configurator.xbox.title.thumb_left" = "Left thumbstick click";
 "controller_configurator.xbox.title.thumb_right" = "Right thumbstick click";
-
 "controller_configurator.playstation.title.bumper_left" = "L1";
 "controller_configurator.playstation.title.bumper_right" = "R1";
 "controller_configurator.playstation.title.trigger_left" = "L2";
@@ -508,7 +449,6 @@
 "controller_configurator.playstation.title.dpad_right" = "Right";
 "controller_configurator.playstation.title.thumb_left" = "L3";
 "controller_configurator.playstation.title.thumb_right" = "R3";
-
 "controller_configurator.section.config_files" = "Current configuration file";
 "controller_configurator.section.game_mappings" = "Game mappings";
 "controller_configurator.section.footer.game_mappings" = "Bindings when the mouse is locked in game.";
@@ -516,32 +456,22 @@
 "controller_configurator.section.footer.menu_mappings" = "Bindings when the mouse is not locked, such as on the title screen or in the pause menu.";
 "controller_configurator.section.controller_style" = "Controller type";
 "controller_configurator.section.footer.controller_style" = "Show different controller button names in this configurator.";
-
 "preference.title.appicon-custom" = "Custom";
 "preference.title.custom_appicon" = "Custom App Icon";
 "preference.detail.custom_appicon" = "Select a custom image to use as the app icon";
-
 "preference.title.mod_touch_enable" = "Enable TouchController Mod Support";
 "preference.detail.mod_touch_enable" = "Enable TouchController mod support. Note that enabling：will disable \"Swipe shortcuts\".";
-
 "preference.title.custom_controls" = "Key tweaks";
 "preference.detail.custom_controls" = "Custom game control layout, drag and drop button position and size";
-
-
-
 "preference.popup.touch_info.title" = "TouchController Fit Description";
 "preference.popup.touch_info.message" = "This feature is an iOS compatible scheme for TouchController Mod.\n\nProject address：https://github.com/TouchController/TouchController\n\nTechnical Note：\nSince iOS is not supported by the mode, this feature provides a local UDP protocol (Localhost) to connect between launchers and game processes. This connection is used only for internal transfer of control data from the device and never connects the internet, please be careful.\nThis feature is made by WeiErLiTeo.";
-
 "preference.title.two_finger_keyboard" = "Two-finger call keyboard";
 "preference.detail.two_finger_keyboard" = "Pick up the keyboard in the game by pressing both fingers.";
-
 "提示" = "Notice";
-
 "announcement.preview_version" = "Welcome to Amethyst iOS Remastered Preview Version!";
 "announcement.latest_version" = "Welcome to Amethyst iOS Remastered! This is the latest stable version.";
 "announcement.new_version_available" = "New version available: %@";
 "announcement.download_button" = "Download Now";
-
 "preference.touchcontroller.title" = "TouchController";
 "preference.touchcontroller.section.mode" = "Communication Mode";
 "preference.touchcontroller.section.info" = "Information";
@@ -565,10 +495,7 @@
 "preference.touchcontroller.vibrate.intensity.medium" = "Medium";
 "preference.touchcontroller.vibrate.intensity.heavy" = "Heavy";
 "preference.touchcontroller.moveview.enable" = "Enable Move View";
-
 "spdt" = "";
-
-// Crash View
 "crash.title" = "Game Exited Unexpectedly";
 "crash.subtitle" = "An error was detected and the game process has terminated";
 "crash.exit_code" = "Exit Code";
@@ -604,7 +531,6 @@
 "crash.reason.java_version" = "Java version mismatch (UnsupportedClassVersionError)";
 "crash.reason.renderer" = "Renderer error (OpenGL/Metal/EGL initialization failed)";
 "crash.reason.mod_loading" = "Mod loading failure (Forge/Fabric/OptiFine)";
-// 快速修复建议文案
 "crash.suggestion.oom_ram" = "Reduce memory allocation (recommended 1024-2048MB)";
 "crash.suggestion.oom_getmoream" = "Use GetMoreRam (LiveContainer) to bypass iOS memory limit";
 "crash.suggestion.oom_mods" = "Remove heavy mods (shaders, high-res textures)";
@@ -632,8 +558,6 @@
 "crash.suggestion.java_log" = "View full log for exception stack trace";
 "crash.suggestion.java_mods" = "Check mod compatibility (remove recently added mods)";
 "crash.suggestion.java_restart" = "Restart launcher and retry";
-
-// 启动加载界面（参照 FCL/ZL2 风格）
 "launch.title" = "Starting Minecraft";
 "launch.stage.init_env" = "Initializing environment...";
 "launch.stage.verify_files" = "Verifying game files...";
@@ -656,53 +580,14 @@
 "launch.cancel_confirm_message" = "Canceling will terminate the current game loading process and return to the launcher.";
 "launch.cancel_confirm_yes" = "Cancel";
 "launch.cancel_confirm_no" = "Keep waiting";
-
-// AI Fix Feature
 "ai.fix.conversation" = "Conversation";
-"ai.fix.input_placeholder" = "Ask me something...";
-"ai.fix.send" = "Send";
-"ai.fix.stop" = "Stop";
-"ai.fix.exit" = "Exit Launcher";
-"ai.fix.restart" = "Restart Launcher";
-"ai.fix.model_config" = "Model Configuration";
-"ai.fix.model_name" = "Model Name";
-"ai.fix.save" = "Save";
-"ai.fix.running" = "Running";
-"ai.fix.configured" = "Configured";
-"ai.fix.not_configured" = "Not Configured";
-"ai.fix.config_saved" = "Configuration Saved";
-"ai.fix.tool_requests" = "Tool Requests";
-"ai.fix.ready" = "Ready";
 "ai.fix.thinking" = "AI is thinking...";
-"ai.fix.waiting_confirm" = "Waiting for Confirmation";
-"ai.fix.executing" = "Executing Tool...";
-"ai.fix.completed" = "Completed";
-"ai.fix.error" = "Error";
-"ai.fix.stopped" = "Stopped";
-"ai.fix.approve" = "Approve";
-"ai.fix.reject" = "Reject";
-"ai.fix.experimental_title" = "Experimental Feature";
-"ai.fix.experimental_message" = "The AI crash fix feature is experimental and may be unstable. Please ensure you have made backups before using it. Continue?";
-"ai.fix.continue" = "Continue";
-"ai.fix.cancel" = "Cancel";
-"ai.fix.please_configure" = "Please complete the API configuration and click \"Save\" button first.";
-"ai.fix.settings_mode" = "You have entered the AI Repair Settings interface. Once configured, click the Send button to start a conversation.";
-"ai.fix.starting" = "Starting AI fix process...";
-"ai.fix.start_failed" = "Start Failed";
-"ai.fix.stopped_by_user" = "Fix stopped by user";
-"ai.fix.tool_success" = "%@ executed successfully";
-"ai.fix.tool_failed" = "Execution failed";
-"ai.fix.modifications" = "Modified %lu file(s)";
-"ai.fix.restart_hint" = "Please restart the game to verification fix. If the problem remains unresolved, you can continue to talk or submit issues on GitHub";
-
 "preference.title.ai_crash_fix" = "AI Crash Fix";
 "preference.detail.ai_crash_fix" = "Configure and use AI assistant to automatically diagnose and fix game crash issues";
 "preference.title.memory_limit_help" = "Memory Limit Info";
 "preference.detail.memory_limit_help" = "Learn why iOS memory limits cause modpack crashes and how to fix it (GetMoreRam)";
 "preference.title.check_update" = "Check for Updates";
 "preference.detail.check_update" = "Check GitHub Releases for the latest stable version of Amethyst iOS";
-
-// 检查更新
 "check_update" = "Check for Updates";
 "check_update.checking" = "Checking for updates…";
 "check_update.failed" = "Update check failed";
@@ -711,23 +596,15 @@
 "check_update.new_version_title" = "New version v%@ available";
 "check_update.new_version_message" = "Tap \"Download\" to open the GitHub Releases page and get the latest version.";
 "check_update.download" = "Download";
-
-// Minecraft 新闻（参考 PCL-CE）
 "mc_news.title" = "Minecraft News";
 "mc_news.read_more" = "Read more";
 "mc_news.retry" = "Retry";
 "mc_news.load_failed" = "Failed to load";
-
-// 内存限制帮助弹窗
 "mem_help.title" = "About Memory Limit";
 "mem_help.message" = "iOS 18 / iOS 26 single-instance memory limit is about 1440MB. Large modpacks may crash due to insufficient memory.\n\nSolution:\nUse GetMoreRam (a LiveContainer plugin) to lift the memory limit.\nGetMoreRam repo: github.com/hugeBlack/GetMoreRam\n\nRestart the launcher after installation to take effect.\n\nIf you don't use LiveContainer, try lowering the memory allocation (Settings > Java > Memory Allocation), but some modpacks may not run under the memory limit.";
-
-// 下载进度与速率（Phase 6 Task 6.1）
 "download.speed.format" = "%@/s";
 "download.progress.file_count" = "%1$ld/%2$ld files · %3$@/%4$@";
 "download.progress.file_count_short" = "%1$ld/%2$ld · %3$@";
-
-// 下载历史（Phase 6 Task 6.2）
 "download.history.title" = "Download History";
 "download.history.entry" = "History";
 "download.history.clear" = "Clear";
@@ -736,8 +613,6 @@
 "download.history.empty" = "No download history yet";
 "download.history.result.success" = "Success";
 "download.history.result.failed" = "Failed";
-
-// 统一任务阶段标题（redesign-download-ui Phase 1 Task 1.4 / Phase 7 Task 7.1）
 "taskStage.title.fetchVersionManifest" = "Fetch version manifest";
 "taskStage.title.downloadVersionJSON" = "Download version JSON";
 "taskStage.title.downloadClient" = "Download client";
@@ -756,8 +631,6 @@
 "taskStage.title.downloadGameFiles" = "Download game files";
 "taskStage.title.finalizeConfig" = "Finalize configuration";
 "taskStage.title.downloadFile" = "Download file";
-
-// 统一进度页（redesign-download-ui Phase 2 / Phase 7 Task 7.1）
 "taskProgress.stage.running" = "Running";
 "taskProgress.state.pending" = "Pending";
 "taskProgress.state.downloading" = "Downloading";
@@ -788,8 +661,6 @@
 "taskProgress.errorDetail.underlying" = "Underlying error: %1$@";
 "taskProgress.errorDetail.retry" = "Retried: %1$ld/%2$ld";
 "taskProgress.errorDetail.stage" = "Current stage: %@";
-
-// 资源管理界面通用（redesign-resource-managers：六界面 + 基类共用）
 "resman.common.cancel" = "Cancel";
 "resman.common.delete" = "Delete";
 "resman.common.ok" = "OK";
@@ -819,8 +690,6 @@
 "resman.common.pack_format" = "Format %@";
 "resman.common.batch_delete" = "Batch Delete";
 "resman.common.delete_complete_failures" = "Delete finished, %ld failed";
-
-// Mod 管理
 "resman.mods.title" = "Manage Mods";
 "resman.mods.search_placeholder" = "Search local mods...";
 "resman.mods.import" = "Import Mods";
@@ -860,8 +729,6 @@
 "resman.mods.update.temp_dir_failed" = "Unable to create a temporary directory: %@";
 "resman.mods.update.done_title" = "Update Complete";
 "resman.mods.update.done_message" = "%1$ld succeeded / %2$ld failed / %3$ld skipped";
-
-// 数据包管理
 "resman.datapacks.title" = "Manage Data Packs";
 "resman.datapacks.search_placeholder" = "Search local data packs...";
 "resman.datapacks.import" = "Import Data Packs";
@@ -870,8 +737,6 @@
 "resman.datapacks.picker_title" = "Select data pack files";
 "resman.datapacks.empty" = "No data packs found";
 "resman.datapacks.search_empty" = "No matching data packs";
-
-// 资源包管理
 "resman.resourcepacks.title" = "Manage Resource Packs";
 "resman.resourcepacks.search_placeholder" = "Search local resource packs...";
 "resman.resourcepacks.import" = "Import Resource Packs";
@@ -879,8 +744,6 @@
 "resman.resourcepacks.picker_title" = "Select resource pack files";
 "resman.resourcepacks.empty" = "No resource packs found";
 "resman.resourcepacks.search_empty" = "No matching resource packs";
-
-// 世界管理
 "resman.worlds.title" = "Manage Worlds";
 "resman.worlds.search_placeholder" = "Search local worlds...";
 "resman.worlds.import" = "Import Worlds";
@@ -891,8 +754,6 @@
 "resman.worlds.last_played" = "Last played %@";
 "resman.worlds.importing" = "Importing";
 "resman.worlds.delete_message" = "Are you sure you want to delete the world %@?\nThis action cannot be undone.";
-
-// 光影管理
 "resman.shaders.title" = "Manage Shaders";
 "resman.shaders.search_placeholder" = "Search local shaders...";
 "resman.shaders.import" = "Import Shaders";
@@ -1848,8 +1709,7 @@
 "i18n_str_629" = "Timed out waiting for the ZeroTier network to be ready (%.0fs). Please confirm the Network ID is correct and that your node has been authorized on the central.zerotier.com dashboard.";
 "i18n_str_632" = "Failed to start the SOCKS5 proxy";
 "i18n_str_637" = "1. Enter the ZeroTier Network ID above on the launcher's online play page\n";
-"i18n_str_638" = "2. Tap \"Join Room\"; the launcher will automatically start the online core and connect
-";
+"i18n_str_638" = "2. Tap \"Join Room\"; the launcher will automatically start the online core and connect\n";
 "i18n_str_639" = "3. After connecting, launch the game and add the server in MC: %@";
 "i18n_str_832" = "SHA1 checksum failed: expected %@, got %@ (%@)";
 "i18n_str_883" = "Automatically join this server after launching the game (refer to FCL)\nFormat: host or host:port ([host]:port for IPv6); leave empty to not auto-join";
@@ -1889,12 +1749,10 @@
 "i18n_str_410" = "On iOS 18 / iOS 26 the default single-instance memory limit is about 1440MB. Large modpacks may crash due to insufficient memory.\n\n";
 "i18n_str_1012" = "Enter the invite code shared by the host; after joining, connect directly to 127.0.0.1:25565 in the Minecraft multiplayer screen.";
 "i18n_str_643" = "Server address [：:]?\\s*((?:[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}|\\[[0-9a-fA-F:]+\\])(?::([0-9]{1,5}))?";
-
 "i18n_str_2000" = "Translation Notice";
 "i18n_str_2001" = "Some parts of the interface are machine-translated and may not be perfectly accurate. If you spot any mistakes, you are welcome to submit a translation PR!";
 "i18n_str_2002" = "Got It";
 "i18n_str_2003" = "Don't Ask Again";
-
 "i18n_str_2004" = "Game Directory";
 "i18n_str_2006" = "  • Create a standalone version: %@-OptiFine_xxx\n";
 "i18n_str_2007" = "  • Loaded via launchwrapper + optifine.OptiFineTweaker\n";
@@ -1902,8 +1760,6 @@
 "i18n_str_2010" = "\".\" = use the instance directory selected by the game-directory switcher (%@)\n";
 "i18n_str_2011" = "Relative path = a subdirectory relative to the current game directory (for version isolation)\n";
 "i18n_str_2012" = "Absolute path = use the specified path";
-
-
 "i18n_str_2016" = "Shader Management";
 "i18n_str_2017" = "Frosted Glass";
 "i18n_str_2018" = "Half Width";
@@ -1956,6 +1812,193 @@
 "i18n_str_2065" = "Green";
 "i18n_str_2066" = "Yellow";
 "i18n_str_2067" = "Orange";
-
 "preference.auto" = "Auto";
 "preference.auto_select" = "Auto";
+"Cancel" = "Cancel";
+"Delete" = "Delete";
+"Done" = "Done";
+"Edit profile" = "Edit profile";
+"Error" = "Error";
+"None" = "None";
+"OK" = "OK";
+"Release" = "Release";
+"Rename" = "Rename";
+"Share" = "Share";
+"Sign in" = "Sign in";
+"Warning" = "Warning";
+"common.cancel" = "取消";
+"common.ok" = "好";
+"common.save" = "保存";
+"login.cancelled" = "Sign-in cancelled";
+"login.title" = "账户";
+"mp.close" = "关闭";
+"mp.connect.failed" = "连接失败";
+"mp.connect.failed_msg" = "无法连接到房主的网络，请检查分享代码是否正确以及网络是否畅通。";
+"mp.connect.port_forward_failed_msg" = "端口转发器启动失败，无法连接到房主。请尝试断开重连。";
+"mp.core.unavailable_msg" = "ZeroTier 联机核心未加载，无法作为房客加入。请使用包含真实 zt.framework 的构建版本。";
+"mp.core.unavailable_title" = "联机核心不可用";
+"mp.direct.error.ip_empty" = "请输入服务器 IP 地址";
+"mp.direct.error.ip_invalid" = "IP 地址格式不正确，请检查输入";
+"mp.direct.error.no_profile" = "未找到当前 profile，请先选择一个游戏配置";
+"mp.direct.error_title" = "提示";
+"mp.direct.ip_placeholder" = "服务器 IP";
+"mp.direct.join_button" = "加入游戏";
+"mp.direct.success_msg_prefix" = "已添加服务器";
+"mp.direct.success_title" = "已添加服务器";
+"mp.guest.code_placeholder" = "在此粘贴分享代码";
+"mp.guest.connected_msg" = "已连接到房主的联机网络";
+"mp.guest.connected_title" = "已加入联机";
+"mp.guest.connecting_msg" = "正在连接到房主的 ZeroTier 网络，请稍候...";
+"mp.guest.connecting_title" = "正在加入联机";
+"mp.guest.error.empty" = "请输入房主提供的分享代码";
+"mp.guest.error.invalid_code" = "无法解析分享代码，请确认代码完整无误";
+"mp.guest.error.invalid_network_id" = "分享代码中的 Network ID 无效";
+"mp.guest.error_title" = "代码无效";
+"mp.guest.input_msg" = "请输入房主提供的分享代码";
+"mp.guest.input_title" = "输入分享代码";
+"mp.guest.join_button" = "加入";
+"mp.guest.server_address" = "服务器地址";
+"mp.guest.tip.add_server" = "请在 MC 多人游戏界面点击「添加服务器」，粘贴以下地址即可加入";
+"mp.guest.tip.address_copied" = "服务器地址已自动复制到剪贴板，直接粘贴即可";
+"mp.guest.tip.auto_saved" = "地址已自动保存到当前配置，下次启动游戏会自动连接";
+"mp.guide.fast_step1_desc" = "在本页面点击「预设 Network ID」行";
+"mp.guide.fast_step1_title" = "点击「预设 Network ID」";
+"mp.guide.fast_step2_desc" = "点击「使用快速模式（无需注册）」按钮，系统自动生成 Network ID";
+"mp.guide.fast_step2_title" = "选择快速模式";
+"mp.guide.fast_step3_desc" = "启动游戏后在悬浮球中打开联机界面，选择「当房主」即可开房";
+"mp.guide.fast_step3_title" = "开始联机";
+"mp.guide.intro" = "ZeroTier 提供两种联机模式，根据需求选择：";
+"mp.guide.mode_fast" = "快速模式";
+"mp.guide.mode_fast_desc" = "使用 Ad-hoc 网络自动生成 Network ID，无需注册账号。但只有 IPv6 地址、公开网络安全性弱、IP 可能变化。";
+"mp.guide.mode_standard" = "标准模式";
+"mp.guide.mode_standard_desc" = "在 central.zerotier.com 注册账号并创建组织，获得固定的 Network ID。IP 稳定、支持授权管理、每人独立网络。";
+"mp.guide.note" = "注意：房主和房客使用相同的 Network ID 才能联机。标准模式需在后台授权成员（Private）或设为 Public。快速模式所有人共享同一公开网络。";
+"mp.guide.open_website" = "打开 central.zerotier.com（标准模式）";
+"mp.guide.stable" = "稳定";
+"mp.guide.step1_desc" = "访问 central.zerotier.com（新版 Central），注册并登录账号（免费，支持 Google/GitHub/Microsoft 登录）";
+"mp.guide.step1_title" = "注册 ZeroTier 账号";
+"mp.guide.step2_desc" = "登录后输入组织名称，点击「Create Organization」。免费套餐自带一个 Network Group 和一个 Network";
+"mp.guide.step2_title" = "创建组织";
+"mp.guide.step3_desc" = "在左侧边栏展开「Networks」，点击默认网络（如 my-first-network），复制顶部的 16 位 Network ID";
+"mp.guide.step3_title" = "获取 Network ID";
+"mp.guide.step4_desc" = "Private（推荐）：需手动授权成员更安全；Public：任何人可直接加入";
+"mp.guide.step4_title" = "设置网络访问控制";
+"mp.guide.step5_desc" = "回到本页面，点击「预设 Network ID」行，粘贴并保存";
+"mp.guide.step5_title" = "填入启动器";
+"mp.guide.step6_desc" = "房客加入后在「Member Devices」标签点击三点菜单→「Authorize」授权（Private 模式需要，Public 模式跳过）";
+"mp.guide.step6_title" = "授权房客设备";
+"mp.guide.step7_desc" = "启动游戏后在悬浮球中打开联机界面，选择「当房主」即可开房";
+"mp.guide.step7_title" = "开始联机";
+"mp.guide.title" = "ZeroTier 联机教程";
+"mp.guide.unstable" = "不稳定";
+"mp.guide.use_fast_mode" = "使用快速模式";
+"mp.host.connected_msg" = "已连接到联机网络，请在 MC 中开放局域网后输入端口号";
+"mp.host.connected_title" = "联机已开启";
+"mp.host.connecting_msg" = "正在连接到 ZeroTier 网络，请稍候...";
+"mp.host.connecting_title" = "正在开启联机";
+"mp.host.copy_code" = "复制代码";
+"mp.host.default_room_name" = "我的联机房间";
+"mp.host.generate_code" = "生成分享代码";
+"mp.host.ip_changed_msg" = "你的 ZeroTier IP 已变化，之前分享的旧代码已失效。请将新的分享代码重新发给房客。";
+"mp.host.ip_changed_title" = "房主 IP 已变化";
+"mp.host.local_ip" = "本机 IP";
+"mp.host.no_local_ip" = "无法获取本机 ZeroTier IP，请检查网络连接后重试";
+"mp.host.no_network_id_msg" = "房主需要先设置预设 ZeroTier Network ID。请在启动器联机界面中设置后再来。";
+"mp.host.no_network_id_title" = "未设置 Network ID";
+"mp.host.port_empty_msg" = "请输入 LAN 端口号";
+"mp.host.port_empty_title" = "端口为空";
+"mp.host.port_invalid_msg" = "端口号必须在 1-65535 之间";
+"mp.host.port_invalid_title" = "端口无效";
+"mp.host.port_placeholder" = "端口号（如 54321）";
+"mp.host.server_address" = "服务器地址";
+"mp.host.share_button" = "分享...";
+"mp.host.share_code_failed" = "生成分享代码失败";
+"mp.host.share_code_ready" = "分享代码已生成！将以下代码发给房客：";
+"mp.host.share_code_title" = "分享代码已生成";
+"mp.host.tip.copy_or_share" = "可点击下方按钮复制或分享代码";
+"mp.host.tip.create_world" = "请在 MC 中创建世界并点击「对局域网开放」";
+"mp.host.tip.manual_port" = "开放局域网后，MC 会在聊天框显示端口号，请将其输入下方";
+"mp.host.tip.wait_guest" = "房客输入此代码即可加入你的联机网络";
+"mp.ingame.guest_desc" = "输入分享代码，加入房主的联机网络";
+"mp.ingame.guest_title" = "当房客";
+"mp.ingame.host_desc" = "创建联机房间，开放局域网后生成分享代码";
+"mp.ingame.host_title" = "当房主";
+"mp.ingame.section.role" = "选择角色";
+"mp.ingame.section.role_footer" = "房主需在 MC 中开放局域网，房客输入分享代码即可加入";
+"mp.ingame.section.status" = "联机状态";
+"mp.ingame.section.status_footer" = "显示当前联机网络的状态信息";
+"mp.ingame.status.connected" = "已连接";
+"mp.ingame.status.disconnected" = "未连接";
+"mp.ingame.status.guest_mode" = "房客模式";
+"mp.ingame.status.host_mode" = "房主模式";
+"mp.ingame.status.idle" = "未开始";
+"mp.ingame.status.local_ip" = "本地 IP";
+"mp.ingame.status.network_id" = "Network ID";
+"mp.ingame.status.server_address" = "服务器地址";
+"mp.ingame.status.share_code" = "分享代码";
+"mp.network_id.adhoc_failed_msg" = "无法生成快速模式 Network ID，请改用标准模式";
+"mp.network_id.adhoc_failed_title" = "生成失败";
+"mp.network_id.adhoc_success_msg" = "已自动生成 Network ID，无需注册账号即可联机。注意：快速模式稳定性不如标准模式，IP 可能变化。";
+"mp.network_id.adhoc_success_title" = "已启用快速模式";
+"mp.network_id.invalid_msg" = "请在启动器联机界面设置正确的 16 位十六进制 Network ID";
+"mp.network_id.invalid_title" = "Network ID 格式不正确";
+"mp.network_id.message" = "在 central.zerotier.com 创建网络后填入 16 位 Network ID，开房时自动使用";
+"mp.network_id.placeholder" = "16 位十六进制 Network ID";
+"mp.network_id.title" = "设置 Network ID";
+"mp.network_id.use_adhoc" = "使用快速模式（无需注册）";
+"mp.node.start_failed_msg" = "ZeroTier 节点启动失败，请重试。";
+"mp.node.start_failed_title" = "启动失败";
+"mp.room.action.connect" = "连接房间";
+"mp.room.action.delete" = "删除房间";
+"mp.room.action.disconnect" = "断开连接";
+"mp.room.action.share" = "分享房间";
+"mp.room.button.connect" = "连接";
+"mp.room.button.connecting" = "连接中";
+"mp.room.button.disconnect" = "断开";
+"mp.room.delete.button" = "删除";
+"mp.room.delete.confirm_prefix" = "确定要删除房间";
+"mp.room.delete.confirm_title" = "确认删除";
+"mp.room.delete.confirm_warning" = "此操作无法撤销。";
+"mp.room.network_id" = "Network ID";
+"mp.room.server_address" = "服务器地址";
+"mp.room.status.connected" = "已连接";
+"mp.room.status.connecting" = "连接中";
+"mp.room.status.disconnected" = "未连接";
+"mp.room.status.error" = "错误";
+"mp.room.unnamed" = "未命名房间";
+"mp.rooms.empty" = "暂无房间（房间仅在本次会话中保留）";
+"mp.rooms.empty_msg" = "请先在 Section 0 设置 Network ID，然后在游戏内模式中选择当房主或房客";
+"mp.rooms.empty_title" = "暂无房间";
+"mp.section.direct" = "直连";
+"mp.section.direct_footer" = "输入服务器 IP 和端口，写入当前 profile，启动游戏后自动加入";
+"mp.section.rooms" = "我的房间";
+"mp.section.settings" = "联机设置";
+"mp.section.settings_footer" = "启用联机后可设置 Network ID，房主开房时自动使用";
+"mp.settings.enable_multiplayer" = "启用联机";
+"mp.settings.node_offline" = "节点未启动";
+"mp.settings.node_online" = "节点已上线";
+"mp.settings.node_starting" = "节点启动中...";
+"mp.settings.not_set" = "未设置";
+"mp.settings.preset_network_id" = "预设 Network ID";
+"mp.settings.zt_guide" = "ZeroTier 网络创建教程";
+"mp.settings.zt_guide_desc" = "不知道怎么创建网络？点这里";
+"mp.sharecode.invalid" = "分享代码无效";
+"mp.sharecode.missing_host" = "分享代码缺少房主 IP，请确认代码完整无误";
+"mp.unknown" = "未知";
+"preference.detail.language" = "Choose the launcher display language. The interface refreshes immediately.";
+"preference.title.language" = "Language";
+"preference.title.language-default" = "Default (English)";
+"preference.title.language-ja" = "Japanese";
+
+/* Runtime localization additions */
+"ai.preference.markdown_enabled" = "Render Markdown";
+"ai.preference.provider_config" = "Provider Configuration";
+"ai.preference.safety_mode" = "Default Safety Mode";
+"ai.preference.session_list" = "Sessions";
+"ai.preference.system_prompt" = "System Prompt";
+"ai.safety.ask_label" = "Ask before writes (Ask)";
+"ai.safety.safe_label" = "Read-only (Safe)";
+"ai.safety.yolo_label" = "Automatically approve (YOLO)";
+"launch.error.load_game" = "Unable to load the game. Please try again.";
+"launch.error.ltw_mc26" = "The LTW renderer does not support Minecraft %@.\n\nThe 26.x cloud-rendering pipeline requires texture buffers (samplerBuffer), which LTW's iOS ES 3.0 backend cannot provide. The game would crash at the title screen.\n\nGo to Settings → Video Settings → Renderer and switch to Zink or MobileGlues, then try again. LTW can still be used with 1.21.x and earlier.";
+"launch.error.sign_in" = "Please sign in to an account.";

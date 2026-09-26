@@ -1,0 +1,46 @@
+{
+  "ai.preference.markdown_enabled": {
+    "en": "Render Markdown",
+    "ja": "Markdown をレンダリング"
+  },
+  "ai.preference.provider_config": {
+    "en": "Provider Configuration",
+    "ja": "プロバイダー設定"
+  },
+  "ai.preference.safety_mode": {
+    "en": "Default Safety Mode",
+    "ja": "既定の安全モード"
+  },
+  "ai.preference.session_list": {
+    "en": "Sessions",
+    "ja": "セッション一覧"
+  },
+  "ai.preference.system_prompt": {
+    "en": "System Prompt",
+    "ja": "システムプロンプト"
+  },
+  "ai.safety.ask_label": {
+    "en": "Ask before writes (Ask)",
+    "ja": "書き込み前に確認（Ask）"
+  },
+  "ai.safety.safe_label": {
+    "en": "Read-only (Safe)",
+    "ja": "読み取り専用（Safe）"
+  },
+  "ai.safety.yolo_label": {
+    "en": "Automatically approve (YOLO)",
+    "ja": "自動承認（YOLO）"
+  },
+  "launch.error.load_game": {
+    "en": "Unable to load the game. Please try again.",
+    "ja": "ゲームを読み込めませんでした。もう一度お試しください。"
+  },
+  "launch.error.ltw_mc26": {
+    "en": "The LTW renderer does not support Minecraft %@.\n\nThe 26.x cloud-rendering pipeline requires texture buffers (samplerBuffer), which LTW's iOS ES 3.0 backend cannot provide. The game would crash at the title screen.\n\nGo to Settings → Video Settings → Renderer and switch to Zink or MobileGlues, then try again. LTW can still be used with 1.21.x and earlier.",
+    "ja": "LTW レンダラーは Minecraft %@ に対応していません。\n\n26.x の雲描画パイプラインにはテクスチャバッファー（samplerBuffer）が必要ですが、LTW の iOS 向け ES 3.0 バックエンドでは利用できません。起動するとタイトル画面でクラッシュします。\n\n設定 → ビデオ設定 → レンダラーで Zink または MobileGlues に切り替えてから、もう一度お試しください。LTW は 1.21.x 以前では引き続き利用できます。"
+  },
+  "launch.error.sign_in": {
+    "en": "Please sign in to an account.",
+    "ja": "アカウントにサインインしてください。"
+  }
+}

@@ -9,6 +9,7 @@
 #include <dirent.h>
 
 #include "utils.h"
+#import "LauncherPreferences.h"
 
 CFTypeRef SecTaskCopyValueForEntitlement(void* task, NSString* entitlement, CFErrorRef  _Nullable *error);
 void* SecTaskCreateFromSelf(CFAllocatorRef allocator);
@@ -97,18 +98,30 @@ NSError* saveJSONToFile(NSDictionary *dict, NSString *path) {
 }
 
 NSString* localize(NSString* key, NSString* comment) {
-    NSString *value = NSLocalizedString(key, nil);
-    if (![NSLocale.preferredLanguages[0] isEqualToString:@"en"] && [value isEqualToString:key]) {
-        NSString* path = [NSBundle.mainBundle pathForResource:@"en" ofType:@"lproj"];
-        NSBundle* languageBundle = [NSBundle bundleWithPath:path];
-        value = [languageBundle localizedStringForKey:key value:nil table:nil];
+    // The launcher defaults to Japanese but keeps an explicit English/default
+    // choice in global preferences.  NSLocalizedString follows iOS's process
+    // language and cannot switch bundles at runtime, so all application text
+    // resolves through this selected bundle instead.
+    NSString *preference = getPrefObject(@"general.language");
+    NSString *language = [preference isEqualToString:@"default"] ? @"en" : @"ja";
+    NSString *path = [NSBundle.mainBundle pathForResource:language ofType:@"lproj"];
+    NSBundle *languageBundle = path.length > 0 ? [NSBundle bundleWithPath:path] : nil;
+    NSString *value = [languageBundle localizedStringForKey:key value:nil table:nil];
 
-        if ([value isEqualToString:key]) {
-            value = [[NSBundle bundleWithIdentifier:@"com.apple.UIKit"] localizedStringForKey:key value:nil table:nil];
-        }
+    // A complete English catalog is kept as the stable source of truth.  If a
+    // future UI key is not yet translated, fall back to English rather than
+    // exposing its internal localization key to the player.
+    if (!value || [value isEqualToString:key]) {
+        NSString *englishPath = [NSBundle.mainBundle pathForResource:@"en" ofType:@"lproj"];
+        NSBundle *englishBundle = englishPath.length > 0 ? [NSBundle bundleWithPath:englishPath] : nil;
+        value = [englishBundle localizedStringForKey:key value:nil table:nil];
     }
 
-    return value;
+    if (!value || [value isEqualToString:key]) {
+        value = [[NSBundle bundleWithIdentifier:@"com.apple.UIKit"] localizedStringForKey:key value:nil table:nil];
+    }
+
+    return value ?: key;
 }
 
 void customNSLog(const char *file, int lineNumber, const char *functionName, NSString *format, ...)

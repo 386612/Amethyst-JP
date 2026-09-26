@@ -319,7 +319,11 @@
         cell.selectionStyle = UITableViewCellSelectionStyleGray;
         id value = weakSelf.getPreference(section, key);
         if ([value isKindOfClass:[NSString class]]) {
-            cell.detailTextLabel.text = value;
+            NSArray *pickKeys = item[@"pickKeys"];
+            NSArray *pickList = item[@"pickList"];
+            NSUInteger index = [pickKeys indexOfObject:value];
+            cell.detailTextLabel.text = (index != NSNotFound && index < pickList.count)
+                ? pickList[index] : value;
         } else if ([value isKindOfClass:[NSNumber class]]) {
             cell.detailTextLabel.text = [value boolValue] ? @"YES" : @"NO";
         } else {
@@ -516,6 +520,7 @@
 
     NSArray *pickKeys = item[@"pickKeys"];
     NSArray *pickList = item[@"pickList"];
+    id selectedValue = self.getPreference(self.prefSections[indexPath.section], item[@"key"]);
 
     // 修复 iPhone 上选项弹出菜单被过度压缩不可调整的问题。
     // 根因：UIContextMenuInteraction 紧凑菜单（preferredLayout=3）锚点取自窄小的
@@ -531,13 +536,13 @@
             NSString *title = pickList[i];
             NSString *value = pickKeys[i];
             // 在标题前加 ✓ 标记当前选中项，让用户能直观看到当前值
-            if ([cell.detailTextLabel.text isEqualToString:value]) {
+            if ([selectedValue isEqual:value]) {
                 title = [NSString stringWithFormat:@"✓ %@", title];
             }
             UIAlertAction *action = [UIAlertAction actionWithTitle:title
                                                               style:UIAlertActionStyleDefault
                                                             handler:^(UIAlertAction *a) {
-                cell.detailTextLabel.text = value;
+                cell.detailTextLabel.text = pickList[i];
                 self.setPreference(self.prefSections[indexPath.section], item[@"key"], value);
                 void(^invokeAction)(NSString *) = item[@"action"];
                 if (invokeAction) {
@@ -564,14 +569,14 @@
             actionWithTitle:pickList[i]
             image:nil identifier:nil
             handler:^(UIAction *action) {
-                cell.detailTextLabel.text = pickKeys[i];
+                cell.detailTextLabel.text = pickList[i];
                 self.setPreference(self.prefSections[indexPath.section], item[@"key"], pickKeys[i]);
                 void(^invokeAction)(NSString *) = item[@"action"];
                 if (invokeAction) {
                     invokeAction(pickKeys[i]);
                 }
             }]];
-        if ([cell.detailTextLabel.text isEqualToString:pickKeys[i]]) {
+        if ([selectedValue isEqual:pickKeys[i]]) {
             menuItems.lastObject.state = UIMenuElementStateOn;
         }
     }

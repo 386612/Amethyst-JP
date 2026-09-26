@@ -677,8 +677,9 @@ static NSArray<NSDictionary *> *SortOptionItems(void) {
 
     // 游戏版本按语义版本号降序排列（新的在前），"全部"始终在最前
     self.availableGameVersions = [[gameVersions allObjects] sortedArrayUsingComparator:^NSComparisonResult(NSString *obj1, NSString *obj2) {
-        if ([obj1 isEqualToString:@"全部"]) return NSOrderedAscending;
-        if ([obj2 isEqualToString:@"全部"]) return NSOrderedDescending;
+        NSString *allLabel = localize(@"resman.mods.filter.all", nil);
+        if ([obj1 isEqualToString:allLabel]) return NSOrderedAscending;
+        if ([obj2 isEqualToString:allLabel]) return NSOrderedDescending;
         return [obj2 compare:obj1 options:NSNumericSearch];
     }];
 
@@ -725,9 +726,10 @@ static NSArray<NSDictionary *> *SortOptionItems(void) {
 - (void)applyFiltersAndSort {
     // ----- 1. 筛选：游戏版本 + 加载器 -----
     NSPredicate *predicate = [NSPredicate predicateWithBlock:^BOOL(ShaderVersion *evaluatedObject, NSDictionary *bindings) {
-        BOOL gameVersionMatch = [self.selectedGameVersion isEqualToString:@"全部"] ||
+        NSString *allLabel = localize(@"resman.mods.filter.all", nil);
+        BOOL gameVersionMatch = [self.selectedGameVersion isEqualToString:allLabel] ||
                                  [evaluatedObject.gameVersions containsObject:self.selectedGameVersion];
-        BOOL loaderMatch = [self.selectedLoader isEqualToString:@"全部"] ||
+        BOOL loaderMatch = [self.selectedLoader isEqualToString:allLabel] ||
                             [evaluatedObject.loaders containsObject:self.selectedLoader.lowercaseString];
         return gameVersionMatch && loaderMatch;
     }];

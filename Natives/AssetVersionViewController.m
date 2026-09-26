@@ -561,8 +561,9 @@ static NSArray<NSDictionary *> *SortOptionItems(void) {
 
     // 游戏版本按语义版本号倒序排列（新版本在前），"全部"始终在最前
     self.availableGameVersions = [[gameVersions allObjects] sortedArrayUsingComparator:^NSComparisonResult(NSString *obj1, NSString *obj2) {
-        if ([obj1 isEqualToString:@"全部"]) return NSOrderedAscending;
-        if ([obj2 isEqualToString:@"全部"]) return NSOrderedDescending;
+        NSString *allLabel = localize(@"resman.mods.filter.all", nil);
+        if ([obj1 isEqualToString:allLabel]) return NSOrderedAscending;
+        if ([obj2 isEqualToString:allLabel]) return NSOrderedDescending;
         return [obj2 compare:obj1 options:NSNumericSearch];
     }];
 
@@ -590,7 +591,7 @@ static NSArray<NSDictionary *> *SortOptionItems(void) {
 - (void)applyFiltersAndSort {
     // ----- 1. 筛选：游戏版本（资产类型无加载器概念）-----
     NSPredicate *predicate = [NSPredicate predicateWithBlock:^BOOL(ModVersion *evaluatedObject, NSDictionary *bindings) {
-        return [self.selectedGameVersion isEqualToString:@"全部"] ||
+        return [self.selectedGameVersion isEqualToString:localize(@"resman.mods.filter.all", nil)] ||
                [evaluatedObject.gameVersions containsObject:self.selectedGameVersion];
     }];
     NSArray<ModVersion *> *filtered = [self.allVersions filteredArrayUsingPredicate:predicate];

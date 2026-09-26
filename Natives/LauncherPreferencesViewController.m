@@ -267,9 +267,9 @@
         if ([section isEqualToString:@"ai"]) {
             if ([key isEqualToString:@"safety_mode"]) {
                 switch ([[AiSettings sharedSettings] safetyMode]) {
-                    case AiSafetyModeSafe:  return @"只读自动执行（Safe）";
-                    case AiSafetyModeAsk:   return @"写操作逐次确认（Ask）";
-                    case AiSafetyModeYOLO:  return @"自动批准（YOLO）";
+                    case AiSafetyModeSafe:  return @"safe";
+                    case AiSafetyModeAsk:   return @"ask";
+                    case AiSafetyModeYOLO:  return @"yolo";
                 }
             }
             if ([key isEqualToString:@"markdown_enabled"]) {
@@ -289,9 +289,9 @@
                     mode = (AiSafetyMode)[value integerValue];
                 } else if ([value isKindOfClass:[NSString class]]) {
                     NSString *s = value;
-                    if ([s containsString:@"逐次确认"]) {
+                    if ([s isEqualToString:@"ask"]) {
                         mode = AiSafetyModeAsk;
-                    } else if ([s containsString:@"自动批准"]) {
+                    } else if ([s isEqualToString:@"yolo"]) {
                         mode = AiSafetyModeYOLO;
                     }
                 }
@@ -403,6 +403,25 @@
                   // 不调用 loadPreferences(YES) 等会重置账号偏好的操作，
                   // 仅设置 window.overrideUserInterfaceStyle，账号数据不受影响。
                   [[NSNotificationCenter defaultCenter] postNotificationName:@"UIThemeChanged" object:value];
+              }
+            },
+            @{@"key": @"language",
+              @"hasDetail": @YES,
+              @"icon": @"character.bubble",
+              @"type": self.typePickField,
+              @"enableCondition": whenNotInGame,
+              @"pickKeys": @[
+                  @"ja",
+                  @"default"
+              ],
+              @"pickList": @[
+                  localize(@"preference.title.language-ja", nil),
+                  localize(@"preference.title.language-default", nil)
+              ],
+              @"action": ^(NSString *value){
+                  // Rebuild the launcher root after a language selection so
+                  // every view, alert, and preference label uses one bundle.
+                  [[NSNotificationCenter defaultCenter] postNotificationName:@"LauncherLanguageChanged" object:value];
               }
             },
             @{@"key": @"custom_accent_color",
@@ -1167,7 +1186,7 @@
             // AI 助手 settings（Air AI Agent Phase 2）
             @{@"icon": @"sparkles"},
             @{@"key": @"provider_config",
-              @"title": @"提供商配置",
+              @"title": localize(@"ai.preference.provider_config", nil),
               @"icon": @"globe.asia.australia.fill",
               @"type": self.typeButton,
               @"action": ^void(){
@@ -1178,7 +1197,7 @@
               }
             },
             @{@"key": @"session_list",
-              @"title": @"会话列表",
+              @"title": localize(@"ai.preference.session_list", nil),
               @"icon": @"rectangle.stack.badge.person.crop",
               @"type": self.typeButton,
               @"action": ^void(){
@@ -1189,27 +1208,27 @@
               }
             },
             @{@"key": @"safety_mode",
-              @"title": @"默认安全模式",
+              @"title": localize(@"ai.preference.safety_mode", nil),
               @"icon": @"hand.raised.fill",
               @"type": self.typePickField,
               @"pickKeys": @[
-                  @"只读自动执行（Safe）",
-                  @"写操作逐次确认（Ask）",
-                  @"自动批准（YOLO）"
+                  @"safe",
+                  @"ask",
+                  @"yolo"
               ],
               @"pickList": @[
-                  @"只读自动执行（Safe）",
-                  @"写操作逐次确认（Ask）",
-                  @"自动批准（YOLO）"
+                  localize(@"ai.safety.safe_label", nil),
+                  localize(@"ai.safety.ask_label", nil),
+                  localize(@"ai.safety.yolo_label", nil)
               ]
             },
             @{@"key": @"markdown_enabled",
-              @"title": @"Markdown 渲染",
+              @"title": localize(@"ai.preference.markdown_enabled", nil),
               @"icon": @"textformat",
               @"type": self.typeSwitch
             },
             @{@"key": @"system_prompt",
-              @"title": @"系统提示词",
+              @"title": localize(@"ai.preference.system_prompt", nil),
               @"icon": @"text.book.closed.fill",
               @"type": self.typeButton,
               @"action": ^void(){

@@ -1472,7 +1472,7 @@ static BOOL ame87_mcVersionRequiresTextureBuffer(NSString *mcVersionId) {
             NSLog(@"[SurfaceViewController] Error: metadata is nil");
             dispatch_async(dispatch_get_main_queue(), ^{
                 [self dismissLaunchOverlayOnError];
-                showDialog(localize(@"Error", nil), @"æ¸¸æçæ®å è½½å¤±è´¥ï¼è¯·éæ°éæ©çæ¬");
+                showDialog(localize(@"Error", nil), localize(@"launch.error.load_game", nil));
             });
             return;
         }
@@ -1493,7 +1493,7 @@ static BOOL ame87_mcVersionRequiresTextureBuffer(NSString *mcVersionId) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 [self dismissLaunchOverlayOnError];
                 showDialog(localize(@"Error", nil),
-                    [NSString stringWithFormat:@"LTW 渲染器不支持 MC %@：\n\n26.x 的云渲染管线需要纹理缓冲（samplerBuffer），而 LTW 在 iOS 上的 ES 3.0 后端无法提供，启动后必崩在标题界面。\n\n请到 设置 → 视频设置 → 渲染器 切换到 Zink 或 MobileGlues 后重试。LTW 仍可用于 1.21.x 及更早版本。", ame87_versionId]);
+                    [NSString stringWithFormat:localize(@"launch.error.ltw_mc26", nil), ame87_versionId]);
             });
             return;
         }
@@ -1513,7 +1513,7 @@ static BOOL ame87_mcVersionRequiresTextureBuffer(NSString *mcVersionId) {
             NSLog(@"[SurfaceViewController] Error: no authenticator available");
             dispatch_async(dispatch_get_main_queue(), ^{
                 [self dismissLaunchOverlayOnError];
-                showDialog(localize(@"Error", nil), @"è¯·åç»å½è´¦æ·");
+                showDialog(localize(@"Error", nil), localize(@"launch.error.sign_in", nil));
             });
             return;
         }

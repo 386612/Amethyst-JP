@@ -1,177 +1,168 @@
 <div align="center">
-  <img src="Natives/Assets.xcassets/AppIcon-Light.appiconset/1024x1024.png" alt="Air Icon" width="120" style="border-radius: 24px;">
+  <img src="Natives/Assets.xcassets/AppIcon-Light.appiconset/1024x1024.png" alt="Air アイコン" width="120" style="border-radius: 24px;">
 </div>
 
 <h1 align="center">Air</h1>
 <p align="center"><sub>Amethyst iOS Remastered</sub></p>
 
 <div align="center">
-  <img alt="Build Status" src="https://github.com/herbrine8403/Amethyst-iOS-MyRemastered/actions/workflows/development.yml/badge.svg?branch=main">
-  <img alt="Downloads" src="https://img.shields.io/github/downloads/herbrine8403/Amethyst-iOS-MyRemastered/total?label=Downloads&style=flat">
-  <img alt="Release" src="https://img.shields.io/github/v/release/herbrine8403/Amethyst-iOS-MyRemastered?style=flat">
-  <img alt="License" src="https://img.shields.io/github/license/herbrine8403/Amethyst-iOS-MyRemastered?style=flat">
-  <a title="Crowdin" target="_blank" href="https://crowdin.com/project/amethyst-ios-remastered"><img alt="Crowdin" src="https://badges.crowdin.net/amethyst-ios-remastered/localized.svg">
+  <img alt="ビルド状態" src="https://github.com/386612/Amethyst-JP/actions/workflows/development.yml/badge.svg?branch=main">
+  <img alt="ダウンロード数" src="https://img.shields.io/github/downloads/386612/Amethyst-JP/total?label=Downloads&style=flat">
+  <img alt="リリース" src="https://img.shields.io/github/v/release/386612/Amethyst-JP?style=flat">
+  <img alt="ライセンス" src="https://img.shields.io/github/license/386612/Amethyst-JP?style=flat">
+  <a title="Crowdin" target="_blank" href="https://crowdin.com/project/amethyst-ios-remastered"><img alt="Crowdin" src="https://badges.crowdin.net/amethyst-ios-remastered/localized.svg"></a>
 </div>
 
 <p align="center">
-  <a href="./README.md">English</a> | <a href="./README_CN.md">Chinese</a>
+  <a href="./README.md">日本語</a> | <a href="./README_EN.md">English</a> | <a href="./README_CN.md">简体中文</a>
 </p>
 
 ---
 
-A premium Minecraft: Java Edition launcher for iOS and iPadOS, rebuilt from the ground up on the official Amethyst project. It delivers a refined mobile experience with comprehensive mod management, intelligent renderer selection, and deep platform integration.
+**Air** は、公式 Amethyst プロジェクトを基に一から再構築した、iOS・iPadOS 向けの Minecraft: Java Edition ランチャーです。包括的な Mod 管理、最適なレンダラーの自動選択、iOS に合わせた深いプラットフォーム統合により、洗練されたモバイル体験を提供します。
 
 ---
 
-## Table of Contents
+## 目次
 
-- [Core Features](#core-features)
-- [Quick Start](#quick-start)
-  - [Device Requirements](#device-requirements)
-  - [Sideload Preparation](#sideload-preparation)
-  - [Installation](#installation)
-  - [Enabling JIT](#enabling-jit)
-- [Contributors](#contributors)
-- [Third-Party Components](#third-party-components)
-- [Sponsor](#sponsor)
+- [主な機能](#主な機能)
+- [はじめに](#はじめに)
+  - [対応デバイス](#対応デバイス)
+  - [サイドロードの準備](#サイドロードの準備)
+  - [インストール](#インストール)
+  - [JIT を有効にする](#jit-を有効にする)
+- [貢献者](#貢献者)
+- [翻訳について](#翻訳について)
+- [サードパーティーコンポーネント](#サードパーティーコンポーネント)
+- [支援](#支援)
 
-## Core Features
+## 主な機能
 
-- **Modern UI Redesign** -- The interface has been deeply refined for a contemporary, polished visual style.
-- **Resource Management & Downloads** -- Browse, enable, disable, and delete mods, shader packs, resource packs, and other assets, with integrated Modrinth and CurseForge download support.
-- **Modpack Import** -- Import ZIP-format modpacks directly from the launcher interface.
-- **Smart Download Sources** -- Switch between Mojang Official, BMCLAPI mirror, and other sources on the fly for optimal download speeds.
-- **Complete Chinese Localization** -- Fully translated interface with native-quality Chinese language support.
-- **Unrestricted Accounts** -- Local accounts, demo mode, and third-party authentication all supported; no Microsoft account required to download and play.
-- **Multi-Account** -- Seamlessly switch between Microsoft, local, and third-party authentication accounts.
-- **Auto Renderer Selection** -- Automatically chooses the optimal rendering backend (including MobileGlues, MoltenVK, and more) when set to Auto.
-- **Auto JVM Selection** -- Automatically selects the correct JVM version (Java 8, 17, 21, or 25) based on the game version.
-- **Minecraft 26.X Support** -- Experimental support for Minecraft 26.x.
-- **Custom Mouse Pointer** -- Customize the virtual mouse pointer skin in settings.
-- **Custom News URL** -- Configure a custom news feed URL for the launcher home screen.
-- **TouchController Support** -- Communicates with the TouchController mod via both UDP local proxy and XCFramework, delivering full touchscreen control on iOS.
-- **AI Integration** -- (In development) The goal is to enable AI to fully manage the launcher, including resource downloads and instance management.
-- **Custom App Icons** -- (In development)
+- **モダンな UI** — 現代的で見やすい操作感を目指して、インターフェースを大幅に刷新しました。
+- **リソース管理とダウンロード** — Mod、シェーダーパック、リソースパックなどを一覧・有効化・無効化・削除でき、Modrinth と CurseForge から直接ダウンロードできます。
+- **Modパックのインポート** — ZIP 形式の Modパックをランチャーから直接インポートできます。
+- **スマートなダウンロード元** — Mojang 公式、BMCLAPI ミラーなどを切り替え、通信環境に応じてダウンロード速度を最適化できます。
+- **日本語・中国語を含む多言語対応** — 設定から表示言語を切り替えられ、日本語が既定で選択されています。
+- **アカウントの制限なし** — ローカルアカウント、デモモード、サードパーティー認証に対応。ゲームのダウンロードとプレイに Microsoft アカウントは必須ではありません。
+- **複数アカウント** — Microsoft、ローカル、サードパーティー認証のアカウントをシームレスに切り替えられます。
+- **レンダラー自動選択** — Auto 設定時は、MobileGlues、MoltenVK などを含む最適な描画バックエンドを自動的に選択します。
+- **Java の自動選択** — ゲームのバージョンに合わせて Java 8、17、21、25 を自動選択します。
+- **Minecraft 26.x 対応** — Minecraft 26.x を実験的にサポートしています。
+- **カスタムマウスポインター** — 設定からゲーム内の仮想マウスポインター画像を変更できます。
+- **カスタムニュース URL** — ランチャーのホーム画面で表示するニュースフィードの URL を設定できます。
+- **TouchController 対応** — UDP ローカルプロキシと XCFramework を通じて TouchController Mod と連携し、iOS で完全なタッチ操作を提供します。
+- **AI 統合** — 開発中。リソースのダウンロードやインスタンス管理などを AI が補助できるようにする予定です。
+- **カスタムアプリアイコン** — 開発中。
 
-... and much more to explore!
+さらに多くの機能を用意しています。
 
 > [!NOTE]
-> There are no plans to port this remastered version to Android. The Android ecosystem already has excellent launchers such as [Zalith Launcher](https://github.com/ZalithLauncher/ZalithLauncher), [Fold Craft Launcher](https://github.com/FCL-Team/FoldCraftLauncher), and ShardLauncher. For the official Android version, visit [Amethyst-Android](https://github.com/AngelAuraMC/Amethyst-Android).
+> このリマスター版を Android に移植する予定はありません。Android には [Zalith Launcher](https://github.com/ZalithLauncher/ZalithLauncher)、[Fold Craft Launcher](https://github.com/FCL-Team/FoldCraftLauncher)、ShardLauncher など、優れたランチャーがあります。公式 Android 版は [Amethyst-Android](https://github.com/AngelAuraMC/Amethyst-Android) を参照してください。
 
-## Quick Start
+## はじめに
 
-For complete documentation, refer to the [Amethyst Official Wiki](https://wiki.angelauramc.dev/wiki/getting_started/INSTALL.html#ios) or the [Bilibili tutorial](https://b23.tv/KyxZr12). Below is a condensed guide.
+詳細な手順は [Amethyst 公式 Wiki](https://wiki.angelauramc.dev/wiki/getting_started/INSTALL.html#ios) または [Bilibili のチュートリアル](https://b23.tv/KyxZr12) を参照してください。以下は簡易ガイドです。
 
-### Device Requirements
+### 対応デバイス
 
-| Tier | iOS Version | Supported Devices |
+| 区分 | iOS バージョン | 対応デバイス |
 |------|-------------|-------------------|
-| **Minimum** | iOS 14.0+ | iPhone 6s+, iPad 5th gen+, iPad Air 2+, iPad mini 4+, all iPad Pro, iPod touch 7th gen |
-| **Recommended** | iOS 14.5+ | iPhone XS+ (excl. XR/SE 2nd gen), iPad 10th gen+, iPad Air 4th gen+, iPad mini 6th gen+, iPad Pro (excl. 9.7-inch) |
+| **最低要件** | iOS 14.0 以降 | iPhone 6s 以降、iPad 第5世代以降、iPad Air 2 以降、iPad mini 4 以降、すべての iPad Pro、iPod touch 第7世代 |
+| **推奨** | iOS 14.5 以降 | iPhone XS 以降（XR・第2世代 SE を除く）、iPad 第10世代以降、iPad Air 第4世代以降、iPad mini 第6世代以降、iPad Pro（9.7インチを除く） |
 
 > [!CAUTION]
-> iOS 14.0--14.4.2 has known critical compatibility issues. **Upgrading to iOS 14.5 or later is strongly recommended.** iOS 17.x and 18.x are supported but require a companion computer for initial JIT configuration (see the [Official JIT Guide](https://wiki.angelauramc.dev/wiki/faq/ios/JIT.html#what-are-the-methods-to-enable-jit)). iOS 26.x is installable but has not undergone dedicated adaptation; expect unpredictable behavior.
+> iOS 14.0〜14.4.2 には重大な互換性上の問題があります。**iOS 14.5 以降へのアップデートを強く推奨します。** iOS 17.x・18.x はサポートされていますが、初回の JIT 設定にはコンパニオンコンピューターが必要です（[公式 JIT ガイド](https://wiki.angelauramc.dev/wiki/faq/ios/JIT.html#what-are-the-methods-to-enable-jit)を参照）。iOS 26.x にはインストールできますが、専用の最適化は行われていないため、予期しない挙動が発生する場合があります。
 
-### Sideload Preparation
+### サイドロードの準備
 
-Prioritize tools that support permanent signing and automatic JIT enablement:
+永続署名と JIT 自動有効化に対応するツールを優先してください。
 
-1. **TrollStore** *(Recommended)* -- Permanent signing, automatic JIT, increased memory limits. Compatible with select iOS versions. [Download from official repo](https://github.com/opa334/TrollStore)
-2. **AltStore / SideStore** *(Alternative)* -- Requires periodic re-signing; initial setup needs a computer and Wi-Fi. Only compatible with **development certificates** (must include `com.apple.security.get-task-allow` entitlement for JIT). Distribution certificate signing services are not supported.
+1. **TrollStore**（推奨）— 永続署名、JIT の自動有効化、メモリ上限の拡張に対応します。一部の iOS バージョンで利用できます。[公式リポジトリから入手](https://github.com/opa334/TrollStore)
+2. **AltStore / SideStore**（代替手段）— 定期的な再署名が必要です。初期設定にはコンピューターと Wi-Fi が必要で、**開発用証明書**（JIT には `com.apple.security.get-task-allow` エンタイトルメントが必要）にのみ対応します。配布用証明書の署名サービスは利用できません。
 
 > [!WARNING]
-> Only download sideloading tools and IPA files from official or trusted sources. The author is not responsible for device issues caused by unofficial software. Jailbroken devices support permanent signing, but daily-driver jailbreaking is not recommended.
+> サイドロードツールと IPA は、公式または信頼できる配布元からのみ入手してください。非公式ソフトウェアの使用により発生したデバイスの問題について、作者は責任を負いません。脱獄端末では永続署名が可能ですが、日常的に使用する端末の脱獄は推奨しません。
 
-### Installation
+### インストール
 
 <details>
-<summary><b>Official Release (TrollStore)</b></summary>
+<summary><b>正式リリース（TrollStore）</b></summary>
 
-1. Download the `.tipa` package from [Releases](https://github.com/herbrine8403/Amethyst-iOS-MyRemastered/releases).
-2. Open the file with TrollStore via the system share menu to complete installation.
+1. [Releases](https://github.com/386612/Amethyst-JP/releases) から `.tipa` パッケージをダウンロードします。
+2. iOS の共有メニューで TrollStore を選択して開くと、インストールが完了します。
 </details>
 
 <details>
-<summary><b>Official Release (AltStore / SideStore)</b></summary>
+<summary><b>正式リリース（AltStore / SideStore）</b></summary>
 
-1. Download the `.ipa` package from [Releases](https://github.com/herbrine8403/Amethyst-iOS-MyRemastered/releases).
-2. Import the IPA into your sideloading tool following its standard installation procedure.
+1. [Releases](https://github.com/386612/Amethyst-JP/releases) から `.ipa` パッケージをダウンロードします。
+2. 使用するサイドロードツールの通常の手順に従って IPA を読み込み、インストールします。
 </details>
 
 <details>
-<summary><b>Nightly Builds (Development Testing)</b></summary>
+<summary><b>Nightly ビルド（開発・テスト用）</b></summary>
 
 > [!CAUTION]
-> Nightly builds may contain critical bugs including crashes and startup failures. Use only for development and testing purposes.
+> Nightly ビルドには、クラッシュや起動失敗などの重大な不具合が含まれる可能性があります。開発およびテスト目的でのみ使用してください。
 
-1. Navigate to the [GitHub Actions](https://github.com/herbrine8403/Amethyst-iOS-MyRemastered/actions) page and download the latest IPA artifact.
-2. Import the IPA into your sideloading tool (AltStore, SideStore, etc.) to install.
+1. [GitHub Actions](https://github.com/386612/Amethyst-JP/actions) から最新の IPA アーティファクトをダウンロードします。
+2. AltStore、SideStore などのサイドロードツールに IPA を読み込んでインストールします。
 </details>
 
-### Enabling JIT
+### JIT を有効にする
 
-JIT (Just-In-Time compilation) is essential for smooth gameplay. Choose the approach that matches your environment:
+JIT（Just-In-Time コンパイル）は、快適にプレイするために不可欠です。利用環境に合った方法を選んでください。
 
-| Tool | External Device | Wi-Fi Required | Auto-Enable | Notes |
+| ツール | 外部デバイス | Wi-Fi | 自動有効化 | 備考 |
 |------|:---:|:---:|:---:|-------|
-| TrollStore | No | No | Yes | Preferred; no additional action needed |
-| AltStore | Yes | Yes | Yes | Requires AltServer running on local network |
-| SideStore | First time only | First time only | No | Device/network-free after initial setup |
-| StikDebug | First time only | First time only | Yes | Device/network-free after initial setup |
-| Jitterbug | Yes (without VPN) | Yes | No | Manual trigger required |
-| Jailbroken | No | No | Yes | System-level automatic support |
+| TrollStore | 不要 | 不要 | 対応 | 最優先。追加操作は不要です。 |
+| AltStore | 必要 | 必要 | 対応 | ローカルネットワーク上で AltServer を実行する必要があります。 |
+| SideStore | 初回のみ | 初回のみ | 非対応 | 初期設定後はデバイス・ネットワーク不要です。 |
+| StikDebug | 初回のみ | 初回のみ | 対応 | 初期設定後はデバイス・ネットワーク不要です。 |
+| Jitterbug | 必要（VPN なしの場合） | 必要 | 非対応 | 手動で有効化する必要があります。 |
+| 脱獄端末 | 不要 | 不要 | 対応 | システムレベルで自動的にサポートされます。 |
 
-## Contributors
+## 貢献者
 
-- [@yitenchen123](https://github.com/yitenchen123) -- Project Maintainer
-- [@EternityQwQ](https://github.com/EternityQwQ) -- Add Metal Universal Mod support, allowing the launcher to use Metal for rendering Minecraft
-- [@LanRhyme](https://github.com/LanRhyme) -- ShardLauncher author; iOS 26 compatibility and logging improvements
-- [@WeiErLiTeo](https://github.com/WeiErLiTeo) -- Mod download integration, TouchController optimizations, and two-finger long-press keyboard trigger
-- [@Li2548](https://github.com/Li2548) -- Upstream synchronization
-- [@Gsjsjzhznsz](https://github.com/Gsjsjzhznsz) -- SDL3 presentation adaptations, Minecraft 26.3 black-screen (FBO0 heal blit) and resolution self-healing fixes, MobileGlues deadlock fix, Zink OpenGL bridge
+- [@yitenchen123](https://github.com/yitenchen123) — プロジェクトメンテナー
+- [@EternityQwQ](https://github.com/EternityQwQ) — Metal Universal Mod 対応を追加し、Metal で Minecraft を描画できるようにしました
+- [@LanRhyme](https://github.com/LanRhyme) — iOS 26 対応とログ機能の改善
+- [@WeiErLiTeo](https://github.com/WeiErLiTeo) — Mod ダウンロード統合、TouchController 最適化、2本指長押しによるキーボード呼び出し
+- [@Li2548](https://github.com/Li2548) — 上流との同期
+- [@Gsjsjzhznsz](https://github.com/Gsjsjzhznsz) — SDL3 の表示対応、Minecraft 26.3 の黒画面・解像度自動復旧の修正、MobileGlues のデッドロック修正、Zink OpenGL ブリッジ
 
-## About Translations
+## 翻訳について
 
-If you would like to contribute translations for this project, please go to [Crowdin](https://crowdin.com/project/amethyst-ios-remastered).
+翻訳への協力は [Crowdin](https://crowdin.com/project/amethyst-ios-remastered) からお願いします。
 
-## Third-Party Components
+## サードパーティーコンポーネント
 
-| Component | Purpose | License | Source |
+| コンポーネント | 用途 | ライセンス | ソース |
 |-----------|---------|---------|--------|
-| Caciocavallo | AWT runtime framework | GPL-2.0 | [GitHub](https://github.com/PojavLauncherTeam/caciocavallo) |
-| jsr305 | Code annotation support | BSD-3 | [Google Code](https://code.google.com/p/jsr-305) |
-| Boardwalk | Core functionality adaptation | Apache-2.0 | [GitHub](https://github.com/zhuowei/Boardwalk) |
-| GL4ES | OpenGL-to-GLES translation | MIT | [GitHub](https://github.com/ptitSeb/gl4es) |
-| Mesa 3D | 3D graphics library | MIT | [GitLab](https://gitlab.freedesktop.org/mesa/mesa) |
-| MetalANGLE | Metal-to-OpenGL ES translation | BSD-2 | [GitHub](https://github.com/khanhduytran0/metalangle) |
-| MoltenVK | Vulkan-to-Metal translation | Apache-2.0 | [GitHub](https://github.com/KhronosGroup/MoltenVK) |
-| openal-soft | Cross-platform 3D audio | LGPL-2.0 | [GitHub](https://github.com/kcat/openal-soft) |
-| Azul Zulu JDK | Java runtime (8/17/21/25) | GPL-2.0 | [Website](https://www.azul.com/downloads/?package=jdk) |
-| LWJGL3 | Java game development library | BSD-3 | [GitHub](https://github.com/PojavLauncherTeam/lwjgl3) |
-| LWJGLX | LWJGL2 compatibility layer | -- | [GitHub](https://github.com/PojavLauncherTeam/lwjglx) |
-| DBNumberedSlider | UI slider control | Apache-2.0 | [GitHub](https://github.com/khanhduytran0/DBNumberedSlider) |
-| fishhook | Dynamic library rebinding | BSD-3 | [GitHub](https://github.com/khanhduytran0/fishhook) |
-| shaderc | Vulkan shader compilation | Apache-2.0 | [GitHub](https://github.com/khanhduytran0/shaderc) |
-| NRFileManager | File management utilities | MPL-2.0 | [GitHub](https://github.com/mozilla-mobile/firefox-ios) |
-| AltKit | AltStore integration | -- | [GitHub](https://github.com/rileytestut/AltKit) |
-| UnzipKit | ZIP archive handling | BSD-2 | [GitHub](https://github.com/abbeycode/UnzipKit) |
-| DyldDeNeuralyzer | Library verification bypass | -- | [GitHub](https://github.com/xpn/DyldDeNeuralyzer) |
-| MobileGlues | Third-party renderer | LGPL-2.1 | [GitHub](https://github.com/MobileGL-Dev/MobileGlues) |
-| LTW | OpenGL Core-to-ES wrapper | LGPL-3.0 | [GitHub](https://github.com/MojoLauncher/LTW) |
-| authlib-injector | Third-party authentication | AGPL-3.0 | [GitHub](https://github.com/yushijinhun/authlib-injector) |
+| Caciocavallo | AWT ランタイムフレームワーク | GPL-2.0 | [GitHub](https://github.com/PojavLauncherTeam/caciocavallo) |
+| jsr305 | コード注釈のサポート | BSD-3 | [Google Code](https://code.google.com/p/jsr-305) |
+| Boardwalk | コア機能の適応 | Apache-2.0 | [GitHub](https://github.com/zhuowei/Boardwalk) |
+| GL4ES | OpenGL から GLES への変換 | MIT | [GitHub](https://github.com/ptitSeb/gl4es) |
+| Mesa 3D | 3D グラフィックスライブラリ | MIT | [GitLab](https://gitlab.freedesktop.org/mesa/mesa) |
+| MetalANGLE | Metal から OpenGL ES への変換 | BSD-2 | [GitHub](https://github.com/khanhduytran0/metalangle) |
+| MoltenVK | Vulkan から Metal への変換 | Apache-2.0 | [GitHub](https://github.com/KhronosGroup/MoltenVK) |
+| openal-soft | クロスプラットフォームの音声ライブラリ | LGPL-2.0 | [GitHub](https://github.com/kcat/openal-soft) |
+| Azul Zulu JDK | Java ランタイム（8/17/21/25） | GPL-2.0 | [公式サイト](https://www.azul.com/downloads/?package=jdk) |
+| LWJGL3 | Java ゲーム開発ライブラリ | BSD-3 | [GitHub](https://github.com/PojavLauncherTeam/lwjgl3) |
+| LWJGLX | LWJGL2 互換レイヤー | — | [GitHub](https://github.com/PojavLauncherTeam/lwjglx) |
+| DBNumberedSlider | UI スライダーコントロール | Apache-2.0 | [GitHub](https://github.com/khanhduytran0/DBNumberedSlider) |
+| fishhook | 動的ライブラリの再バインド | BSD-3 | [GitHub](https://github.com/facebook/fishhook) |
+| shaderc | シェーダーコンパイラー | Apache-2.0 | [GitHub](https://github.com/google/shaderc) |
+| NRFileManager | ファイル管理ユーティリティ | MPL-2.0 | [GitHub](https://github.com/mozilla-mobile/firefox-ios) |
+| AltKit | AltStore 統合 | — | [GitHub](https://github.com/rileytestut/AltKit) |
+| UnzipKit | ZIP 解凍処理 | BSD-2 | [GitHub](https://github.com/abbeycode/UnzipKit) |
+| DyldDeNeuralyzer | ライブラリ検証の回避 | — | [GitHub](https://github.com/xpn/DyldDeNeuralyzer) |
+| MobileGlues | サードパーティー製レンダラー | LGPL-2.1 | [GitHub](https://github.com/MobileGL-Dev/MobileGlues) |
+| LTW | OpenGL Core から ES へのラッパー | LGPL-3.0 | [GitHub](https://github.com/MojoLauncher/LTW) |
+| authlib-injector | サードパーティー認証のサポート | AGPL-3.0 | [GitHub](https://github.com/yushijinhun/authlib-injector) |
 
-Additional thanks to [MCHeads](https://mc-heads.net) for Minecraft avatar services, [Modrinth](https://modrinth.com) for mod distribution, and [BMCLAPI](https://bmclapidoc.bangbang93.com) for Minecraft download mirroring.
+さらに、Minecraft アバターサービスを提供する [MCHeads](https://mc-heads.net)、Mod 配信の [Modrinth](https://modrinth.com)、Minecraft ダウンロードミラーの [BMCLAPI](https://bmclapidoc.bangbang93.com) に感謝します。
 
-## Sponsor
+## 支援
 
-If you find this project valuable, consider supporting development through [Ko-Fi](https://ko-fi.com/herbrine8403), [Afdian](https://afdian.com/a/herbrine8403), or [WeChat Reward Code](donate.png).
-
-## Star History
-
-<a href="https://www.star-history.com/?type=date&repos=herbrine8403%2FAmethyst-iOS-MyRemastered">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=herbrine8403/Amethyst-iOS-MyRemastered&type=date&theme=dark&legend=top-left&sealed_token=q1uFKbS7fO8owrcjy_kYTkCnnl8PNgHAgBSrWop8Y3ULDdvwOwDfORslSVVXABSTwrsdu14OM3fshRaNbXouxMU5IenXF0T5r5L6rxKIN2n29T6Fv4UYyA" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=herbrine8403/Amethyst-iOS-MyRemastered&type=date&legend=top-left&sealed_token=q1uFKbS7fO8owrcjy_kYTkCnnl8PNgHAgBSrWop8Y3ULDdvwOwDfORslSVVXABSTwrsdu14OM3fshRaNbXouxMU5IenXF0T5r5L6rxKIN2n29T6Fv4UYyA" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=herbrine8403/Amethyst-iOS-MyRemastered&type=date&legend=top-left&sealed_token=q1uFKbS7fO8owrcjy_kYTkCnnl8PNgHAgBSrWop8Y3ULDdvwOwDfORslSVVXABSTwrsdu14OM3fshRaNbXouxMU5IenXF0T5r5L6rxKIN2n29T6Fv4UYyA" />
- </picture>
-</a>
+このプロジェクトが役に立った場合は、[Ko-fi](https://ko-fi.com/herbrine8403)、[愛発電](https://afdian.com/a/herbrine8403)、または [WeChat 支援コード](donate.png) から開発支援をご検討ください。

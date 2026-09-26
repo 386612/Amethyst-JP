@@ -145,7 +145,7 @@ NS_INLINE NSArray<PLTaskStage *> *PLTaskStagesSingleFile(void) {
 /// 供统一进度页（PLTaskProgressViewController）与下载中心卡片（DownloadTasksViewController）共用。
 NS_INLINE NSString *PLTaskStageTitleDisplay(NSString *titleKey) {
     if (titleKey.length == 0) return @"";
-    NSString *value = NSLocalizedString(titleKey, @"");
+    NSString *value = localize(titleKey, nil);
     if (![value isEqualToString:titleKey]) return value;
 
     // 过渡期中文兜底（与上方阶段常量一一对应；strings 补全后不再走到这里）
