@@ -228,8 +228,11 @@ static uint64_t ame156_mach_ms(void) {
 
     [super setAttributedMarkedText:markedText selectedRange:selectedRange];
 
-    // Insert the new text
-    [self sendText:markedText.string];
+    // Insert the new text. UIKit can pass nil/empty marked text while resetting
+    // the IME composition; do not send a spurious message in that case.
+    if (markedText.length > 0) {
+        [self sendText:markedText.string];
+    }
     self.lastTextPos = self.text.length;
 }
 

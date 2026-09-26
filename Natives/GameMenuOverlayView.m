@@ -97,7 +97,7 @@ static const CGFloat kDragThreshold = 10.0;
 
 - (void)setupStatsLabel {
     self.statsLabel = [[UILabel alloc] init];
-    self.statsLabel.text = @"FPS: -- | MEM: --";
+    self.statsLabel.text = @"CPU: -- | FPS: -- | MEM: --GB";
     self.statsLabel.font = [UIFont monospacedDigitSystemFontOfSize:12 weight:UIFontWeightBold];
     self.statsLabel.textColor = [UIColor whiteColor];
     self.statsLabel.backgroundColor = [UIColor colorWithRed:0 green:0 blue:0 alpha:0.5];
@@ -106,7 +106,7 @@ static const CGFloat kDragThreshold = 10.0;
     self.statsLabel.textAlignment = NSTextAlignmentCenter;
     self.statsLabel.numberOfLines = 1;
     // 使用纯 frame 布局，位置通过 center 手动设置并持久化
-    self.statsLabel.frame = CGRectMake(0, 0, 130, 24);
+    self.statsLabel.frame = CGRectMake(0, 0, 190, 24);
 
     // 拖拽手势
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleStatsLabelPan:)];
@@ -322,13 +322,15 @@ static const CGFloat kDragThreshold = 10.0;
     self.statsLabelVisible = !self.statsLabelVisible;
 }
 
-- (void)updateFPS:(NSInteger)fps memoryUsageMB:(double)memoryMB {
+- (void)updateCPUUsagePercent:(double)cpuPercent
+                          fps:(NSInteger)fps
+                memoryUsageGB:(double)memoryGB {
     // 在主线程更新（参照 FCL/ZL2 由游戏循环驱动）
     // 使用 dispatch_async 避免阻塞调用方
     dispatch_async(dispatch_get_main_queue(), ^{
         if (fps >= 0) {
-            self.statsLabel.text = [NSString stringWithFormat:@"FPS: %ld | MEM: %.0fMB",
-                                    (long)fps, memoryMB];
+            self.statsLabel.text = [NSString stringWithFormat:@"CPU: %.1f%% | FPS: %ld | MEM: %.1fGB",
+                                    cpuPercent, (long)fps, memoryGB];
         }
     });
 }

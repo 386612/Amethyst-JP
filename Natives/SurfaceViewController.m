@@ -2921,16 +2921,41 @@ CALayer *Amethyst_SDL3RenderLayer(void) {
     // 采样间隔 1 秒（statsTimer 已改为 1s），所以返回值即为 FPS
     NSInteger fps = (NSInteger)pojavGetAndResetFps();
 
-    // 2. 获取内存占用（phys_footprint）
+    // 2. 获取进程 CPU 使用率
+    double cpuPercent = [self currentCPUUsagePercent];
+
+    // 3. 获取内存占用（phys_footprint）
     // 使用 task_vm_info 的 phys_footprint 字段，这是 iOS 上最准确的进程内存占用指标
     // 包含常驻内存、压缩内存、GPU 内存（UMA 架构下），与 Xcode 内存表盘一致
     // 参照 ZL2 MemoryUtils.kt 的系统级内存统计理念，在 iOS 上用 phys_footprint 等价
-    double memoryMB = [self currentPhysFootprintMB];
+    double memoryGB = [self currentPhysFootprintMB] / 1024.0;
 
-    // 3. 更新 UI（GameMenuOverlayView 内部会 dispatch 到主线程）
+    // 4. 更新 UI（GameMenuOverlayView 内部会 dispatch 到主线程）
     if ([self.gameMenuOverlay isKindOfClass:[GameMenuOverlayView class]]) {
-        [(GameMenuOverlayView *)self.gameMenuOverlay updateFPS:fps memoryUsageMB:memoryMB];
+        [(GameMenuOverlayView *)self.gameMenuOverlay updateCPUUsagePercent:cpuPercent
+                                                                        fps:fps
+                                                              memoryUsageGB:memoryGB];
     }
+}
+
+- (double)currentCPUUsagePercent {
+    thread_act_array_t threads = NULL;
+    mach_msg_type_number_t threadCount = 0;
+    kern_return_t kr = task_threads(mach_task_self(), &threads, &threadCount);
+    if (kr != KERN_SUCCESS) return 0.0;
+
+    double total = 0.0;
+    for (mach_msg_type_number_t i = 0; i < threadCount; i++) {
+        thread_basic_info_data_t info;
+        mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
+        if (thread_info(threads[i], THREAD_BASIC_INFO, (thread_info_t)&info, &count) == KERN_SUCCESS &&
+            !(info.flags & TH_FLAGS_IDLE)) {
+            total += (double)info.cpu_usage * 100.0 / (double)TH_USAGE_SCALE;
+        }
+    }
+    vm_deallocate(mach_task_self(), (vm_address_t)threads,
+                  (vm_size_t)(threadCount * sizeof(thread_t)));
+    return MIN(total, 999.9);
 }
 
 - (double)currentPhysFootprintMB {

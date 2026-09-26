@@ -1564,18 +1564,19 @@ static bool ame_dispatchTextInputToMain(void (^work)(void)) {
 }
 
 static bool ame_SDL_StartTextInput(void *window) {
-    return ame_dispatchTextInputToMain(^{
-        if (ame_real_StartTextInput != NULL) ame_real_StartTextInput(window);
-    });
+    // MC のチャット画面による自動 IME 表示は抑止する。文字入力は
+    // Amethyst の TrackedTextField 経由で引き続き処理する。
+    (void)window;
+    NSDebugLog(@"[SDLHook] SDL_StartTextInput suppressed (prevent automatic iOS keyboard)");
+    return true;
 }
 
 static bool ame_SDL_StartTextInputWithProperties(void *window,
                                                  unsigned long long props) {
-    return ame_dispatchTextInputToMain(^{
-        if (ame_real_StartTextInputWithProperties != NULL) {
-            ame_real_StartTextInputWithProperties(window, props);
-        }
-    });
+    (void)window;
+    (void)props;
+    NSDebugLog(@"[SDLHook] SDL_StartTextInputWithProperties suppressed (prevent automatic iOS keyboard)");
+    return true;
 }
 
 static bool ame_SDL_StopTextInput(void *window) {

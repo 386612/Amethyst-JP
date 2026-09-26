@@ -29,9 +29,11 @@ NS_ASSUME_NONNULL_BEGIN
 /// 初始化并添加到指定父视图
 - (instancetype)initWithParentView:(UIView *)parentView;
 
-/// 更新 FPS 和内存显示（由游戏循环驱动，调用频率建议 500ms~1s）
+/// 更新 CPU、FPS 和内存显示（由游戏循环驱动，调用频率建议 500ms~1s）
 /// 必须在主线程调用
-- (void)updateFPS:(NSInteger)fps memoryUsageMB:(double)memoryMB;
+- (void)updateCPUUsagePercent:(double)cpuPercent
+                          fps:(NSInteger)fps
+                memoryUsageGB:(double)memoryGB;
 
 /// 从偏好加载持久化的位置
 - (void)restorePositions;
