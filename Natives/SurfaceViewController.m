@@ -2955,7 +2955,10 @@ CALayer *Amethyst_SDL3RenderLayer(void) {
     }
     vm_deallocate(mach_task_self(), (vm_address_t)threads,
                   (vm_size_t)(threadCount * sizeof(thread_t)));
-    return MIN(total, 999.9);
+    // thread_info.cpu_usage は「1コアを100%」基準で返るため、単純合計すると
+    // マルチコア端末では300%などになる。HUDでは端末全体を100%とする。
+    NSUInteger processorCount = MAX(NSProcessInfo.processInfo.activeProcessorCount, 1);
+    return MIN(total / (double)processorCount, 100.0);
 }
 
 - (double)currentPhysFootprintMB {

@@ -98,15 +98,17 @@ static const CGFloat kDragThreshold = 10.0;
 - (void)setupStatsLabel {
     self.statsLabel = [[UILabel alloc] init];
     self.statsLabel.text = @"CPU: -- | FPS: -- | MEM: --GB";
-    self.statsLabel.font = [UIFont monospacedDigitSystemFontOfSize:12 weight:UIFontWeightBold];
+    self.statsLabel.font = [UIFont monospacedDigitSystemFontOfSize:11 weight:UIFontWeightBold];
     self.statsLabel.textColor = [UIColor whiteColor];
     self.statsLabel.backgroundColor = [UIColor colorWithRed:0 green:0 blue:0 alpha:0.5];
     self.statsLabel.layer.cornerRadius = 4;
     self.statsLabel.layer.masksToBounds = YES;
     self.statsLabel.textAlignment = NSTextAlignmentCenter;
     self.statsLabel.numberOfLines = 1;
+    self.statsLabel.adjustsFontSizeToFitWidth = YES;
+    self.statsLabel.minimumScaleFactor = 0.7;
     // 使用纯 frame 布局，位置通过 center 手动设置并持久化
-    self.statsLabel.frame = CGRectMake(0, 0, 190, 24);
+    self.statsLabel.frame = CGRectMake(0, 0, 250, 24);
 
     // 拖拽手势
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleStatsLabelPan:)];
@@ -337,6 +339,14 @@ static const CGFloat kDragThreshold = 10.0;
 
 - (void)layoutSubviews {
     [super layoutSubviews];
+    // CPU/FPS/GB の3項目を常に収める。画面幅が狭い端末では自動縮小し、
+    // 広い端末では最大260ptまで確保して MEM の末尾を切らない。
+    CGFloat availableWidth = MAX(0.0, self.bounds.size.width - 20.0);
+    CGFloat labelWidth = MIN(260.0, MAX(190.0, availableWidth));
+    if (availableWidth > 0.0 && labelWidth > availableWidth) labelWidth = availableWidth;
+    CGRect labelFrame = self.statsLabel.frame;
+    labelFrame.size.width = labelWidth;
+    self.statsLabel.frame = labelFrame;
     // 屏幕旋转后重新约束位置
     [self clampViewsToScreen];
 }

@@ -1580,9 +1580,13 @@ static bool ame_SDL_StartTextInputWithProperties(void *window,
 }
 
 static bool ame_SDL_StopTextInput(void *window) {
-    return ame_dispatchTextInputToMain(^{
-        if (ame_real_StopTextInput != NULL) ame_real_StopTextInput(window);
-    });
+    // SDL は文字イベントのたびに text input を停止することがあり、iOS
+    // backend の実装では hidden UITextField を resignFirstResponder して
+    // 標準キーボードまで閉じてしまう。入力欄のライフサイクルは
+    // SurfaceViewController が管理するため、SDL 側の停止要求は無視する。
+    (void)window;
+    NSDebugLog(@"[SDLHook] SDL_StopTextInput suppressed (keep iOS keyboard open)");
+    return true;
 }
 
 static bool ame_SDL_SetTextInputArea(void *window, const void *rect, int cursor) {
