@@ -323,28 +323,40 @@ ES_DETECT_HELPER = '''
 // 里 "OpenGL ES" 后面是 ')' 而不是空格，于是带空格版本判“非 ES”、不带空格
 // 版本判“ES”，同一个后端在两个函数里结论相反。
 //
-// 两种方向各自都能自圆其说，静态判断无法定夺，所以这里不写死任何一种：
-// 默认保留上游原行为（不带空格 -> 判 ES，这是当前 MobileGL-gles + SFPEW
-// 能正常出画面的组合），另开环境变量供真机 A/B，不用重新构建。
-//   AMETHYST_SFPEW_BACKEND_ES=0  -> 按桌面 backend 判定（走 GLSL 4.x0 转译）
-//   AMETHYST_SFPEW_BACKEND_ES=1  -> 按 ES backend 判定（走 ESSL 转译）
+// 默认取“带空格”那一支，理由（实测，非推断）：MobileGL-gles 是
+// desktop GL 4.6 -> ES 3.0 的转译层，它对外报 4.6、内部是 ES 3.0，
+// 也就是说它的输入契约是 desktop GLSL，desktop->ES 由它自己完成。
+// 安卓那边的 mobileglues 自述串 "4.0.0 MobileGlues 1.3.5" 不含
+// "OpenGL ES"，detect_backend_target() 判它为 desktop，转译目标
+// GLSL 4.x0，光影包能开 —— 这正是我们要镜像的模型。
+// 若按不带空格判成 ES，转译目标会落成 ESSL 300，desktop GLSL 120
+// 的光影包转译失败后回退原码，原码在 ES 上下文里编译报
+// "'texture' : can't use function syntax on variable"，于是黑屏。
+// 带空格仍能正确识别真 ES 后端（"OpenGL ES 3.0"），只有
+// "(OpenGL ES)" 这类描述性后缀不再误判。
+// 逃逸阀（不用重新构建）：
+//   AMETHYST_SFPEW_BACKEND_ES=0  -> 强制按桌面 backend 判定
+//   AMETHYST_SFPEW_BACKEND_ES=1  -> 强制按 ES backend 判定
 static int sfpewIosBackendReportsES(const char* version) {{
     const char* override = std::getenv("AMETHYST_SFPEW_BACKEND_ES");
     if (override != nullptr && override[0] != '\\0') {{
         return std::strcmp(override, "0") == 0 ? 0 : 1;
     }}
-    return std::strstr(version, "OpenGL ES") != nullptr ? 1 : 0;
+    return std::strstr(version, "OpenGL ES ") != nullptr ? 1 : 0;
 }}
 '''.format(marker=MARKER)
 
 
 def patch_backend_es_detect(root: Path) -> None:
-    """让 backend 的 “OpenGL ES” 判定可在运行时切换（默认保持上游原行为）。
+    """让 backend 的 “OpenGL ES” 判定与 sfpewDesktopGLVersion() 对齐。
 
     只做两件事：注入 sfpewIosBackendReportsES()，并把 detect_backend_target()
-    里那句裸 strstr 换成调用它。默认行为与打补丁前逐字等价，因此不会影响
-    当前唯一能出画面的 MobileGL-gles + SFPEW 组合；需要验证光影包时设
-    AMETHYST_SFPEW_BACKEND_ES=0 / 1 即可，无需重新构建。
+    里那句裸 strstr 换成调用它。默认取“带尾随空格”那一支，与上游
+    sfpewDesktopGLVersion() 的写法一致，于是 MobileGL-gles 这类
+    “对外报 desktop、内部是 ES” 的转译层被正确地按 desktop backend 处理
+    （转译目标 GLSL 4.x0，desktop->ES 交给后端自己完成）；真正的 ES 后端
+    （"OpenGL ES 3.0"）不受影响。
+    逃逸阀 AMETHYST_SFPEW_BACKEND_ES=0 / 1 仍可在运行时强制任一方向。
     """
     translator = root / "SimpleFPEWrapper" / "shader" / "translator.cpp"
     if not translator.is_file():
