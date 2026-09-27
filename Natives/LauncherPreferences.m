@@ -90,13 +90,25 @@ int ame141_currentLaunchAllocMem(void) {
     // 只在超过设备安全堆顶时向下钳制（Air Task173）。
     // 绝不能把健康值压小：上一版 "物理内存 × 0.70 − 1024" 会把 iPhone X 上
     // 任何 > 953 MB 的设置硬压到 953 MB，反而制造内存不足。
+    //
+    // [fix/memorystatus-gate] 带 com.apple.private.memorystatus entitlement 的
+    // 构建【不钳】：SurfaceViewController 的 updateJetsamControl 会用
+    // memorystatus_control 把 jetsam 任务限额提到 allocmem + 1024（Air 同款，
+    // 越狱设备实证可设：Air 日志 "Successfully set Jetsam task limit
+    // (allocmem=1129 MB, limit=2153 MB)"）。此时钳制反而有害——用户按 Air
+    // 习惯手动调大实例内存（如 1129MB）会被压回 ceiling，制造
+    // limit 偏低的低顶。无 entitlement（限额提不上去，只能吃系统默认）时
+    // 保持钳制作为安全网。
     const char *noClamp = getenv("AMETHYST_MEM_NO_CLAMP");
-    if (!(noClamp && noClamp[0] == '1')) {
+    bool canRaiseJetsamLimit = getEntitlementValue(@"com.apple.private.memorystatus");
+    if (!(noClamp && noClamp[0] == '1') && !canRaiseJetsamLimit) {
         int ceiling = ame173_safeHeapCeilingMB();
         if (allocmem > ceiling) {
             NSLog(@"[Task173] launch memory %dMB exceeds safe ceiling %dMB -- clamping (preference on disk preserved)", allocmem, ceiling);
             allocmem = ceiling;
         }
+    } else if (canRaiseJetsamLimit) {
+        NSLog(@"[Task173] memorystatus entitlement present -- jetsam limit will be raised to %d MB (allocmem %d + 1024 native); heap clamp bypassed", allocmem + 1024, allocmem);
     }
     NSLog(@"[Task141] final launch memory = %d MB (device %d MB, jetsam limit %d MB)", allocmem, deviceMB, allocmem + 1024);
     return allocmem;
