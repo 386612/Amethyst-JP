@@ -1445,7 +1445,16 @@ static bool dlsym_EGL() {
     // [sfpew-egl-route] A/B：AMETHYST_SFPEW_EGL_ROUTE=1 时改走 (c) —— EGL 全部经
     // SFPEW 的 eglGetProcAddress 解析（安卓/FCL 实测模型）。失败则回落到下方
     // 真后端 dlsym 路径，不改变默认行为。
-    if (isSFPEWRenderer(renderer) && ameSFPEWEglRouteWanted()) {
+    // Task 178：LTW 下不得走这条早退路径。
+    //
+    // LTW 的 eglCreateContext / eglDestroyContext / eglMakeCurrent 是它注入
+    // GL Core 3.3 -> ES 3 转译逻辑的 wrapper（见上方 1392-1407 的注释：建 ES3
+    // 上下文 + 安装 GL 函数指针转译表 + 伪装 ARB 扩展），而这些解析发生在本
+    // 函数下方的 useLTW 分支里。此处一旦 return true，函数立即返回，LTW 的
+    // wrapper 永远不会被解析 —— SFPEW 的转发链把 LTW 整个架空，转译层形同
+    // 未接入，画面必黑。因此 LTW 模式一律走下方正常路径（lifecycle 从
+    // ltw_handle 取，SFPEW 只承担 GL）。
+    if (isSFPEWRenderer(renderer) && ameSFPEWEglRouteWanted() && !useLTW) {
         if (ameSFPEWResolveEGL()) {
             ame_sfpew_egl_route_active = YES;
             NSLog(@"[SFPEW-EGL] route ACTIVE -- lifecycle+infra both resolved through SFPEW "
