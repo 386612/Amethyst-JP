@@ -1252,9 +1252,26 @@ static PFNEGLSWAPINTERVALPROC      ame_raw_swap_interval = NULL;   // Task 76 �
 // ============================================================================
 static BOOL ame_sfpew_egl_route_active = NO;
 
+// Task 179：默认启用。
+//
+// 根因（SFPEW lookup.cpp:75-79 的注释，原文）：
+//   "the wrapper has to drain its pending batch before the frame is presented,
+//    or geometry drawn late in the frame is submitted into the next one and
+//    cleared away."
+// 即 eglSwapBuffers 必须经 SFPEW 的 wrapper：wrapper 要在 present 前把延迟
+// 提交的几何冲出去。模型 (b)（全部 EGL 从真后端 dlsym）绕过了它，于是
+// SFPEW 的 pending batch 从不 drain，每帧几何被推到下一帧再被 clear ——
+// 这正是 MobileGL-gles + SFPEW 加载界面白屏、ANGLE/LTW + SFPEW 全黑的成因。
+//
+// FCL 实测三份日志 POJAVEXEC_EGL=libSimpleFPEWrapper.so，EGL 入口就是 SFPEW
+// 本身，等价于此处的 (c)：lifecycle（create/destroy/makeCurrent/swap）走
+// SFPEW wrapper，infra 由 SFPEW 转发后端（lookup.cpp:1048-1055）。
+//
+// 保留 opt-out：AMETHYST_SFPEW_EGL_ROUTE=0 回到模型 (b)。解析失败同样回落。
 static BOOL ameSFPEWEglRouteWanted(void) {
     const char *v = getenv("AMETHYST_SFPEW_EGL_ROUTE");
-    return (v != NULL && strcmp(v, "1") == 0);
+    if (v == NULL) return YES;                    // 默认启用
+    return !(strcmp(v, "0") == 0);
 }
 
 static BOOL ameSFPEWResolveEGL(void) {
