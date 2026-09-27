@@ -1604,25 +1604,50 @@ static bool gl_init() {
     return true;
 }
 
+// SFPEW 叠加时是否仍按真后端判定 desktop GL（诊断逃逸阀，默认否）。
+static BOOL ameSFPEWForceDesktopGL(void) {
+    const char *v = getenv("AMETHYST_SFPEW_DESKTOPGL");
+    return v != NULL && v[0] != '\0' && v[0] != '0';
+}
+
 gl_render_window_t* gl_init_context(gl_render_window_t *share) {
     gl_render_window_t* bundle = calloc(1, sizeof(gl_render_window_t));
 
     NSString *renderer = NSProcessInfo.processInfo.environment[@"AMETHYST_RENDERER"];
-    // SFPEW 叠加模式下 AMETHYST_RENDERER 已被换成 libSimpleFPEWrapper.dylib，但
-    // 「导出的是 desktop OpenGL 还是 OpenGL ES」取决于真后端，与 dlsym_EGL() 里
-    // EGL 来源的判定必须一致（真后端名在 AMETHYST_SFPEW_BACKEND）。
-    // 若按 SFPEW 判定，MobileGL-gles（desktop GL）会被当成 ES 后端：
-    // eglChooseConfig 请求 EGL_OPENGL_ES3_BIT、eglBindAPI(EGL_OPENGL_ES_API)，
-    // 而 MobileGL 导出的是 desktop OpenGL → 上下文类型不匹配 →
-    // glCheckFramebufferStatus 返回垃圾值（如 0x582B0D8）崩溃。
+    // SFPEW 叠加模式下 AMETHYST_RENDERER 已被换成 libSimpleFPEWrapper.dylib，
+    // 真后端名在 AMETHYST_SFPEW_BACKEND（EGL 来源判定用它，见 dlsym_EGL()）。
     const char *apiRenderer = renderer.UTF8String;
-    if (isSFPEWRenderer(apiRenderer)) {
+    const BOOL sfpewActive = isSFPEWRenderer(apiRenderer);
+    if (sfpewActive) {
         const char *sfpewBackend = getenv("AMETHYST_SFPEW_BACKEND");
         if (sfpewBackend != NULL && sfpewBackend[0] != '\0') apiRenderer = sfpewBackend;
     }
     // ANGLE / Mithril / MobileGL 导出的都是 desktop OpenGL，走 EGL_OPENGL_BIT +
     // eglBindAPI(EGL_OPENGL_API)；其余（gl4es / MobileGlues / LTW）是 OpenGL ES。
     BOOL desktopGL = isDesktopGLRenderer(apiRenderer);
+    // ---- SFPEW 叠加：上下文一律走 OpenGL ES ----------------------------------
+    // SFPEW 生成的固定管线着色器恒为 `#version 300 es`（fpe_shadergen.cpp 的
+    // mg_shader_header，VS/FS 两处无条件拼接，没有 desktop 分支）。所以只要
+    // SFPEW 在场，上下文就必须是 ES —— 哪怕真后端自述为 desktop GL 也一样。
+    //
+    // MobileGL-gles 是最典型的反例：GL_VERSION 报 "4.6.0 MobileGL 26.09-dev,
+    // Direct (OpenGL ES) Backend"，EGL 由 ANGLE 提供、只有 ES 档；SFPEW 自己
+    // 也据此把它判成 ES 后端（capabilities.cpp 的 sfpewBackendTakesBgra 会为
+    // 它做 BGRA 重排）。但我们此前按真后端名命中 isDesktopGLRenderer，请求
+    // EGL_OPENGL_BIT + eglBindAPI(EGL_OPENGL_API)，把 ES 3.00 着色器交给了
+    // desktop 上下文 → 编译/链接失败 → 用无效 program 绘制 →
+    // GL_INVALID_OPERATION(1282) 在 Pre/Post startup、Pre/Post render 刷屏。
+    //
+    // 安卓侧 eglBindAPI 同样以 ES 为默认（仅 zink 走 desktop），与此一致。
+    // 逃逸阀：AMETHYST_SFPEW_DESKTOPGL=1 恢复「按真后端判定」的旧行为。
+    if (sfpewActive && !ameSFPEWForceDesktopGL()) {
+        if (desktopGL) {
+            NSDebugLog(@"EGLBridge: SFPEW overlay active -- forcing OpenGL ES context "
+                       @"(FPE shaders are #version 300 es, backend '%s' self-reports desktop GL)",
+                       apiRenderer);
+        }
+        desktopGL = NO;
+    }
     BOOL mobileGL = isMobileGLRenderer(apiRenderer);
 
     const EGLint attribs[] = {
