@@ -5,10 +5,18 @@
 //
 //  参照 FCL (FoldCraftLauncher) page_installer.xml + view_installer_item.xml 重构。
 //  - 顶部紧凑 toolbar：版本名输入框 + 右上角下载图标按钮（替代原底部 72pt 大按钮）
-//  - 加载器列表用 UITableView InsetGrouped 扁平条目（每行 ~54pt，无阴影/无卡片边框）
-//  - 每行：左侧 28pt 图标 + 中间名称/状态双行 + 右侧 chevron/选中标记
-//  - 附加选项（Fabric API / OptiFine 共存）作为独立 section 的开关行
-//  - 版本选择子页面也改为 UITableView 扁平条目
+//
+//  Task184 重写（用户三轮口径"重写，按照上一级也就是版本号选择界面写"）：
+//  三个 cell 类与 VersionCardCell（下载页版本号选择列表，用户认可形态）
+//  完全同构——外层 cell 全透明（含杀掉系统 inset-grouped 白底 = "钉死的
+//  底层白框"根修），视觉由内层 cardContainer（圆角 12 continuous、上下
+//  4pt 内缩）承载，凸起管线 applyNeumorphCardEffectToView 在 init 挂一次
+//  （兼顾新拟态开关）；图标 40x40 圆角 10 品牌色淡底容器，名称 16
+//  semibold / 状态 12 规格文字色，右侧 chevron 14pt，全部 = 版本卡规格。
+//  - 加载器列表每行一独立 section（Task136 保留，行高 64 = 版本卡同款）
+//  - 每行：左 40x40 图标容器 + 中间名称/状态双行 + 右侧 chevron/选中徽章
+//  - 附加选项（Fabric API / OptiFine 共存）作为独立 section 的开关行（同配方）
+//  - 版本选择子页面条目同样换卡式配方
 //  - 互斥逻辑与 FCL 完全一致
 //
 
@@ -16,6 +24,7 @@
 #import "NeoForgeVersionFetcher.h"
 #import "LauncherPreferences.h"
 #import "BackgroundManager.h"
+#import "../UIKit+NativeSurface.h" // Task184：新拟态规格文字色符号（AmeNeumorphPrimary/SecondaryTextColor）
 #import "ModLoaderIconHelper.h"
 #import "ScreenUtils.h"
 #import <QuartzCore/QuartzCore.h>
@@ -35,61 +44,120 @@
 @implementation ModLoaderRow
 @end
 
-#pragma mark - Loader Row Cell (扁平条目，参照 FCL view_installer_item.xml)
+#pragma mark - Loader Row Cell（Task184 重写：与 VersionCardCell 完全同构）
 
+// Task184：干掉 InsetGrouped 的系统 cell 镀层——iOS 会为 grouped/inset-grouped
+// 表格的 cell 自动装一个 secondarySystemGroupedBackground 白色背景视图（以及
+// 灰色选中高亮）；凸起管线挂在"内层卡片容器"上时，那层白底垫在卡片外面就是
+// 用户实测的"钉死的底层白框 + 白框里一条边的假新拟态"。换装空透明
+// 背景/选中视图（空 UIView 默认 clear 底），init 与 prepareForReuse 双点
+// 重放（幂等，防系统在复用时重新装底）。
+static void AME184ClearTableViewCellChrome(UITableViewCell *cell) {
+    cell.backgroundColor = [UIColor clearColor];
+    cell.contentView.backgroundColor = [UIColor clearColor];
+    cell.layer.masksToBounds = NO;
+    UIView *clearBg = [[UIView alloc] init];
+    clearBg.backgroundColor = [UIColor clearColor];
+    clearBg.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    cell.backgroundView = clearBg;
+    UIView *clearSel = [[UIView alloc] init];
+    clearSel.backgroundColor = [UIColor clearColor];
+    clearSel.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    cell.selectedBackgroundView = clearSel;
+}
+
+// 与 VersionCardCell（Natives/VersionCardCell.m，用户认可的版本号选择界面）
+// 同构的构造范式：外层 cell 全透明（含杀掉系统 inset-grouped 白底）→ 内层
+// cardContainer（圆角 12 continuous、上下 4pt 内缩）承载视觉 → 凸起管线
+// applyNeumorphCardEffectToView 在 init 挂一次（开关开 = Task177 渐变卡面 +
+// 双阴影规格，关 = 旧毛玻璃/平贴管线，由 BackgroundManager 内部裁定；出列
+// 不再重铺——引擎 layoutSubviews 按 bounds 自刷，VersionCardCell 同款单次
+// 挂载范式）。
 @interface ModLoaderRowCell : UITableViewCell
+@property (nonatomic, strong) UIView *cardContainer;   // 整张卡片的视觉宿主
+@property (nonatomic, strong) UIView *iconContainer;   // 左侧 40x40 圆角方块图标容器
 @property (nonatomic, strong) UIImageView *iconView;
 @property (nonatomic, strong) UILabel *nameLabel;
 @property (nonatomic, strong) UILabel *stateLabel;
+@property (nonatomic, strong) UIImageView *chevronView;
 @property (nonatomic, strong) UIView *selectedBadge;
 @end
 
 @implementation ModLoaderRowCell
 
 - (instancetype)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)reuseIdentifier {
-    self = [super initWithStyle:UITableViewCellStyleDefault reuseIdentifier:reuseIdentifier];
+    self = [super initWithStyle:style reuseIdentifier:reuseIdentifier];
     if (self) {
-        [self setupViews];
+        [self ame183_setupViews];
     }
     return self;
 }
 
-- (void)setupViews {
-    // 扁平条目：无阴影、无边框，仅依赖 BackgroundManager.applyEffectToCell: 提供毛玻璃/半透明
+- (void)ame183_setupViews {
+    AME184ClearTableViewCellChrome(self);
     self.selectionStyle = UITableViewCellSelectionStyleDefault;
-    self.accessoryType = UITableViewCellAccessoryNone;
 
-    CGFloat iconSize = [ScreenUtils dp:28];
-    CGFloat nameFont = [ScreenUtils sp:15];
-    CGFloat stateFont = [ScreenUtils sp:12];
+    // ----- 卡片容器（VersionCardCell 同规格：圆角 12 continuous、上下内缩 4pt）-----
+    _cardContainer = [[UIView alloc] init];
+    _cardContainer.translatesAutoresizingMaskIntoConstraints = NO;
+    _cardContainer.layer.cornerRadius = 12;
+    _cardContainer.layer.cornerCurve = kCACornerCurveContinuous;
+    [self.contentView addSubview:_cardContainer];
+    [[BackgroundManager sharedManager] applyNeumorphCardEffectToView:_cardContainer];
+
+    // ----- 左侧图标容器：40x40 圆角 10 品牌色淡底方块 + 居中图标（版本卡规格）-----
+    // 图标内容由 ModLoaderIconHelper.configureImageView 配置（PNG 保原色 /
+    // SF Symbol 着品牌色），容器底色 = 品牌色 0.15 淡底（与该助手的
+    // createIconBadgeForLoader 徽章规格同源）。
+    _iconContainer = [[UIView alloc] init];
+    _iconContainer.translatesAutoresizingMaskIntoConstraints = NO;
+    _iconContainer.layer.cornerRadius = 10;
+    _iconContainer.layer.cornerCurve = kCACornerCurveContinuous;
+    _iconContainer.layer.masksToBounds = YES;
+    _iconContainer.backgroundColor = [UIColor systemGreenColor];
+    [_cardContainer addSubview:_iconContainer];
 
     _iconView = [[UIImageView alloc] init];
     _iconView.translatesAutoresizingMaskIntoConstraints = NO;
     _iconView.contentMode = UIViewContentModeScaleAspectFit;
-    [self.contentView addSubview:_iconView];
+    [_iconContainer addSubview:_iconView];
 
+    // ----- 名称/状态两行（版本卡"版本号 16 semibold + 日期 12"同款文字规格）-----
     _nameLabel = [[UILabel alloc] init];
     _nameLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    _nameLabel.font = [UIFont systemFontOfSize:nameFont weight:UIFontWeightMedium];
-    _nameLabel.textColor = [UIColor labelColor];
+    _nameLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold];
+    _nameLabel.textColor = AmeNeumorphPrimaryTextColor();
     _nameLabel.numberOfLines = 1;
-    _nameLabel.adjustsFontForContentSizeCategory = NO;
-    [self.contentView addSubview:_nameLabel];
+    _nameLabel.adjustsFontSizeToFitWidth = YES;
+    _nameLabel.minimumScaleFactor = 0.75;
+    _nameLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+    [_cardContainer addSubview:_nameLabel];
 
     _stateLabel = [[UILabel alloc] init];
     _stateLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    _stateLabel.font = [UIFont systemFontOfSize:stateFont];
-    _stateLabel.textColor = [UIColor secondaryLabelColor];
+    _stateLabel.font = [UIFont systemFontOfSize:12];
+    _stateLabel.textColor = AmeNeumorphSecondaryTextColor();
     _stateLabel.numberOfLines = 1;
-    _stateLabel.adjustsFontForContentSizeCategory = NO;
-    [self.contentView addSubview:_stateLabel];
+    _stateLabel.adjustsFontSizeToFitWidth = YES;
+    _stateLabel.minimumScaleFactor = 0.7;
+    _stateLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+    [_cardContainer addSubview:_stateLabel];
 
+    // ----- 右侧 chevron（版本卡规格：14x14 tertiary，提示可点进版本选择）-----
+    _chevronView = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.right"]];
+    _chevronView.translatesAutoresizingMaskIntoConstraints = NO;
+    _chevronView.tintColor = [UIColor tertiaryLabelColor];
+    _chevronView.contentMode = UIViewContentModeScaleAspectFit;
+    [_cardContainer addSubview:_chevronView];
+
+    // ----- 选中徽章：20pt 绿圆 + 白勾（与 chevron 互斥，configure 里切换）-----
     _selectedBadge = [[UIView alloc] init];
     _selectedBadge.translatesAutoresizingMaskIntoConstraints = NO;
     _selectedBadge.backgroundColor = [UIColor systemGreenColor];
     _selectedBadge.layer.cornerRadius = 10;
+    _selectedBadge.layer.masksToBounds = YES;
     _selectedBadge.hidden = YES;
-    [self.contentView addSubview:_selectedBadge];
+    [_cardContainer addSubview:_selectedBadge];
 
     UIImageView *checkmark = [[UIImageView alloc] init];
     checkmark.translatesAutoresizingMaskIntoConstraints = NO;
@@ -98,27 +166,60 @@
     [_selectedBadge addSubview:checkmark];
 
     [NSLayoutConstraint activateConstraints:@[
-        [self.iconView.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor constant:16],
-        [self.iconView.centerYAnchor constraintEqualToAnchor:self.contentView.centerYAnchor],
-        [self.iconView.widthAnchor constraintEqualToConstant:iconSize],
-        [self.iconView.heightAnchor constraintEqualToConstant:iconSize],
+        // 卡片容器充满 contentView（上下各留 4pt，与版本卡 sectionInset 语义一致）
+        [_cardContainer.topAnchor constraintEqualToAnchor:self.contentView.topAnchor constant:4],
+        [_cardContainer.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor constant:0],
+        [_cardContainer.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor constant:0],
+        [_cardContainer.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor constant:-4],
 
-        [self.nameLabel.leadingAnchor constraintEqualToAnchor:self.iconView.trailingAnchor constant:12],
-        [self.nameLabel.topAnchor constraintEqualToAnchor:self.contentView.topAnchor constant:9],
-        [self.nameLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.selectedBadge.leadingAnchor constant:-8],
+        // 图标容器：左 14，垂直居中，40x40；图标 26x26 居中
+        [_iconContainer.leadingAnchor constraintEqualToAnchor:_cardContainer.leadingAnchor constant:14],
+        [_iconContainer.centerYAnchor constraintEqualToAnchor:_cardContainer.centerYAnchor],
+        [_iconContainer.widthAnchor constraintEqualToConstant:40],
+        [_iconContainer.heightAnchor constraintEqualToConstant:40],
+        [_iconView.centerXAnchor constraintEqualToAnchor:_iconContainer.centerXAnchor],
+        [_iconView.centerYAnchor constraintEqualToAnchor:_iconContainer.centerYAnchor],
+        [_iconView.widthAnchor constraintEqualToConstant:26],
+        [_iconView.heightAnchor constraintEqualToConstant:26],
 
-        [self.stateLabel.leadingAnchor constraintEqualToAnchor:self.nameLabel.leadingAnchor],
-        [self.stateLabel.topAnchor constraintEqualToAnchor:self.nameLabel.bottomAnchor constant:2],
-        [self.stateLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.selectedBadge.leadingAnchor constant:-8],
-        [self.stateLabel.bottomAnchor constraintLessThanOrEqualToAnchor:self.contentView.bottomAnchor constant:-9],
+        // 名称：紧跟图标右侧 +14，顶部 12（行高 64 = 卡 56，内容顶部锚定，
+        // 不设底部约束——与固定行高组合零冲突）
+        [_nameLabel.leadingAnchor constraintEqualToAnchor:_iconContainer.trailingAnchor constant:14],
+        [_nameLabel.topAnchor constraintEqualToAnchor:_cardContainer.topAnchor constant:12],
+        [_nameLabel.trailingAnchor constraintLessThanOrEqualToAnchor:_chevronView.leadingAnchor constant:-8],
 
-        [self.selectedBadge.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor constant:-16],
-        [self.selectedBadge.centerYAnchor constraintEqualToAnchor:self.contentView.centerYAnchor],
-        [self.selectedBadge.widthAnchor constraintEqualToConstant:20],
-        [self.selectedBadge.heightAnchor constraintEqualToConstant:20],
-        [checkmark.centerXAnchor constraintEqualToAnchor:self.selectedBadge.centerXAnchor],
-        [checkmark.centerYAnchor constraintEqualToAnchor:self.selectedBadge.centerYAnchor],
+        // 状态行：与名称左对齐，紧跟下方 +3
+        [_stateLabel.leadingAnchor constraintEqualToAnchor:_nameLabel.leadingAnchor],
+        [_stateLabel.topAnchor constraintEqualToAnchor:_nameLabel.bottomAnchor constant:3],
+        [_stateLabel.trailingAnchor constraintLessThanOrEqualToAnchor:_chevronView.leadingAnchor constant:-8],
+
+        // chevron：右 -14，垂直居中，14x14
+        [_chevronView.trailingAnchor constraintEqualToAnchor:_cardContainer.trailingAnchor constant:-14],
+        [_chevronView.centerYAnchor constraintEqualToAnchor:_cardContainer.centerYAnchor],
+        [_chevronView.widthAnchor constraintEqualToConstant:14],
+        [_chevronView.heightAnchor constraintEqualToConstant:14],
+
+        // 选中徽章：右 -14，垂直居中，20x20
+        [_selectedBadge.trailingAnchor constraintEqualToAnchor:_cardContainer.trailingAnchor constant:-14],
+        [_selectedBadge.centerYAnchor constraintEqualToAnchor:_cardContainer.centerYAnchor],
+        [_selectedBadge.widthAnchor constraintEqualToConstant:20],
+        [_selectedBadge.heightAnchor constraintEqualToConstant:20],
+        [checkmark.centerXAnchor constraintEqualToAnchor:_selectedBadge.centerXAnchor],
+        [checkmark.centerYAnchor constraintEqualToAnchor:_selectedBadge.centerYAnchor],
     ]];
+}
+
+- (void)prepareForReuse {
+    [super prepareForReuse];
+    // Task184：复用时重放镀层清理（幂等）+ 状态字段复位，其余由 configure 决定
+    AME184ClearTableViewCellChrome(self);
+    self.iconView.alpha = 1.0;
+    self.iconContainer.alpha = 1.0;
+    self.selectedBadge.hidden = YES;
+    self.chevronView.hidden = NO;
+    self.nameLabel.textColor = AmeNeumorphPrimaryTextColor();
+    self.stateLabel.textColor = AmeNeumorphSecondaryTextColor();
+    self.contentView.userInteractionEnabled = YES;
 }
 
 - (void)setIncompatible:(BOOL)incompatible reason:(NSString *)reason {
@@ -128,14 +229,18 @@
         self.stateLabel.textColor = [UIColor systemRedColor];
         self.nameLabel.textColor = [UIColor tertiaryLabelColor];
         self.iconView.alpha = 0.45;
+        self.iconContainer.alpha = 0.45;
         self.selectedBadge.hidden = YES;
-        self.accessoryType = UITableViewCellAccessoryNone;
+        self.chevronView.hidden = YES;
         self.selectionStyle = UITableViewCellSelectionStyleNone;
         self.contentView.userInteractionEnabled = NO;
     } else {
-        self.nameLabel.textColor = [UIColor labelColor];
-        self.stateLabel.textColor = [UIColor secondaryLabelColor];
+        // 恢复分支：版本卡规格文字色
+        self.nameLabel.textColor = AmeNeumorphPrimaryTextColor();
+        self.stateLabel.textColor = AmeNeumorphSecondaryTextColor();
         self.iconView.alpha = 1.0;
+        self.iconContainer.alpha = 1.0;
+        self.chevronView.hidden = NO;
         self.selectionStyle = UITableViewCellSelectionStyleDefault;
         self.contentView.userInteractionEnabled = YES;
     }
@@ -149,14 +254,14 @@
     } else {
         self.stateLabel.hidden = NO;
         self.stateLabel.text = localize(@"i18n_str_1200", nil);
-        self.stateLabel.textColor = [UIColor secondaryLabelColor];
+        self.stateLabel.textColor = AmeNeumorphSecondaryTextColor();
     }
 }
 
 - (void)clearStatusText {
     self.stateLabel.hidden = NO;
     self.stateLabel.text = localize(@"i18n_str_1201", nil);
-    self.stateLabel.textColor = [UIColor secondaryLabelColor];
+    self.stateLabel.textColor = AmeNeumorphSecondaryTextColor();
 }
 
 - (void)configureWithRow:(ModLoaderRow *)row
@@ -166,9 +271,12 @@
                      reason:(NSString *)reason {
     self.nameLabel.text = row.name;
 
+    // 图标：ModLoaderIconHelper 统一配置（PNG 保原色 / SF 着品牌色）
     [ModLoaderIconHelper configureImageView:self.iconView
                                   forLoader:row.identifier
                              traitCollection:self.traitCollection];
+    UIColor *ame183Brand = [ModLoaderIconHelper brandColorForLoader:row.identifier];
+    self.iconContainer.backgroundColor = [ame183Brand colorWithAlphaComponent:0.15];
 
     if (incompatible) {
         [self setIncompatible:YES reason:reason];
@@ -186,19 +294,20 @@
             [self setSelectedVersionText:nil];
         }
         self.selectedBadge.hidden = NO;
-        self.accessoryType = UITableViewCellAccessoryNone;
+        self.chevronView.hidden = YES;
     } else {
         [self clearStatusText];
         self.selectedBadge.hidden = YES;
-        self.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        self.chevronView.hidden = NO;
     }
 }
 
 @end
 
-#pragma mark - Switch Row Cell (Fabric API / OptiFine 选项开关行)
+#pragma mark - Switch Row Cell（Task184 重写：VersionCardCell 同构 / Fabric API、OptiFine 共存开关行）
 
 @interface ModLoaderSwitchCell : UITableViewCell
+@property (nonatomic, strong) UIView *cardContainer;   // 整张卡片的视觉宿主
 @property (nonatomic, strong) UILabel *titleLabel;
 @property (nonatomic, strong) UILabel *descLabel;
 @property (nonatomic, strong) UISwitch *switchControl;
@@ -207,59 +316,81 @@
 @implementation ModLoaderSwitchCell
 
 - (instancetype)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)reuseIdentifier {
-    self = [super initWithStyle:UITableViewCellStyleDefault reuseIdentifier:reuseIdentifier];
+    self = [super initWithStyle:style reuseIdentifier:reuseIdentifier];
     if (self) {
-        [self setupViews];
+        [self ame183_setupViews];
     }
     return self;
 }
 
-- (void)setupViews {
+- (void)ame183_setupViews {
+    AME184ClearTableViewCellChrome(self);
     self.selectionStyle = UITableViewCellSelectionStyleNone;
 
-    CGFloat titleFont = [ScreenUtils sp:15];
-    CGFloat descFont = [ScreenUtils sp:12];
+    // ----- 卡片容器（同 RowCell：圆角 12 continuous、上下内缩 4pt、凸起管线 init 挂一次）-----
+    _cardContainer = [[UIView alloc] init];
+    _cardContainer.translatesAutoresizingMaskIntoConstraints = NO;
+    _cardContainer.layer.cornerRadius = 12;
+    _cardContainer.layer.cornerCurve = kCACornerCurveContinuous;
+    [self.contentView addSubview:_cardContainer];
+    [[BackgroundManager sharedManager] applyNeumorphCardEffectToView:_cardContainer];
 
+    // ----- 标题/描述两行（与 RowCell 同款文字规格）-----
     _titleLabel = [[UILabel alloc] init];
     _titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    _titleLabel.font = [UIFont systemFontOfSize:titleFont weight:UIFontWeightMedium];
-    _titleLabel.textColor = [UIColor labelColor];
-    _titleLabel.adjustsFontForContentSizeCategory = NO;
-    [self.contentView addSubview:_titleLabel];
+    _titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold];
+    _titleLabel.textColor = AmeNeumorphPrimaryTextColor();
+    _titleLabel.numberOfLines = 1;
+    _titleLabel.adjustsFontSizeToFitWidth = YES;
+    _titleLabel.minimumScaleFactor = 0.75;
+    _titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+    [_cardContainer addSubview:_titleLabel];
 
     _descLabel = [[UILabel alloc] init];
     _descLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    _descLabel.font = [UIFont systemFontOfSize:descFont];
-    _descLabel.textColor = [UIColor secondaryLabelColor];
+    _descLabel.font = [UIFont systemFontOfSize:12];
+    _descLabel.textColor = AmeNeumorphSecondaryTextColor();
     _descLabel.numberOfLines = 0;
     _descLabel.lineBreakMode = NSLineBreakByWordWrapping;
     _descLabel.adjustsFontForContentSizeCategory = NO;
-    [self.contentView addSubview:_descLabel];
+    [_cardContainer addSubview:_descLabel];
 
     _switchControl = [[UISwitch alloc] init];
     _switchControl.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.contentView addSubview:_switchControl];
+    [_cardContainer addSubview:_switchControl];
 
     [NSLayoutConstraint activateConstraints:@[
-        [self.titleLabel.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor constant:16],
-        [self.titleLabel.topAnchor constraintEqualToAnchor:self.contentView.topAnchor constant:9],
-        [self.titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.switchControl.leadingAnchor constant:-12],
+        [_cardContainer.topAnchor constraintEqualToAnchor:self.contentView.topAnchor constant:4],
+        [_cardContainer.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor constant:0],
+        [_cardContainer.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor constant:0],
+        [_cardContainer.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor constant:-4],
 
-        [self.descLabel.leadingAnchor constraintEqualToAnchor:self.titleLabel.leadingAnchor],
-        [self.descLabel.topAnchor constraintEqualToAnchor:self.titleLabel.bottomAnchor constant:2],
-        [self.descLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.switchControl.leadingAnchor constant:-12],
-        [self.descLabel.bottomAnchor constraintLessThanOrEqualToAnchor:self.contentView.bottomAnchor constant:-9],
+        [_titleLabel.leadingAnchor constraintEqualToAnchor:_cardContainer.leadingAnchor constant:16],
+        [_titleLabel.topAnchor constraintEqualToAnchor:_cardContainer.topAnchor constant:12],
+        [_titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:_switchControl.leadingAnchor constant:-12],
 
-        [self.switchControl.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor constant:-16],
-        [self.switchControl.centerYAnchor constraintEqualToAnchor:self.contentView.centerYAnchor],
+        [_descLabel.leadingAnchor constraintEqualToAnchor:_titleLabel.leadingAnchor],
+        [_descLabel.topAnchor constraintEqualToAnchor:_titleLabel.bottomAnchor constant:3],
+        [_descLabel.trailingAnchor constraintLessThanOrEqualToAnchor:_switchControl.leadingAnchor constant:-12],
+
+        [_switchControl.trailingAnchor constraintEqualToAnchor:_cardContainer.trailingAnchor constant:-14],
+        [_switchControl.centerYAnchor constraintEqualToAnchor:_cardContainer.centerYAnchor],
     ]];
+}
+
+- (void)prepareForReuse {
+    [super prepareForReuse];
+    AME184ClearTableViewCellChrome(self);
+    self.titleLabel.text = nil;
+    self.descLabel.text = nil;
 }
 
 @end
 
-#pragma mark - Version Row Cell (版本选择子页面扁平条目)
+#pragma mark - Version Row Cell（版本选择子页面，Task184 重写：VersionCardCell 同构）
 
 @interface ModLoaderVersionCell : UITableViewCell
+@property (nonatomic, strong) UIView *cardContainer;   // 整张卡片的视觉宿主
 @property (nonatomic, strong) UILabel *versionLabel;
 @property (nonatomic, strong) UIView *selectedBadge;
 @end
@@ -267,32 +398,42 @@
 @implementation ModLoaderVersionCell
 
 - (instancetype)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)reuseIdentifier {
-    self = [super initWithStyle:UITableViewCellStyleDefault reuseIdentifier:reuseIdentifier];
+    self = [super initWithStyle:style reuseIdentifier:reuseIdentifier];
     if (self) {
-        [self setupViews];
+        [self ame183_setupViews];
     }
     return self;
 }
 
-- (void)setupViews {
+- (void)ame183_setupViews {
+    AME184ClearTableViewCellChrome(self);
     self.selectionStyle = UITableViewCellSelectionStyleDefault;
 
-    CGFloat versionFont = [ScreenUtils sp:15];
+    // ----- 卡片容器（同款配方；行高 50 = 卡 42）-----
+    _cardContainer = [[UIView alloc] init];
+    _cardContainer.translatesAutoresizingMaskIntoConstraints = NO;
+    _cardContainer.layer.cornerRadius = 12;
+    _cardContainer.layer.cornerCurve = kCACornerCurveContinuous;
+    [self.contentView addSubview:_cardContainer];
+    [[BackgroundManager sharedManager] applyNeumorphCardEffectToView:_cardContainer];
 
     _versionLabel = [[UILabel alloc] init];
     _versionLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    _versionLabel.font = [UIFont systemFontOfSize:versionFont weight:UIFontWeightRegular];
-    _versionLabel.textColor = [UIColor labelColor];
+    _versionLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+    _versionLabel.textColor = AmeNeumorphPrimaryTextColor();
     _versionLabel.numberOfLines = 1;
-    _versionLabel.adjustsFontForContentSizeCategory = NO;
-    [self.contentView addSubview:_versionLabel];
+    _versionLabel.adjustsFontSizeToFitWidth = YES;
+    _versionLabel.minimumScaleFactor = 0.75;
+    _versionLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+    [_cardContainer addSubview:_versionLabel];
 
     _selectedBadge = [[UIView alloc] init];
     _selectedBadge.translatesAutoresizingMaskIntoConstraints = NO;
     _selectedBadge.backgroundColor = [UIColor systemGreenColor];
     _selectedBadge.layer.cornerRadius = 10;
+    _selectedBadge.layer.masksToBounds = YES;
     _selectedBadge.hidden = YES;
-    [self.contentView addSubview:_selectedBadge];
+    [_cardContainer addSubview:_selectedBadge];
 
     UIImageView *checkmark = [[UIImageView alloc] init];
     checkmark.translatesAutoresizingMaskIntoConstraints = NO;
@@ -301,17 +442,29 @@
     [_selectedBadge addSubview:checkmark];
 
     [NSLayoutConstraint activateConstraints:@[
-        [self.versionLabel.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor constant:16],
-        [self.versionLabel.centerYAnchor constraintEqualToAnchor:self.contentView.centerYAnchor],
-        [self.versionLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.selectedBadge.leadingAnchor constant:-8],
+        [_cardContainer.topAnchor constraintEqualToAnchor:self.contentView.topAnchor constant:4],
+        [_cardContainer.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor constant:0],
+        [_cardContainer.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor constant:0],
+        [_cardContainer.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor constant:-4],
 
-        [self.selectedBadge.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor constant:-16],
-        [self.selectedBadge.centerYAnchor constraintEqualToAnchor:self.contentView.centerYAnchor],
-        [self.selectedBadge.widthAnchor constraintEqualToConstant:20],
-        [self.selectedBadge.heightAnchor constraintEqualToConstant:20],
-        [checkmark.centerXAnchor constraintEqualToAnchor:self.selectedBadge.centerXAnchor],
-        [checkmark.centerYAnchor constraintEqualToAnchor:self.selectedBadge.centerYAnchor],
+        [_versionLabel.leadingAnchor constraintEqualToAnchor:_cardContainer.leadingAnchor constant:16],
+        [_versionLabel.centerYAnchor constraintEqualToAnchor:_cardContainer.centerYAnchor],
+        [_versionLabel.trailingAnchor constraintLessThanOrEqualToAnchor:_selectedBadge.leadingAnchor constant:-8],
+
+        [_selectedBadge.trailingAnchor constraintEqualToAnchor:_cardContainer.trailingAnchor constant:-14],
+        [_selectedBadge.centerYAnchor constraintEqualToAnchor:_cardContainer.centerYAnchor],
+        [_selectedBadge.widthAnchor constraintEqualToConstant:20],
+        [_selectedBadge.heightAnchor constraintEqualToConstant:20],
+        [checkmark.centerXAnchor constraintEqualToAnchor:_selectedBadge.centerXAnchor],
+        [checkmark.centerYAnchor constraintEqualToAnchor:_selectedBadge.centerYAnchor],
     ]];
+}
+
+- (void)prepareForReuse {
+    [super prepareForReuse];
+    AME184ClearTableViewCellChrome(self);
+    self.versionLabel.text = nil;
+    self.selectedBadge.hidden = YES;
 }
 
 - (void)configureWithVersion:(NSString *)version isSelected:(BOOL)isSelected {
@@ -324,10 +477,10 @@
     }
     self.versionLabel.text = display;
     self.selectedBadge.hidden = !isSelected;
-    self.accessoryType = isSelected ? UITableViewCellAccessoryNone : UITableViewCellAccessoryNone;
 }
 
 @end
+
 
 #pragma mark - Version Picker View Controller (版本选择子页面，扁平 UITableView)
 
@@ -349,16 +502,47 @@
 @property (nonatomic, strong) NSMutableArray *forgeVersionList;
 @property (nonatomic, strong) NSMutableString *currentVersionValue;
 @property (nonatomic, assign) BOOL isParsingForge;
+// Task185：Fabric/Quilt 列表精选——显示全部开关态（默认只展前 30 个）
+@property (nonatomic, assign) BOOL fabricQuiltShowAll;
+// Task185：Fabric/Quilt 网络全量结果缓存（“显示全部”展开免二次请求）
+@property (nonatomic, strong) NSArray *fabricQuiltFullList;
+// Task185：Forge 竞速重写的解析基础设施——sink = 当前 XML 的输出缓冲
+//（竞速下每个 payload 解析到独立 sink，验证过才允许收尾），completion =
+// 该 payload 的验证回调。
+@property (nonatomic, strong) NSMutableArray *forgeParseSink;
+@property (nonatomic, copy) void (^forgeParseCompletion)(NSArray *parsed);
+// Task185：BMCL 按版本 JSON 兜底任务（两个 XML 源都拿不到匹配时第三路）
+@property (nonatomic, strong) NSURLSessionDataTask *forgeFallbackTask;
 // 网络任务
 @property (nonatomic, strong) NSURLSessionDataTask *currentTask;
 @property (nonatomic, strong) NSURLSessionDataTask *bmclTask;
 @end
+
+/// Task185：Fabric/Quilt 列表尾部“显示全部”哨兵行（didSelectRow 特判展开）
+static NSString *ame185ShowAllSentinel(void) {
+    return @"__AME185_SHOW_ALL__";
+}
+
+/// Task185：哨兵行打包格式——复用 ModLoaderVersionCell 的 \x1f 显示约定
+/// （type\x1fpatch\x1ffilename\x1fdisplay，cell 取 parts[3] 展示）。
+/// 哨兵前缀保证 didSelectRow 能识别，显示文案按语言切换。
+static NSString *ame185ShowAllRow(NSInteger hiddenCount) {
+    NSString *lang = getPrefObject(@"general.app_language");
+    if (![lang isKindOfClass:NSString.class] || lang.length == 0 || [lang isEqualToString:@"system"]) {
+        lang = NSLocale.preferredLanguages.firstObject ?: @"en";
+    }
+    NSString *display = [lang hasPrefix:@"zh"]
+        ? [NSString stringWithFormat:@"显示全部（还有 %ld 个更早的版本）", (long)hiddenCount]
+        : [NSString stringWithFormat:@"Show all (%ld older versions)", (long)hiddenCount];
+    return [NSString stringWithFormat:@"%@\x1f\x1f\x1f%@", ame185ShowAllSentinel(), display];
+}
 
 @implementation ModLoaderVersionPickerViewController
 
 - (void)dealloc {
     if (_currentTask) { [_currentTask cancel]; _currentTask = nil; }
     if (_bmclTask) { [_bmclTask cancel]; _bmclTask = nil; }
+    if (_forgeFallbackTask) { [_forgeFallbackTask cancel]; _forgeFallbackTask = nil; }   // Task185
     [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
@@ -407,6 +591,9 @@
     _tableView.delegate = self;
     _tableView.rowHeight = 50;
     _tableView.estimatedRowHeight = 50;
+    // Task184：卡式 cell 不需要系统分隔线（画在透明 cell 上会横切卡面）
+    _tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
+    _tableView.separatorInset = UIEdgeInsetsZero;
     _tableView.keyboardDismissMode = UIScrollViewKeyboardDismissModeInteractive;
     _tableView.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentAutomatic;
     // extendedLayoutIncludesOpaqueBars / edgesForExtendedLayout 是 UIViewController 的属性，
@@ -470,6 +657,8 @@
 
 - (void)startLoading {
     _versions = nil;
+    _fabricQuiltShowAll = NO;   // Task185：每次重新加载重置精选开关
+    _fabricQuiltFullList = nil; // Task185：全量缓存随加载周期重置
     [_tableView reloadData];
     _emptyLabel.hidden = YES;
     _errorLabel.hidden = YES;
@@ -524,36 +713,180 @@
                     [list addObject:loaderVersion];
                 }
             }
-            [strongSelf finishLoadingWithVersions:list error:nil];
+            // Task185：列表精选（用户反馈“一点开是所有版本放在一起”）。
+            // fabric-meta 对【任意】游戏版本都返回全部 ~253 个 loader（实测
+            // 26.3 与 1.20.1 返回完全同序列表、最新在前）——loader 本就跨
+            // 游戏版本通用，API 没有也不能按版本筛。默认只展示最新 30 个
+            //（覆盖整合包常见需求），尾部追加“显示全部”开关行；点开后从
+            // 缓存展开全量（免二次请求）。N 选 30 而非 stable 过滤的原因：
+            // fabric meta 全列表仅 1 个 stable=true，单独过滤只剩 1 条。
+            strongSelf->_fabricQuiltFullList = [list copy];
+            if (list.count > 30 && !strongSelf->_fabricQuiltShowAll) {
+                NSArray *head = [list subarrayWithRange:NSMakeRange(0, 30)];
+                NSMutableArray *capped = [NSMutableArray arrayWithArray:head];
+                [capped addObject:ame185ShowAllRow((NSInteger)list.count - 30)];
+                [strongSelf finishLoadingWithVersions:capped error:nil];
+            } else {
+                [strongSelf finishLoadingWithVersions:list error:nil];
+            }
         });
     }];
     [_currentTask resume];
 }
 
-#pragma mark Forge (并发竞速，参照原 loadForgeVersionsReal)
+#pragma mark Forge (并发竞速 + 结果验证，Task185 重写)
 
 - (void)loadForgeVersions {
-    // 参照 FCL/HMCL：并发竞速同时发起官方源和 BMCL API 请求，谁先成功用谁
+    // Task185：竞速结果验证重写。病历（11e4b63 装机反馈，国内网络）：
+    // BMCL 竞速源实际返回 2022 年的陈旧 maven-metadata（最新条目
+    // 1.18-38.0.17，仅 1 条 version；官方源几百条）——旧"谁先到谁赢"
+    // 让陈旧镜像把官方结果挤掉，26.x 等新版本匹配数为 0 = "Forge 找不到"。
+    // 新规则：
+    //   1. payload 解析后【匹配当前 gameVersion 的条目 > 0】才有资格收尾；
+    //   2. 陈旧/不匹配的源标记终态，把机会留给另一源；
+    //   3. 首个 XML 源证明无匹配时，立即拉 BMCL 按版本 JSON 接口
+    //      （/forge/minecraft/<mc>，实测有 26.3 数据）作第三路兜底，
+    //      与另一个 XML 源继续竞速；
+    //   4. 三路全部无匹配 → 空列表（该版本确实没有 Forge 是合法状态，
+    //      显示"暂无版本"而非报错；全部网络错误则展示错误）。
     NSString *bmclURL = @"https://bmclapi2.bangbang93.com/maven/net/minecraftforge/forge/maven-metadata.xml";
     NSString *officialURL = @"https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml";
 
     _forgeVersionList = [NSMutableArray array];
+    _forgeParseSink = nil;
+    _forgeParseCompletion = nil;
     _isParsingForge = YES;
 
     __weak typeof(self) weakSelf = self;
-    __block BOOL settled = NO;
+    __block BOOL settled = NO;        // 已有可用结果完成收尾
+    __block BOOL bmclEnded = NO;      // BMCL XML 到达终态（usable/无匹配/错）
+    __block BOOL officialEnded = NO;  // 官方 XML 到达终态
+    __block BOOL fallbackFired = NO;  // 兜底 JSON 已在途
+    __block BOOL fallbackEnded = NO;  // 兜底 JSON 到达终态
+    __block NSError *lastError = nil; // 三路全败时的错误展示（可为 nil）
 
     NSString *userAgent = @"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
 
-    void (^processData)(NSData *) = ^(NSData *data) {
+    // 收尾：排序 + finish（主线程）
+    void (^finishWith)(NSArray *) = ^(NSArray *list) {
+        NSArray *sorted = [list sortedArrayUsingComparator:^NSComparisonResult(NSString *a, NSString *b) {
+            return [b compare:a options:NSNumericSearch];
+        }];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) return;
+            [strongSelf finishLoadingWithVersions:sorted error:nil];
+        });
+    };
+
+    // 三路全部终态且无人收尾 → 空收尾（有错展示错，无错展示"暂无版本"）
+    void (^checkAllEnded)(void) = ^{
+        BOOL shouldFinish = NO;
+        @synchronized(weakSelf) {
+            if (!settled && bmclEnded && officialEnded && (!fallbackFired || fallbackEnded)) {
+                settled = YES;
+                shouldFinish = YES;
+            }
+        }
+        if (shouldFinish) {
+            NSLog(@"[Task185] Forge: all sources ended without a match (bmcl=%d official=%d fallback=%d)",
+                  bmclEnded, officialEnded, fallbackEnded);
+            NSError *err = nil;
+            @synchronized(weakSelf) { err = lastError; }
+            dispatch_async(dispatch_get_main_queue(), ^{
+                __strong typeof(weakSelf) strongSelf = weakSelf;
+                if (!strongSelf) return;
+                [strongSelf finishLoadingWithVersions:@[] error:err];
+            });
+        }
+    };
+
+    // 单源到达终态（无匹配/失败）：按需发兜底 + 查全局终态
+    void (^sourceEnded)(BOOL) = ^(BOOL isOfficial) {
+        BOOL fireFallback = NO;
         @synchronized(weakSelf) {
             if (settled) return;
-            settled = YES;
+            if (isOfficial) officialEnded = YES; else bmclEnded = YES;
+            if (!fallbackFired) {
+                fallbackFired = YES;
+                fireFallback = YES;
+            }
         }
-        if (!data || data.length == 0) return;
-        NSXMLParser *parser = [[NSXMLParser alloc] initWithData:data];
-        parser.delegate = weakSelf;
-        [parser parse];
+        NSLog(@"[Task185] Forge XML source ended without match (official=%d) — settled=%d fallbackFired=%d",
+              isOfficial, settled, fallbackFired);
+        if (fireFallback) {
+            // 首个 XML 源证明无匹配：立即拉 BMCL 按版本 JSON（数据实测是新的），
+            // 与另一个 XML 源继续竞速——国内用户官方源可能 20s 超时，不必干等。
+            [weakSelf ame185_fetchForgeFallbackJSON:^(NSArray *list) {
+                BOOL useIt = NO;
+                @synchronized(weakSelf) {
+                    if (!settled && list.count > 0) {
+                        settled = YES;
+                        useIt = YES;
+                    } else {
+                        fallbackEnded = YES;
+                    }
+                }
+                if (useIt) {
+                    NSLog(@"[Task185] Forge: BMCL per-version JSON won with %lu entries", (unsigned long)list.count);
+                    finishWith(list);
+                } else {
+                    checkAllEnded();
+                }
+            }];
+        }
+        checkAllEnded();
+    };
+
+    // 解析 + 验证一个 payload（解析在回调线程同步执行，收尾统一切主线程）。
+    // Task185 竞态防护：旧"谁先到谁赢"里 settled 短路保证同一时刻只有一个
+    // 解析器在跑；新逻辑两路 XML 都要解析验证，而委托状态（_currentVersion-
+    // Value / _forgeParseSink / _forgeParseCompletion）是 VC 级共享——两个
+    // NSXMLParser 在不同回调线程并发解析会互相踩文本缓冲。整个"装 sink →
+    // 解析 → completion"临界区用 @synchronized(self) 串行化（objc 锁可重入，
+    // didEndElement 内无需再加）。
+    void (^processData)(NSData *, BOOL) = ^(NSData *data, BOOL isOfficial) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        @synchronized(weakSelf) { if (settled) return; }
+        if (!data || data.length == 0) { sourceEnded(isOfficial); return; }
+        @synchronized(strongSelf) {
+            NSMutableArray *sink = [NSMutableArray array];
+            __block BOOL ame185_completed = NO;   // completion 是否被 metadata 闭合消费
+            strongSelf->_forgeParseSink = sink;
+            strongSelf->_forgeParseCompletion = ^(NSArray *parsed) {
+                ame185_completed = YES;
+                BOOL useIt = NO;
+                @synchronized(weakSelf) {
+                    if (!settled && parsed.count > 0) {
+                        settled = YES;
+                        useIt = YES;
+                    }
+                }
+                if (useIt) {
+                    NSLog(@"[Task185] Forge: XML source won with %lu matches (official=%d)",
+                          (unsigned long)parsed.count, isOfficial);
+                    finishWith(parsed);
+                } else {
+                    sourceEnded(isOfficial);
+                }
+            };
+            NSXMLParser *parser = [[NSXMLParser alloc] initWithData:data];
+            parser.delegate = strongSelf;
+            [parser parse];
+            // 解析同步完成后（didEndElement:metadata 已触发 completion 并清空
+            // sink/completion），此处补一道防御性清理，防异常路径残留。
+            strongSelf->_forgeParseSink = nil;
+            strongSelf->_forgeParseCompletion = nil;
+            // Task185 防挂死：XML 截断/坏格式时 metadata 闭合标签永不到达，
+            // completion 不被消费 = 该源永不终态 → checkAllEnded 永不触发
+            //（旧代码同样暴露此形态，5s 宽限只盖网络错误）。此处补终态。
+            if (!ame185_completed) {
+                NSLog(@"[Task185] Forge XML parse incomplete, marking source ended (official=%d, parserError=%@)",
+                      isOfficial, parser.parserError.localizedDescription ?: @"nil");
+                sourceEnded(isOfficial);
+            }
+        }
     };
 
     NSMutableURLRequest *bmclRequest = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:bmclURL]];
@@ -561,10 +894,11 @@
     [bmclRequest setValue:userAgent forHTTPHeaderField:@"User-Agent"];
     _bmclTask = [[NSURLSession sharedSession] dataTaskWithRequest:bmclRequest completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         if (error || !data) {
-            @synchronized(weakSelf) { if (settled) return; }
+            @synchronized(weakSelf) { if (settled) return; lastError = error ?: lastError; }
+            sourceEnded(NO);
             return;
         }
-        processData(data);
+        processData(data, NO);
     }];
 
     NSMutableURLRequest *officialRequest = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:officialURL]];
@@ -572,26 +906,60 @@
     [officialRequest setValue:userAgent forHTTPHeaderField:@"User-Agent"];
     _currentTask = [[NSURLSession sharedSession] dataTaskWithRequest:officialRequest completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         if (error || !data) {
-            @synchronized(weakSelf) { if (settled) return; }
-            // 给 BMCLAPI 5s 宽限期
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                @synchronized(weakSelf) {
-                    if (settled) return;
-                    settled = YES;
-                }
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    __strong typeof(weakSelf) strongSelf = weakSelf;
-                    if (!strongSelf) return;
-                    [strongSelf finishLoadingWithVersions:@[] error:error];
-                });
-            });
+            @synchronized(weakSelf) { if (settled) return; lastError = error ?: lastError; }
+            sourceEnded(YES);
             return;
         }
-        processData(data);
+        processData(data, YES);
     }];
 
     [_bmclTask resume];
     [_currentTask resume];
+}
+
+/// Task185：BMCL 按版本 Forge JSON 兜底（/forge/minecraft/<mc>）。
+/// 返回纯 Forge 版本号列表（"66.0.5" 形态，与 XML 路径的 sink 口径一致）；
+/// 任何失败（404/网络/解析）都按"该版本无数据"处理，回调空数组。
+- (void)ame185_fetchForgeFallbackJSON:(void (^)(NSArray *list))completion {
+    // Task185 CI 修正：原写法 isKindOfClass:NSBlock.class——NSBlock 在 iOS SDK
+    // 不是公开声明的类（run 36317248542 实锤 "use of undeclared identifier
+    // 'NSBlock'"），仅 macOS 可用。nil 检查对本防御已足够。
+    if (!completion) return;
+    NSString *encodedMC = [_gameVersion stringByReplacingOccurrencesOfString:@"-" withString:@"_"];
+    if (encodedMC.length == 0) { completion(@[]); return; }
+    NSString *urlString = [NSString stringWithFormat:@"https://bmclapi2.bangbang93.com/forge/minecraft/%@", encodedMC];
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:urlString]];
+    req.timeoutInterval = 15.0;
+    [req setValue:@"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15" forHTTPHeaderField:@"User-Agent"];
+    __weak typeof(self) weakSelf = self;
+    _forgeFallbackTask = [[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSMutableArray *out = [NSMutableArray array];
+        if (data && !error) {
+            NSArray *tokens = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            if ([tokens isKindOfClass:NSArray.class]) {
+                for (NSDictionary *token in tokens) {
+                    if (![token isKindOfClass:NSDictionary.class]) continue;
+                    NSString *ver = token[@"version"];
+                    id branchRaw = token[@"branch"];
+                    NSString *branch = [branchRaw isKindOfClass:NSString.class] ? branchRaw : nil;
+                    if (![ver isKindOfClass:NSString.class] || ver.length == 0) continue;
+                    // 与 XML 路径口径一致：纯 Forge 版本号（可选 -branch 后缀）
+                    [out addObject:(branch.length > 0)
+                        ? [NSString stringWithFormat:@"%@-%@", ver, branch]
+                        : ver];
+                }
+            }
+        } else {
+            NSLog(@"[Task185] Forge fallback JSON failed: %@", error.localizedDescription ?: @"no data");
+        }
+        NSLog(@"[Task185] Forge fallback JSON: %lu entries for MC %@", (unsigned long)out.count, encodedMC);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            (void)strongSelf;   // completion 与 UI 解耦，仅在主线程回调
+            completion([out copy]);
+        });
+    }];
+    [_forgeFallbackTask resume];
 }
 
 #pragma mark NeoForge
@@ -696,36 +1064,44 @@
     if (!_isParsingForge) return;
     if ([elementName isEqualToString:@"version"]) {
         NSString *raw = [_currentVersionValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        if (raw.length > 0 && [_forgeVersionList indexOfObject:raw] == NSNotFound) {
-            // Forge 版本格式：<mcver>-<forgever>，例如 "1.20.1-47.2.0"
-            // 按 FCL/HMCL 做法：只保留与当前 gameVersion 匹配的版本
-            NSString *prefix = [NSString stringWithFormat:@"%@-", _gameVersion];
-            if ([raw hasPrefix:prefix]) {
-                NSString *forgeVer = [raw substringFromIndex:prefix.length];
-                if (forgeVer.length > 0 && ![_forgeVersionList containsObject:forgeVer]) {
-                    [_forgeVersionList addObject:forgeVer];
-                }
-            } else if ([raw hasPrefix:_gameVersion] && [raw isEqualToString:_gameVersion]) {
-                // 极少数情况：版本号就是 gameVersion 本身
-                if (![_forgeVersionList containsObject:raw]) {
-                    [_forgeVersionList addObject:raw];
+        if (raw.length > 0) {
+            // Forge 版本格式：<mcver>-<forgever>，例如 "1.20.1-47.2.0" / "26.3-66.0.5"
+            // Task185：过滤逻辑换共享等价匹配器（26.x 新纪元 + legacy 全兼容，
+            // 见 utils.h ame185_loaderVersionMatchesGameVersion 病历）。旧
+            // "<gameVersion>-" 前缀对 "26.3-66.0.5" 形态其实能命中，但
+            // 对跨纪元等价形态（gameVersion "1.21" vs 复合首段等）覆盖不全。
+            // 解析结果写入 Task185 竞速 sink（无 sink 时回退旧列表，双保险）。
+            NSMutableArray *sink = _forgeParseSink ?: _forgeVersionList;
+            if (ame185_loaderVersionMatchesGameVersion(raw, _gameVersion)) {
+                NSRange hyphen = [raw rangeOfString:@"-"];
+                NSString *forgeVer = (hyphen.location != NSNotFound && hyphen.location > 0)
+                    ? [raw substringFromIndex:hyphen.location + 1]
+                    : raw;
+                if (forgeVer.length > 0 && ![sink containsObject:forgeVer]) {
+                    [sink addObject:forgeVer];
                 }
             }
         }
         _currentVersionValue = nil;
     } else if ([elementName isEqualToString:@"metadata"]) {
         _isParsingForge = NO;
-        // 解析完成
-        NSArray *sorted = [_forgeVersionList sortedArrayUsingComparator:^NSComparisonResult(NSString *a, NSString *b) {
-            // 简单降序排序，让最新版本在前
-            return [b compare:a options:NSNumericSearch];
-        }];
-        // NSXMLParser 在后台线程（NSURLSession completionHandler）同步执行，
-        // finishLoadingWithVersions: 内部调用 reloadData / stopAnimating 等 UI 操作，
-        // 必须切回主线程，否则触发 AutoLayout 后台线程修改崩溃。
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [self finishLoadingWithVersions:sorted error:nil];
-        });
+        // Task185：解析完成——结果交给竞速验证回调（sink 里只有匹配当前
+        // gameVersion 的条目，count>0 才有资格收尾）；无回调时（理论不可达，
+        // 兼容田路径）保留旧排序收尾行为。
+        NSArray *parsed = [(_forgeParseSink ?: _forgeVersionList) copy];
+        void (^completion)(NSArray *) = _forgeParseCompletion;
+        _forgeParseCompletion = nil;
+        _forgeParseSink = nil;
+        if (completion) {
+            completion(parsed);
+        } else {
+            NSArray *sorted = [parsed sortedArrayUsingComparator:^NSComparisonResult(NSString *a, NSString *b) {
+                return [b compare:a options:NSNumericSearch];
+            }];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self finishLoadingWithVersions:sorted error:nil];
+            });
+        }
     }
 }
 
@@ -744,14 +1120,31 @@
     NSString *version = _versions[indexPath.row];
     BOOL isSelected = [_selectedVersion isEqualToString:version];
     [cell configureWithVersion:version isSelected:isSelected];
-    // 适配自定义启动器背景：cell 应用毛玻璃/半透明效果
-    [[BackgroundManager sharedManager] applyEffectToCell:cell];
+    // Task184：cell 视觉自洽（cardContainer init 挂凸起管线，开关开 = 规格卡
+    // 面，关 = 旧毛玻璃/平贴管线）；不再逐帧 applyEffectToCell——那会往卡片
+    // 底下再垫一层半透明底，与卡面打架。
     return cell;
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
     NSString *raw = _versions[indexPath.row];
+
+    // Task185：Fabric/Quilt“显示全部”哨兵行——从缓存展开全量（免二次网络
+    // 请求），滚回展开点附近。
+    if ([raw isKindOfClass:NSString.class] && [raw hasPrefix:ame185ShowAllSentinel()]) {
+        _fabricQuiltShowAll = YES;
+        if (_fabricQuiltFullList.count > 0) {
+            _versions = [_fabricQuiltFullList copy];
+            [_tableView reloadData];
+            NSIndexPath *path = [NSIndexPath indexPathForRow:MIN(30, (NSInteger)_versions.count - 1) inSection:0];
+            [_tableView scrollToRowAtIndexPath:path atScrollPosition:UITableViewScrollPositionTop animated:NO];
+        } else {
+            // 缓存意外丢失（理论上不可达）：重新拉取（并保留展开态）
+            [self startLoading];
+        }
+        return;
+    }
 
     // 立即更新选中状态视觉反馈
     _selectedVersion = raw;
@@ -884,9 +1277,10 @@
         _nameBar.layer.cornerRadius = 10;
         _nameBar.layer.masksToBounds = YES;
     } else {
-        _nameBar.backgroundColor = [UIColor secondarySystemGroupedBackgroundColor];
-        _nameBar.layer.cornerRadius = 10;
-        _nameBar.layer.masksToBounds = YES;
+        // Task136：无背景时与上级菜单（版本卡列表）同语言——新拟态凸出卡片
+        // （surface 底色 + 暗/亮双外阴影），圆角基准 50（引擎按高度夹断）
+        _nameBar.layer.cornerRadius = 10;  // Task137：回归原生圆角
+        [[BackgroundManager sharedManager] applyEffectToView:_nameBar];
     }
     [self.view addSubview:_nameBar];
 
@@ -938,8 +1332,9 @@
     _tableView.backgroundView = nil;
     _tableView.dataSource = self;
     _tableView.delegate = self;
-    _tableView.rowHeight = 54;
-    _tableView.estimatedRowHeight = 54;
+    // Task184：64pt 行高 = 版本卡同款（卡 56 + 上下 4pt 内缩）
+    _tableView.rowHeight = 64;
+    _tableView.estimatedRowHeight = 64;
     _tableView.keyboardDismissMode = UIScrollViewKeyboardDismissModeInteractive;
     _tableView.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentAutomatic;
     // extendedLayoutIncludesOpaqueBars / edgesForExtendedLayout 是 UIViewController 的属性，
@@ -947,6 +1342,8 @@
     self.extendedLayoutIncludesOpaqueBars = YES;
     self.edgesForExtendedLayout = UIRectEdgeAll;
     _tableView.sectionHeaderTopPadding = 0;
+    _tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
+    _tableView.separatorInset = UIEdgeInsetsZero;
     [_tableView registerClass:[ModLoaderRowCell class] forCellReuseIdentifier:@"LoaderRowCell"];
     [_tableView registerClass:[ModLoaderSwitchCell class] forCellReuseIdentifier:@"SwitchCell"];
     [self.view addSubview:_tableView];
@@ -1215,20 +1612,38 @@
 #pragma mark - TableView
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-    return 2;  // 0: 加载器列表, 1: 附加选项
+    // Task136：每个加载器一行独立 section（insetGrouped 渲染为独立圆角卡，
+    // 卡间 10pt 间距），附加选项仍为独立末节——与上级菜单（版本卡列表）的
+    // 卡片样式与间距对齐
+    return _loaders.count + ([self currentOptions].count > 0 ? 1 : 0);
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    if (section == 0) {
-        return _loaders.count;
+    if (section < (NSInteger)_loaders.count) {
+        return 1;  // Task136：每个加载器 section 仅一行卡片
     }
-    // section 1: 附加选项
+    // 附加选项 section
     return [self currentOptions].count;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
     if (section == 0) return localize(@"i18n_str_160", nil);
-    return [self currentOptions].count > 0 ? localize(@"i18n_str_2048", nil) : nil;
+    if (section == (NSInteger)_loaders.count && [self currentOptions].count > 0) {
+        return localize(@"i18n_str_2048", nil);
+    }
+    return nil;
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
+    // Task136：带标题的 section（首节/附加选项节）自动高度；
+    // 其余加载器卡间 section 头高 10pt = 卡片间距
+    if (section == 0) return UITableViewAutomaticDimension;
+    if (section < (NSInteger)_loaders.count) return 10;
+    return UITableViewAutomaticDimension;
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForFooterInSection:(NSInteger)section {
+    return 0.01;
 }
 
 - (NSMutableArray *)currentOptions {
@@ -1243,9 +1658,9 @@
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    if (indexPath.section == 0) {
+    if (indexPath.section < (NSInteger)_loaders.count) {
         ModLoaderRowCell *cell = [tableView dequeueReusableCellWithIdentifier:@"LoaderRowCell" forIndexPath:indexPath];
-        ModLoaderRow *row = _loaders[indexPath.row];
+        ModLoaderRow *row = _loaders[indexPath.section];
 
         BOOL isSelected = [_selectedLoaderId isEqualToString:row.identifier];
 
@@ -1279,11 +1694,13 @@
           selectedVersionDisplay:versionDisplay
                     incompatible:incompatible
                          reason:reason];
-        // 适配自定义启动器背景：cell 应用毛玻璃/半透明效果
-        [[BackgroundManager sharedManager] applyEffectToCell:cell];
+        // Task184：cell 视觉自洽——cardContainer 已在 init 挂凸起管线
+        //（兼顾新拟态开关），系统 inset-grouped 白底/选中高亮已在 cell 内
+        // 清除（"钉死的底层白框"根修）；出列零重铺，与 VersionCardCell
+        // 的单次挂载范式一致。
         return cell;
     } else {
-        // section 1: 附加选项（Fabric API / OptiFine 共存开关）
+        // 附加选项 section（Task136：末节，Fabric API / OptiFine 共存开关）
         ModLoaderSwitchCell *cell = [tableView dequeueReusableCellWithIdentifier:@"SwitchCell" forIndexPath:indexPath];
         NSMutableArray *opts = [self currentOptions];
         NSDictionary *opt = opts[indexPath.row];
@@ -1307,8 +1724,7 @@
         }
         [cell.switchControl removeTarget:nil action:NULL forControlEvents:UIControlEventAllEvents];
         [cell.switchControl addTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
-        // 适配自定义启动器背景：cell 应用毛玻璃/半透明效果
-        [[BackgroundManager sharedManager] applyEffectToCell:cell];
+        // Task184：同上，开关行视觉自洽（cardContainer init 挂管线 + 系统白底已清）
         return cell;
     }
 }
@@ -1320,15 +1736,15 @@
         _installOptiFine = sender.on;
     }
     [self refreshVersionName];
-    // 重新加载 section 0 让行选中状态和互斥状态同步刷新
-    [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:0] withRowAnimation:UITableViewRowAnimationNone];
+    // Task136：逐节卡片布局下选中状态分布在不同 section，整体重载同步
+    [self.tableView reloadData];
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    if (indexPath.section != 0) return;
+    if (indexPath.section >= (NSInteger)_loaders.count) return;
 
-    ModLoaderRow *row = _loaders[indexPath.row];
+    ModLoaderRow *row = _loaders[indexPath.section];
     if (!row.compatible) return;
 
     NSString *reason = [self incompatibleReasonForLoaderId:row.identifier];
