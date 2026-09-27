@@ -315,6 +315,36 @@ def patch_format_to_compat(root: Path) -> None:
         print("patch_sfpew_ios: verified -- no std::format left in tree")
 
 
+def patch_backend_es_detect(root: Path) -> None:
+    """统一 backend 的 “OpenGL ES” 判定（两处 strstr 写法不一致）。
+
+    sfpewDesktopGLVersion() 用带尾随空格的 strstr(raw, "OpenGL ES ")，
+    而 detect_backend_target() 用不带空格的 strstr(version, "OpenGL ES")。
+
+    MobileGL-gles 的自述串是 "4.6.0 MobileGL 26.09-dev, Direct (OpenGL ES) Backend"：
+    "OpenGL ES" 后面跟的是 ')' 而非空格，于是带空格版本不匹配（判非 ES，
+    glGetString 走“后端串在前”分支，把含 "OpenGL ES)" 的原串原样拼出去），
+    不带空格版本却匹配（判 ES）。同一个后端在两个函数里结论相反，shader
+    target 因此被判成 ESSL，desktop GLSL 的光影包被送去走 ESSL 转译路径。
+
+    统一为带空格的写法（与 sfpewDesktopGLVersion 一致）：真正的
+    "OpenGL ES 3.2 ..." 依然命中，而 "(OpenGL ES)" 这类描述性后缀不再误判。
+    """
+    translator = root / "SimpleFPEWrapper" / "shader" / "translator.cpp"
+    if not translator.is_file():
+        fail(f"missing {translator}")
+    t = translator.read_text(encoding="utf-8")
+    if 'std::strstr(version, "OpenGL ES ")' in t:
+        print("patch_sfpew_ios: backend ES detect: already patched -- skip")
+        return
+    replace_once(
+        translator,
+        'if (version != nullptr && std::strstr(version, "OpenGL ES") != nullptr) {',
+        'if (version != nullptr && std::strstr(version, "OpenGL ES ") != nullptr) {',
+        "backend ES detect (align with sfpewDesktopGLVersion)",
+    )
+
+
 def main() -> None:
     if len(sys.argv) != 2:
         fail(f"usage: {sys.argv[0]} <SimpleFPEWrapper source dir>")
@@ -325,6 +355,7 @@ def main() -> None:
     patch_types_h(root)
     patch_float_call_site(root)
     patch_format_to_compat(root)
+    patch_backend_es_detect(root)
 
 
 if __name__ == "__main__":
