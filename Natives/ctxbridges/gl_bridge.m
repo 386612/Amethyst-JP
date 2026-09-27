@@ -1226,6 +1226,95 @@ static PFNEGLDESTROYCONTEXTPROC    ame_raw_destroy_context = NULL;
 static PFNEGLDESTROYSURFACEPROC    ame_raw_destroy_surface = NULL;
 static PFNEGLSWAPINTERVALPROC      ame_raw_swap_interval = NULL;   // Task 76 双保险
 
+// ============================================================================
+// [sfpew-egl-route] SFPEW 叠加时的 EGL 解析路由（可 A/B）
+//
+// 符号表事实（vendored SimpleFPEWrapper 全目录核对，不会说谎）：
+//   SFPEW 只导出 7 个 EGL 符号 —— eglGetProcAddress / eglCreateContext /
+//   eglDestroyContext / eglMakeCurrent / eglSwapBuffers /
+//   eglSwapBuffersWithDamageEXT / eglSwapBuffersWithDamageKHR。
+//   eglGetDisplay / eglInitialize / eglChooseConfig / eglBindAPI /
+//   eglCreateWindowSurface 一律不导出。
+//
+// 因此宿主有两种接法，且只有一种成立：
+//   (a) dlsym(SFPEW) 取全部 EGL      -> infra 全部 NULL，必然崩（19ef078d 之前）
+//   (b) dlsym(真后端) 取全部 EGL      -> SFPEW 的 lifecycle 一次都不被调用，
+//       sfpewRegisterContextDispatch / sfpewNoteDispatchCurrentContext 从不登记，
+//       dispatch registry 恒空 -> "No context is current"（19ef078d，当前默认）
+//   (c) 用 SFPEW 的 eglGetProcAddress 解析全部 EGL —— 安卓/FCL 实测模型。
+//       lookup.cpp 里它自动分流：create/destroy/makeCurrent/swap 返回 SFPEW
+//       包装版，其余名字转发后端 g_eglFuncs.eglGetProcAddress。
+//       FCL 三份实测日志（SFPEW+MG、SFPEW+MobileGL 1.7.10 与 1.12.2）
+//       POJAVEXEC_EGL=libSimpleFPEWrapper.so 正是这条路径，两个组合都正常。
+//
+// (c) 需要 SFPEW 先 dlopen 后端（SFPEW_EGL，JavaLauncher 已设置）成功。
+// 默认关闭（保持现状），设 AMETHYST_SFPEW_EGL_ROUTE=1 启用，无需重新构建。
+// ============================================================================
+static BOOL ame_sfpew_egl_route_active = NO;
+
+static BOOL ameSFPEWEglRouteWanted(void) {
+    const char *v = getenv("AMETHYST_SFPEW_EGL_ROUTE");
+    return (v != NULL && strcmp(v, "1") == 0);
+}
+
+static BOOL ameSFPEWResolveEGL(void) {
+    void *sfpew = dlopen("@rpath/libSimpleFPEWrapper.dylib", RTLD_NOW | RTLD_GLOBAL);
+    if (!sfpew) sfpew = dlopen("libSimpleFPEWrapper.dylib", RTLD_NOW | RTLD_GLOBAL);
+    if (!sfpew) {
+        NSLog(@"[SFPEW-EGL] dlopen libSimpleFPEWrapper.dylib failed: %s", dlerror() ?: "unknown");
+        return NO;
+    }
+    void *raw = dlsym(sfpew, "eglGetProcAddress");
+    if (!raw) {
+        NSLog(@"[SFPEW-EGL] eglGetProcAddress not exported by SFPEW");
+        return NO;
+    }
+    void *(*gpa)(const char *) = NULL;
+    // void* -> 函数指针：经由 union 避免 ISO C 的客体/函数指针混用告警
+    union { void *obj; void *(*fn)(const char *); } cast;
+    cast.obj = raw;
+    gpa = cast.fn;
+
+#define AME_SFPEW_EGL(field, name)                                                  \
+    do {                                                                            \
+        void *fn = gpa(name);                                                       \
+        if (fn != NULL) { handle.field = (__typeof__(handle.field))fn; }            \
+        else NSLog(@"[SFPEW-EGL] " name " unresolved via eglGetProcAddress");        \
+    } while (0)
+
+    AME_SFPEW_EGL(eglBindAPI,             "eglBindAPI");
+    AME_SFPEW_EGL(eglChooseConfig,        "eglChooseConfig");
+    AME_SFPEW_EGL(eglCreateContext,       "eglCreateContext");
+    AME_SFPEW_EGL(eglCreateWindowSurface, "eglCreateWindowSurface");
+    AME_SFPEW_EGL(eglDestroyContext,      "eglDestroyContext");
+    AME_SFPEW_EGL(eglDestroySurface,      "eglDestroySurface");
+    AME_SFPEW_EGL(eglGetConfigAttrib,     "eglGetConfigAttrib");
+    AME_SFPEW_EGL(eglGetCurrentContext,   "eglGetCurrentContext");
+    AME_SFPEW_EGL(eglGetCurrentSurface,   "eglGetCurrentSurface");
+    AME_SFPEW_EGL(eglGetDisplay,          "eglGetDisplay");
+    AME_SFPEW_EGL(eglGetError,            "eglGetError");
+    AME_SFPEW_EGL(eglGetPlatformDisplay,  "eglGetPlatformDisplay");
+    AME_SFPEW_EGL(eglInitialize,          "eglInitialize");
+    AME_SFPEW_EGL(eglMakeCurrent,         "eglMakeCurrent");
+    AME_SFPEW_EGL(eglReleaseThread,       "eglReleaseThread");
+    AME_SFPEW_EGL(eglSwapBuffers,         "eglSwapBuffers");
+    AME_SFPEW_EGL(eglSwapInterval,        "eglSwapInterval");
+    AME_SFPEW_EGL(eglTerminate,           "eglTerminate");
+#undef AME_SFPEW_EGL
+
+    BOOL ok = handle.eglBindAPI && handle.eglChooseConfig && handle.eglCreateContext &&
+        handle.eglCreateWindowSurface && handle.eglDestroyContext && handle.eglDestroySurface &&
+        handle.eglGetConfigAttrib && handle.eglGetDisplay && handle.eglGetError &&
+        handle.eglInitialize && handle.eglMakeCurrent && handle.eglSwapBuffers &&
+        handle.eglReleaseThread && handle.eglSwapInterval && handle.eglTerminate;
+    NSLog(@"[SFPEW-EGL] resolve %@ (createCtx=%p, makeCurrent=%p, getDisplay=%p)",
+          ok ? @"OK" : @"INCOMPLETE",
+          (void *)(uintptr_t)handle.eglCreateContext,
+          (void *)(uintptr_t)handle.eglMakeCurrent,
+          (void *)(uintptr_t)handle.eglGetDisplay);
+    return ok;
+}
+
 static bool dlsym_EGL() {
     // EGL 符号来源：
     //   - Mithril / MobileGL：自带完整 EGL 实现，必须从自身 dylib 解析。
@@ -1352,6 +1441,20 @@ static bool dlsym_EGL() {
     // SFPEW + MobileGlues / SFPEW + MobileGL-GLES 双双崩溃的成因。
 
     memset(&handle, 0, sizeof(handle));
+
+    // [sfpew-egl-route] A/B：AMETHYST_SFPEW_EGL_ROUTE=1 时改走 (c) —— EGL 全部经
+    // SFPEW 的 eglGetProcAddress 解析（安卓/FCL 实测模型）。失败则回落到下方
+    // 真后端 dlsym 路径，不改变默认行为。
+    if (isSFPEWRenderer(renderer) && ameSFPEWEglRouteWanted()) {
+        if (ameSFPEWResolveEGL()) {
+            ame_sfpew_egl_route_active = YES;
+            NSLog(@"[SFPEW-EGL] route ACTIVE -- lifecycle+infra both resolved through SFPEW "
+                  @"(SFPEW forwards infra to backend via SFPEW_EGL)");
+            return true;
+        }
+        NSLog(@"[SFPEW-EGL] route requested but resolution incomplete -- falling back to backend dlsym");
+    }
+
     handle.eglBindAPI = load_egl_symbol(dl_handle, "eglBindAPI");
     handle.eglChooseConfig = load_egl_symbol(dl_handle, "eglChooseConfig");
     if (useLTW && ltw_handle) {
@@ -1451,6 +1554,17 @@ static BOOL ame_mgBootstrap(EGLDisplay dpy, EGLConfig config) {
     // 解析 —— context 从头到尾都是 MG 的，SFPEW 只承担 GL 转发（renderLibrary），
     // 其 EGL 导出一次都不会被调用。iOS 侧等价物 = 与非叠加 mobileglues 完全
     // 相同的 AME_MG_SWAP 路径。
+
+    // [sfpew-egl-route] 路由激活时生命周期已在 SFPEW 上：SFPEW 的
+    // sfpewEglCreateContext 会转发到后端（MG）的 eglCreateContext，MGContext
+    // 由 MG 自己建立。此处若再 AME_MG_SWAP 覆盖，SFPEW 会被整个摘出 EGL 链，
+    // 回到 (b) 的 registry 恒空状态。bootstrap 的 mg_init_gles 已完成，保留。
+    if (ame_sfpew_egl_route_active) {
+        ame_mgFrontendActive = YES;
+        NSLog(@"[MG-Bridge] bootstrap done; SFPEW EGL route active -- lifecycle stays on SFPEW "
+              @"(backend reached via SFPEW_EGL, MGContext built by MG itself)");
+        return YES;
+    }
 
     void *fn = NULL;
     #define AME_MG_SWAP(field, name)                                                  \
