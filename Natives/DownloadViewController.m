@@ -11,15 +11,16 @@
 #import "installer/modpack/ModrinthAPI.h"
 #import "installer/modpack/CurseForgeAPI.h"
 #import "PLPreferences.h"
+#import "PLMirrorCenter.h"
 #import "ModService.h"
 #import "ShaderService.h"
+#import "UIKit+NativeSurface.h"
 #import "ResourcePackService.h"
 #import "DataPackService.h"
 #import "PLProfiles.h"
 #import "LauncherPreferences.h"
 #import "VersionCardCell.h"
 #import "MinecraftResourceDownloadTask.h"
-#import "MinecraftResourceUtils.h"
 #import "ModItem.h"
 #import "ModVersionViewController.h"
 #import "ModVersion.h"
@@ -95,16 +96,12 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
         self.contentView.backgroundColor = [UIColor clearColor];
         self.assetType = ModernAssetTypeMod;
 
-        // FCL view_installer_item.xml 风格：扁平条目，无卡片容器、无阴影、无边框
-        // 仅依赖 BackgroundManager.applyEffectToView: 提供毛玻璃/半透明背景
+        // FCL view_installer_item.xml 风格：扁平条目（Task137：原生卡片表面，
+        // 无自绘阴影；圆角回摑 Task136 之前的 8pt）
         // 行间分隔通过 rowHeight 内的上下 padding 实现（参照 FCL marginBottom 10dp）
         self.contentContainer = [[UIView alloc] init];
         self.contentContainer.translatesAutoresizingMaskIntoConstraints = NO;
-        // FCL bg_container_white_clickable 的等效：浅色半透明背景 + 圆角
-        self.contentContainer.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.06];
-        self.contentContainer.layer.cornerRadius = 8;
-        self.contentContainer.layer.cornerCurve = kCACornerCurveContinuous;
-        // 移除阴影/边框（FCL 扁平风格不需要）
+        [self.contentContainer ame_applyCardSurfaceWithRadius:8];
         [self.contentView addSubview:self.contentContainer];
 
         // ----- 左侧图标：26x26（FCL 标准 30dp，紧凑模式略小）-----
@@ -113,7 +110,8 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
         self.iconView.layer.cornerRadius = 5;
         self.iconView.layer.cornerCurve = kCACornerCurveContinuous;
         self.iconView.clipsToBounds = YES;
-        self.iconView.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.06];
+        // Task137：原生气泡占位底色（图标需要裁剪， tertiarySystemFillColor 随深浅色适配）
+        self.iconView.backgroundColor = [UIColor tertiarySystemFillColor];
         self.iconView.contentMode = UIViewContentModeScaleAspectFit;
         self.iconView.tintColor = [UIColor systemOrangeColor];
         [self.contentContainer addSubview:self.iconView];
@@ -823,9 +821,12 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
                           ?: [UIImage systemImageNamed:@"tray.and.arrow.down"];
     [self.importModpackButton setImage:importIcon forState:UIControlStateNormal];
     [self.importModpackButton setTitle:localize(@"i18n_str_156", nil) forState:UIControlStateNormal];
+    // Task137：恢复 Task89 之前的原生主按钮（系统紫底白字）
     self.importModpackButton.tintColor = [UIColor whiteColor];
     self.importModpackButton.backgroundColor = [UIColor systemPurpleColor];
     self.importModpackButton.layer.cornerRadius = 10;
+    self.importModpackButton.layer.masksToBounds = YES;
+    [self.importModpackButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     self.importModpackButton.titleLabel.font = [UIFont boldSystemFontOfSize:14];
     self.importModpackButton.contentEdgeInsets = UIEdgeInsetsMake(0, 10, 0, 10);
     self.importModpackButton.imageEdgeInsets = UIEdgeInsetsMake(0, -4, 0, 4);
@@ -1341,8 +1342,10 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
     self.sidebarResetButton.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     [self.sidebarResetButton setImage:[UIImage systemImageNamed:@"arrow.counterclockwise"] forState:UIControlStateNormal];
     self.sidebarResetButton.tintColor = [UIColor systemRedColor];
+    // Task137：恢复 Task89 之前的原生样式（tertiarySystemFill 底，标题随 tint 呈红色）
     self.sidebarResetButton.backgroundColor = [UIColor tertiarySystemFillColor];
     self.sidebarResetButton.layer.cornerRadius = 8;
+    self.sidebarResetButton.layer.masksToBounds = YES;
     self.sidebarResetButton.imageEdgeInsets = UIEdgeInsetsMake(0, -2, 0, 2);
     self.sidebarResetButton.titleEdgeInsets = UIEdgeInsetsMake(0, 2, 0, -2);
     [self.sidebarResetButton addTarget:self action:@selector(sidebarResetButtonClicked:) forControlEvents:UIControlEventTouchUpInside];
@@ -1376,8 +1379,10 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
                                          selector:(SEL)selector {
     UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
     button.translatesAutoresizingMaskIntoConstraints = NO;
+    // Task137：恢复 Task89 之前的原生选择按钮（tertiarySystemFill 底 + 8pt 圆角）
     button.backgroundColor = [UIColor tertiarySystemFillColor];
     button.layer.cornerRadius = 8;
+    button.layer.masksToBounds = YES;
     [button addTarget:self action:selector forControlEvents:UIControlEventTouchUpInside];
     button.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
     button.contentEdgeInsets = UIEdgeInsetsMake(0, 12, 0, 12);
@@ -1675,8 +1680,11 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
     NSString *currentSource = [PLPreferences currentDownloadSourceForType:type];
     if ([currentSource isEqualToString:@"curseforge"]) return;
 
-    // API Key 未配置时在内容区显示提示（替代弹窗）
-    if (![CurseForgeAPI isAPIKeyConfigured]) {
+    // Task162：CurseForge 源免 key 可用（无 key 时 baseURL 强制落 MCIM 镜像，
+    // 实测 200）。旧门控拦无 key 用户去设置页配 key（注册 CF 开发者 key 对
+    // 普通用户几乎不可行 = 装机实测“完全无法使用”）；API key 入口保留，
+    // 配了 key 的设备按镜像策略可走官方直连。
+    if (![CurseForgeAPI isSourceAvailable]) {
         InlineMessageView *msgView = [InlineMessageView showInViewController:self
                                                                        title:localize(@"i18n_str_171", nil)
                                                                     message:localize(@"i18n_str_172", nil)
@@ -1713,8 +1721,8 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
     NSString *currentSource = [PLPreferences currentDownloadSourceForType:type];
     if ([currentSource isEqualToString:@"curseforge"]) return;
 
-    // API Key 未配置时提示
-    if (![CurseForgeAPI isAPIKeyConfigured]) {
+    // Task162：同 curseforgeSourceButtonClicked——免 key 可用（MCIM 镜像回落）。
+    if (![CurseForgeAPI isSourceAvailable]) {
         InlineMessageView *msgView = [InlineMessageView showInViewController:self
                                                                        title:localize(@"i18n_str_171", nil)
                                                                     message:localize(@"i18n_str_172", nil)
@@ -1821,40 +1829,61 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
 - (void)loadVersionList {
     [self.loadingIndicator startAnimating];
     
-    NSString *downloadSource = getPrefObject(@"general.download_source");
-    NSString *versionManifestURL;
-    
-    if ([downloadSource isEqualToString:@"bmclapi"]) {
-        versionManifestURL = @"https://bmclapi2.bangbang93.com/mc/game/version_manifest_v2.json";
-    } else {
-        versionManifestURL = @"https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
+    // Task173：版本清单镜像候选链。旧实现只认 general.download_source == bmclapi
+    // 才走镜像，其余设备直连 piston-meta——国内网络下加载失败，版本筛选弹窗
+    // 只剩硬编码兜底列表（用户实测“筛选的游戏版本到 1.21.1 和 1.16.5 就
+    // 没有了”）。现在按 PLMirrorCenter 的 GameFile 策略生成候选（官方 +
+    // bmclapi 镜像），逐个尝试直到成功。
+    NSURL *officialURL = [NSURL URLWithString:@"https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"];
+    NSArray<NSURL *> *ame173_candidates = [PLMirrorCenter candidateURLsForOriginalURL:officialURL
+                                                                      resourceType:PLMirrorResourceTypeGameFile];
+    if (ame173_candidates.count == 0) {
+        ame173_candidates = @[officialURL];
     }
+    NSLog(@"[DownloadVC] Task173 version manifest candidates: %lu", (unsigned long)ame173_candidates.count);
     
-    NSURL *url = [NSURL URLWithString:versionManifestURL];
     __weak typeof(self) weakSelf = self;
-    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            __strong typeof(weakSelf) strongSelf = weakSelf;
-            if (!strongSelf) return;
-            [strongSelf.loadingIndicator stopAnimating];
-            
-            if (data && !error) {
-                NSError *jsonError;
-                NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
-                if (json && !jsonError) {
-                    strongSelf.versionList = json[@"versions"];
-                    [strongSelf applyVersionFilter];
-                } else {
-                    strongSelf.emptyLabel.text = localize(@"i18n_str_176", nil);
-                    strongSelf.emptyLabel.hidden = NO;
+    __block NSMutableArray<NSURL *> *ame173_remaining = [ame173_candidates mutableCopy];
+    __block void (^ame173_tryNext)(void) = ^{ };
+    ame173_tryNext = ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        if (ame173_remaining.count == 0) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                __strong typeof(weakSelf) strongSelf2 = weakSelf;
+                if (!strongSelf2) return;
+                [strongSelf2.loadingIndicator stopAnimating];
+                strongSelf2.emptyLabel.text = localize(@"i18n_str_177", nil);
+                strongSelf2.emptyLabel.hidden = NO;
+            });
+            return;
+        }
+        NSURL *url = ame173_remaining.firstObject;
+        [ame173_remaining removeObjectAtIndex:0];
+        NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                __strong typeof(weakSelf) strongSelf3 = weakSelf;
+                if (!strongSelf3) return;
+                if (data && !error) {
+                    NSError *jsonError;
+                    NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
+                    if (json && !jsonError && [json[@"versions"] isKindOfClass:NSArray.class]) {
+                        [strongSelf3.loadingIndicator stopAnimating];
+                        strongSelf3.versionList = json[@"versions"];
+                        [strongSelf3 applyVersionFilter];
+                        NSLog(@"[DownloadVC] Task173 version manifest loaded from %@ (%lu versions)",
+                              url.host, (unsigned long)[json[@"versions"] count]);
+                        return;
+                    }
                 }
-            } else {
-                strongSelf.emptyLabel.text = localize(@"i18n_str_177", nil);
-                strongSelf.emptyLabel.hidden = NO;
-            }
-        });
-    }];
-    [task resume];
+                NSLog(@"[DownloadVC] Task173 manifest fetch failed on %@ (%@) -- trying next candidate",
+                      url.host, error.localizedDescription ?: @"non-JSON");
+                ame173_tryNext();
+            });
+        }];
+        [task resume];
+    };
+    ame173_tryNext();
 }
 
 - (void)versionFilterChanged:(UISegmentedControl *)sender {
@@ -2104,6 +2133,18 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
     if (self.currentGameVersion.length > 0) {
         filters[@"version"] = self.currentGameVersion;
     }
+    // Task175：整合包列表补排序 + 加载器筛选（用户实测"CF 不会依据筛选排序"）。
+    // 侧栏的排序/加载器筛选是全 tab 共用状态，但本方法从未把它们放进
+    // filters——模组 tab（loadModList）一直带、整合包 tab 一直丢，CF 与
+    // Modrinth 两源都受害（镜像实测两者都支持这些参数：CF 走 Task173 的
+    // ame173_applySortAndLoaderParams 映射，Modrinth 走 index + categories
+    // facet）。零新增 l10n/UI，纯参数透传。
+    if (self.currentSortField.length > 0) {
+        filters[@"sort"] = self.currentSortField;
+    }
+    if (self.currentModLoader.length > 0) {
+        filters[@"loader"] = self.currentModLoader;
+    }
     
     __weak typeof(self) weakSelf = self;
     id api = [self currentAPIForTabType:@"modpack"];
@@ -2177,7 +2218,14 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
 
     __weak typeof(self) weakSelf = self;
     id api = [self currentAPIForTabType:@"resourcepack"];
+    // Task176：资源包 tab 取证（用户实测"CF 资源打开无任何资源"，但装机
+    // 日志里 classId=12 的请求一次都没出现过——请求根本没发出，还是发出
+    // 了没回调，日志无从分辨）。入口一行 + 结果一行，下轮日志直接钉死。
+    NSLog(@"[DLForensics] Task176 resourcepack load: api=%@ source=%@ filters=%@",
+          NSStringFromClass([api class]), [PLPreferences currentDownloadSourceForType:@"resourcepack"], filters);
     [api searchModWithFilters:filters completion:^(NSArray * _Nullable results, NSError * _Nullable error) {
+        NSLog(@"[DLForensics] Task176 resourcepack result: %lu items, error=%@",
+              (unsigned long)results.count, error.localizedDescription);
         dispatch_async(dispatch_get_main_queue(), ^{
             __strong typeof(weakSelf) strongSelf = weakSelf;
             if (!strongSelf) return;
@@ -2303,8 +2351,9 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
         [self.loadingIndicator startAnimating];
     }
 
-    // 世界 tab 强制 CurseForge，但需 API Key（与实际请求一致的三层 fallback 判断）；缺失时给出明确入口提示
-    if (![CurseForgeAPI isAPIKeyConfigured]) {
+    // 世界 tab 强制 CurseForge。Task162：免 key 可用（无 key 时 baseURL 强制落
+    // MCIM 镜像，实测 200），空态拦截退役——key 仅官方直连需要。
+    if (![CurseForgeAPI isSourceAvailable]) {
         [self.loadingIndicator stopAnimating];
         [self.worldTableView.refreshControl endRefreshing];
         self.isLoadingWorlds = NO;
@@ -2451,6 +2500,16 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
     [self presentViewController:alert animated:YES completion:nil];
 }
 
+/// Task179：versions 列表里是否已收录 “1.<minor>.” 开头的条目（旧次版本
+/// 最末 patch 去重用——清单 newest-first，每个 minor 的最新 patch 最先到）。
+- (BOOL)ame179_versionsContainMinor:(NSMutableArray<NSString *> *)versions minor:(NSInteger)minor {
+    NSString *ame179_prefix = [NSString stringWithFormat:@"1.%ld.", (long)minor];
+    for (NSString *v in versions) {
+        if ([v hasPrefix:ame179_prefix]) return YES;
+    }
+    return NO;
+}
+
 - (void)showGameVersionPicker {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:localize(@"i18n_str_188", nil)
                                                                    message:nil
@@ -2459,6 +2518,16 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
     // 动态构建版本列表：优先使用已加载的 Mojang version_manifest 中的 release 版本，
     // 这样能自动跟随 MC 版本更新（不再使用硬编码列表）。
     // 同时把当前 profile 的 MC 版本置顶（如果有）方便快速选择。
+    // Task173（版本补全）+ Task179（低版本扩容，用户实测“筛选版本能不能
+    // 再加多点低版本”）：
+    //   1. 接受一切纯数字开头的 release id（26.x 与 1.x 通吃）；
+    //   2. 下限从 1.8 放宽到 1.7（1.7.10 是经典 mod 时代，CF 上有数千个
+    //      1.7.10 mod/整合包资源）；
+    //   3. 全量列出 26.x 与 1.16+ 的每个 patch；1.15 及更早的旧次版本只保留
+    //      【每个 minor 的最末 patch】（1.15.2/1.14.4/1.13.2/1.12.2/1.11.2/
+    //      1.10.2/1.9.4/1.8.9/1.7.10——玩家实际筛选的经典版本），列表总量
+    //      可控（~80 条，actionSheet 可滚动）且不再把低版本截掉。
+    // 兜底列表同步扩展到 1.7.10。
     NSMutableArray<NSString *> *versions = [NSMutableArray arrayWithObject:localize(@"i18n_str_2032", nil)];
 
     // 当前 profile 的 MC 版本（若有）放第二位，便于快速选择
@@ -2469,29 +2538,60 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
 
     // 从 Mojang version_manifest 提取 release 版本
     if (self.versionList && [self.versionList isKindOfClass:[NSArray class]]) {
+        NSCharacterSet *ame173_digits = [NSCharacterSet decimalDigitCharacterSet];
         for (NSDictionary *version in self.versionList) {
             NSString *type = version[@"type"];
             if (![type isEqualToString:@"release"]) continue;
             NSString *versionId = version[@"id"];
             if (![versionId isKindOfClass:[NSString class]] || versionId.length == 0) continue;
-            // 跳过过于旧的版本（1.8 之前的版本 mod 支持极少）
-            if ([versionId hasPrefix:@"1."] == NO) continue;
-            // 跳过已经在列表中的（避免 profileMcVersion 重复）
+            // Task179：数字开头的 release 全收（26.x / 1.x），非数字的跳过；
+            // 下限 1.7；1.15 及更早只收每个 minor 的最末 patch（首个遇到的
+            // ——清单 newest-first，同一 minor 的最新 patch 排最前）。
+            unichar ame173_first = [versionId characterAtIndex:0];
+            if (![ame173_digits characterIsMember:ame173_first]) continue;
             if ([versions containsObject:versionId]) continue;
+            if ([versionId hasPrefix:@"1."]) {
+                NSArray *ame179_parts = [versionId componentsSeparatedByString:@"."];
+                NSInteger ame179_minor = (ame179_parts.count > 1) ? [ame179_parts[1] integerValue] : 0;
+                if (ame179_minor < 7) continue;
+                if (ame179_minor <= 15) {
+                    // 旧次版本：只保留该 minor 的最末 patch（本 minor 已收过即跳过）
+                    NSString *ame179_minorKey = [NSString stringWithFormat:@"1.%ld", (long)ame179_minor];
+                    if ([versions containsObject:ame179_minorKey] ||
+                        [self ame179_versionsContainMinor:versions minor:ame179_minor]) continue;
+                    [versions addObject:versionId];
+                    continue;
+                }
+            }
             [versions addObject:versionId];
         }
     }
 
-    // 若 versionList 还未加载或为空，使用基础 fallback（保证 picker 至少能弹出）
-    if (versions.count <= 1) {
-        [versions addObjectsFromArray:@[@"1.21", @"1.20.1", @"1.19.2", @"1.18.2", @"1.16.5"]];
+    // 若 versionList 还未加载或为空，使用基础 fallback（保证 picker 至少能弹出）。
+    // Task179：兜底列表补 1.7.10，旧次版本按“最末 patch”收录。
+    if (versions.count <= 2) {
+        [versions addObjectsFromArray:@[
+            @"26.3", @"26.2", @"26.1",
+            @"1.21.11", @"1.21.10", @"1.21.9", @"1.21.8", @"1.21.7", @"1.21.6", @"1.21.5", @"1.21.4", @"1.21.3", @"1.21.2", @"1.21.1", @"1.21",
+            @"1.20.6", @"1.20.5", @"1.20.4", @"1.20.3", @"1.20.2", @"1.20.1", @"1.20",
+            @"1.19.4", @"1.19.3", @"1.19.2", @"1.19.1", @"1.19",
+            @"1.18.2", @"1.18.1", @"1.18",
+            @"1.17.1", @"1.17",
+            @"1.16.5", @"1.16.4", @"1.16.3", @"1.16.2", @"1.16.1", @"1.16",
+            @"1.15.2",
+            @"1.14.4",
+            @"1.13.2",
+            @"1.12.2",
+            @"1.11.2",
+            @"1.10.2",
+            @"1.9.4",
+            @"1.8.9",
+            @"1.7.10"
+        ]];
     }
 
-    // 限制列表长度避免 alert 过长（保留最近 30 个版本 + 全部 + profile 版本）
-    if (versions.count > 32) {
-        NSArray *tail = [versions subarrayWithRange:NSMakeRange(0, 32)];
-        versions = [NSMutableArray arrayWithArray:tail];
-    }
+    // Task179：64 条封顶退役——列表构造本身就受控（新版本全量 + 旧次版本
+    // 最末 patch ≈ 80 条），全量展示，actionSheet 可滚动。
 
     for (NSString *version in versions) {
         [alert addAction:[UIAlertAction actionWithTitle:version
@@ -2560,10 +2660,21 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
         self.currentGameVersion = profileMcVersion;
         changed = YES;
     }
-    // 加载器仅对模组 tab 自动应用（其他 tab 如光影/资源包不一定有加载器概念）
-    // 但 Modrinth 的 facets 中 categories 对所有 project_type 都生效，所以统一应用
-    if (profileLoader.length > 0 && ![self.currentModLoader isEqualToString:profileLoader]) {
+    // Task179：加载器只对模组/整合包 tab 自动应用。
+    // 旧注释"Modrinth 的 categories 对所有 project_type 都生效"是错的——
+    // 对 resourcepack 挂 categories:fabric 实测 35467 -> 15 个结果；CF 侧
+    // classId=12&modLoaderType=4 直接零结果。资源包/光影/数据包/世界没有
+    // 加载器概念，预选加载器只会污染侧边栏状态与后续请求（Task179 请求层
+    // 已统一拦截，这里同步把"错误的预选"也拿掉——侧边栏显示"全部"）。
+    BOOL ame179_loaderAwareTab = (self.tabSegment.selectedSegmentIndex == 1 ||
+                                  self.tabSegment.selectedSegmentIndex == 5);
+    if (ame179_loaderAwareTab &&
+        profileLoader.length > 0 && ![self.currentModLoader isEqualToString:profileLoader]) {
         self.currentModLoader = profileLoader;
+        changed = YES;
+    } else if (!ame179_loaderAwareTab && self.currentModLoader.length > 0) {
+        // 离开模组 tab 时清掉残留的加载器选择，避免跨 tab 污染
+        self.currentModLoader = nil;
         changed = YES;
     }
 
@@ -2967,124 +3078,24 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
 
     NSLog(@"[DownloadVC] Vanilla version JSON missing, downloading: %@", versionId);
 
-    // 2. 在后台线程拉取 Mojang 版本清单并下载 version JSON
+    // Task 70 修复：原实现为“单 URL 硬编码”（按偏好二选一 official/bmclapi，单次请求、无重试、
+    // 无候选轮换）。piston-meta 不可达的网络环境下（典型如国内直连）直接失败 → 整合包“原版预装”
+    // 链路断在第一步，后续只能弹“无法安装原版”或更下游的“缺少父版本 version.json”死路
+    // （即用户遇到的“json 丢失”）。
+    // 这里整体收敛到 ForgeDirectInstaller.ensureParentVersionExists:（与 Forge 直装、
+    // ModpackImportService.ensureCompleteVersionInstalled 同一条已验证路径）：
+    //   - 本地 JSON 已存在时直接跳过（含本方法开头的存在性检查，双保险）
+    //   - 拉取清单与版本 JSON 均走 PLMirrorCenter GameFile 候选（官方 ↔ BMCLAPI 轮换）
+    //     + 3 次重试 + 线性退避，任一候选可用即成功
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        NSString *downloadSource = getPrefObject(@"general.download_source") ?: @"official";
-        BOOL useBMCLAPI = [downloadSource isEqualToString:@"bmclapi"];
-        NSString *manifestURL = useBMCLAPI
-            ? @"https://bmclapi2.bangbang93.com/mc/game/version_manifest_v2.json"
-            : @"https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
-
-        NSURL *url = [NSURL URLWithString:manifestURL];
-        if (!url) {
-            if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(NO); });
-            return;
+        NSError *fetchError = nil;
+        BOOL ok = [ForgeDirectInstaller ensureParentVersionExists:versionId error:&fetchError];
+        if (!ok) {
+            NSLog(@"[DownloadVC] ensureVanillaVersionJSONExists: %@ failed: %@", versionId, fetchError.localizedDescription ?: @"unknown");
+        } else {
+            NSLog(@"[DownloadVC] Vanilla version JSON ensured: %@", versionJsonPath);
         }
-
-        NSMutableURLRequest *manifestRequest = [NSMutableURLRequest requestWithURL:url];
-        manifestRequest.timeoutInterval = 30.0;
-        manifestRequest.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
-        [manifestRequest setValue:@"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15" forHTTPHeaderField:@"User-Agent"];
-
-        // 使用 NSURLSession 替代已废弃的 NSURLConnection sendSynchronousRequest
-        dispatch_semaphore_t manifestSem = dispatch_semaphore_create(0);
-        __block NSData *manifestData = nil;
-        NSURLSessionDataTask *manifestTask = [[NSURLSession sharedSession] dataTaskWithRequest:manifestRequest
-                                                                              completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-            manifestData = data;
-            dispatch_semaphore_signal(manifestSem);
-        }];
-        [manifestTask resume];
-        dispatch_semaphore_wait(manifestSem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(30 * NSEC_PER_SEC)));
-
-        if (!manifestData) {
-            NSLog(@"[DownloadVC] Failed to download version manifest");
-            if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(NO); });
-            return;
-        }
-
-        NSDictionary *manifest = [NSJSONSerialization JSONObjectWithData:manifestData options:0 error:nil];
-        NSArray *versions = [manifest isKindOfClass:[NSDictionary class]] ? manifest[@"versions"] : nil;
-        if (![versions isKindOfClass:[NSArray class]]) {
-            NSLog(@"[DownloadVC] Invalid version manifest format");
-            if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(NO); });
-            return;
-        }
-
-        // 3. 查找匹配的版本条目，获取 version JSON URL
-        NSString *versionJSONURL = nil;
-        for (NSDictionary *v in versions) {
-            if ([v isKindOfClass:[NSDictionary class]] && [v[@"id"] isEqualToString:versionId]) {
-                versionJSONURL = [v[@"url"] isKindOfClass:[NSString class]] ? v[@"url"] : nil;
-                break;
-            }
-        }
-        if (!versionJSONURL) {
-            NSLog(@"[DownloadVC] Version %@ not found in manifest", versionId);
-            if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(NO); });
-            return;
-        }
-
-        // BMCLAPI 镜像：替换 Mojang 官方域名
-        if (useBMCLAPI) {
-            versionJSONURL = [versionJSONURL stringByReplacingOccurrencesOfString:@"piston-meta.mojang.com"
-                                                                        withString:@"bmclapi2.bangbang93.com"];
-            versionJSONURL = [versionJSONURL stringByReplacingOccurrencesOfString:@"launchermeta.mojang.com"
-                                                                        withString:@"bmclapi2.bangbang93.com"];
-        }
-
-        // 4. 下载 version JSON（使用 NSURLSession 替代已废弃的 NSURLConnection）
-        NSURL *jsonURL = [NSURL URLWithString:versionJSONURL];
-        if (!jsonURL) {
-            if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(NO); });
-            return;
-        }
-
-        NSMutableURLRequest *jsonRequest = [NSMutableURLRequest requestWithURL:jsonURL];
-        jsonRequest.timeoutInterval = 30.0;
-        jsonRequest.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
-        [jsonRequest setValue:@"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15" forHTTPHeaderField:@"User-Agent"];
-
-        // 使用 NSURLSession dataTaskWithCompletionHandler 替代已废弃的 NSURLConnection sendSynchronousRequest
-        // 已在外层 dispatch_async 到后台队列，此处用信号量等待结果
-        dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-        __block NSData *jsonData = nil;
-        NSURLSessionDataTask *jsonTask = [[NSURLSession sharedSession] dataTaskWithRequest:jsonRequest
-                                                                          completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-            jsonData = data;
-            dispatch_semaphore_signal(sem);
-        }];
-        [jsonTask resume];
-        // 等待最多 30 秒（与 timeoutInterval 一致）
-        dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(30 * NSEC_PER_SEC)));
-
-        if (!jsonData) {
-            NSLog(@"[DownloadVC] Failed to download version JSON for %@", versionId);
-            if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(NO); });
-            return;
-        }
-
-        // 5. 创建版本目录并写入 JSON
-        NSError *dirError = nil;
-        [NSFileManager.defaultManager createDirectoryAtPath:versionDir
-                                withIntermediateDirectories:YES
-                                                 attributes:nil
-                                                      error:&dirError];
-        if (dirError) {
-            NSLog(@"[DownloadVC] Failed to create version dir: %@", dirError.localizedDescription);
-            if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(NO); });
-            return;
-        }
-
-        NSError *writeErr = nil;
-        if (![jsonData writeToFile:versionJsonPath options:NSDataWritingAtomic error:&writeErr]) {
-            NSLog(@"[DownloadVC] Failed to write version JSON: %@", writeErr.localizedDescription);
-            if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(NO); });
-            return;
-        }
-
-        NSLog(@"[DownloadVC] Vanilla version JSON saved: %@ (%lu bytes)", versionJsonPath, (unsigned long)jsonData.length);
-        if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(YES); });
+        if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(ok); });
     });
 }
 
@@ -3717,13 +3728,49 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
 }
 
 - (void)invokeAfterJITEnabled:(void(^)(void))handler {
-    BOOL hasTrollStoreJIT = getEntitlementValue(@"jb.pmap_cs.custom_trust");
-    
+    // Task91：entitlement AND 磁盘标记双确认（同 LauncherNavigationController，
+    // 防止普通侧载包里的预写标记把流程导入 apple-magnifier:// 死路）
+    BOOL hasTrollStoreJIT = getEntitlementValue(@"jb.pmap_cs.custom_trust") && isTrollStoreInstall();
+
+    // Diagnostic (mirrors LauncherNavigationController.m): every branch must
+    // log, otherwise a silent launch from this path is indistinguishable from
+    // the JIT detection being skipped entirely in latestlog.txt.
+    {
+        BOOL hasDynamicCS = getEntitlementValue(@"dynamic-codesigning");
+        int diagCsFlags = 0;
+        csops(getpid(), 0, &diagCsFlags, sizeof(diagCsFlags));
+        NSLog(@"[JIT] [DownloadVC] invokeAfterJITEnabled: dynamicCS=%d trollStore=%d CS_DEBUGGED=%d ppid=%d traced=%d exn=%d JIT_FLAGS=0x%X",
+              hasDynamicCS, hasTrollStoreJIT, (diagCsFlags & CS_DEBUGGED) != 0, getppid(), JIT26DebuggerAttachedViaPtrace(), JIT26DebuggerViaExceptionPorts(), DeviceGetJITFlags(NO));
+    }
+
     if (isJITEnabled(false)) {
         [ALTServerManager.sharedManager stopDiscovering];
+        // iPadOS 26+ TXM devices: HotSpot's RX mappings are allocated by the
+        // JIT26 debugger script while it services brk #0x69.  CS_DEBUGGED
+        // being set only proves JIT was enabled once for this process -- the
+        // JIT26 debugger itself is normally long gone by launch time
+        // (ppid==1, P_TRACED==0, no task exception ports).  launchJVM() then
+        // runs JIT26CreateRegionLegacy() whose brk #0x69 is instantly fatal
+        // with no live debugger (measured 2026-08-30: crash right after
+        // custom-env init when this re-attach step was skipped).  So when
+        // launchJVM would enter the JIT26 path and no debugger is live,
+        // re-attach the Universal script via stikjit:// first, then launch.
+        // NOTE: this intentionally does NOT reuse isJITEnabled() -- that
+        // reports the persistent CS_DEBUGGED state, not debugger liveness.
+        if (DeviceHasJITFlags(JIT_FLAG_FORCE_MIRRORED | JIT_FLAG_HAS_TXM) &&
+            !JIT26IsLikelyDebuggerKeepAttached()) {
+            NSLog(@"[JIT] [DownloadVC] CS_DEBUGGED set but no live JIT26 debugger (ppid=%d traced=%d exn=%d) — re-attaching script via stikjit://",
+                  getppid(), JIT26DebuggerAttachedViaPtrace(), JIT26DebuggerViaExceptionPorts());
+            // Task172：重挂逻辑抽取为共用助手（本分支 + 等待成功后的存活性
+            // 复查两处调用，见 ame172_reattachJIT26ThenLaunch）。
+            [self ame172_reattachJIT26ThenLaunch:handler];
+            return;
+        }
+        NSLog(@"[JIT] [DownloadVC] JIT enabled with live JIT26 debugger, launching game directly");
         handler();
         return;
     } else if (hasTrollStoreJIT) {
+        NSLog(@"[JIT] [DownloadVC] TrollStore entitlement present but isJITEnabled=false, opening apple-magnifier://");
         NSURL *jitURL = [NSURL URLWithString:[NSString stringWithFormat:@"apple-magnifier://enable-jit?bundle-id=%@", NSBundle.mainBundle.bundleIdentifier]];
         [UIApplication.sharedApplication openURL:jitURL options:@{} completionHandler:nil];
     } else if (getPrefBool(@"debug.debug_skip_wait_jit")) {
@@ -3732,13 +3779,16 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
         return;
     } else if (@available(iOS 17.4, *)) {
         NSString *scriptDataString = @"";
-        if (DeviceNeedsDebugJITMapping()) {
+        if (DeviceHasJITFlags(JIT_FLAG_FORCE_MIRRORED | JIT_FLAG_HAS_TXM)) {
             NSData *scriptData = [NSData dataWithContentsOfFile:[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"UniversalJIT26.js"]];
             scriptDataString = [@"&script-data=" stringByAppendingString:[scriptData base64EncodedStringWithOptions:0]];
+            NSLog(@"[JIT] [DownloadVC] Using stikjit:// with JIT26 script (TXM device)");
         }
+        NSLog(@"[JIT] [DownloadVC] Opening stikjit:// to obtain debugger/JIT");
         [UIApplication.sharedApplication openURL:[NSURL URLWithString:[NSString stringWithFormat:@"stikjit://enable-jit?bundle-id=%@&pid=%d%@", NSBundle.mainBundle.bundleIdentifier, getpid(), scriptDataString]] options:@{} completionHandler:nil];
     } else {
         // Assuming 16.7-17.3.1. SideStore still lacks this URL scheme at the time of writing, so it only jumps to SideStore.
+        NSLog(@"[JIT] [DownloadVC] Using sidestore:// for iOS < 17.4");
         [UIApplication.sharedApplication openURL:[NSURL URLWithString:[NSString stringWithFormat:@"sidestore://sidejit-enable?pid=%d", getpid()]] options:@{} completionHandler:nil];
     }
     
@@ -3748,15 +3798,120 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
                                                                  message:hasTrollStoreJIT ? localize(@"launcher.wait_jit_trollstore.message", nil) : localize(@"launcher.wait_jit.message", nil)
                                                                     type:InlineMessageTypeLoading];
 
+    // Task172：后台任务断言（同 RightPanel，见其病历）：stikjit:// 切后台后
+    // 防 iOS 立即挂起冻结等待循环。
+    __block UIBackgroundTaskIdentifier ame172_bgt = [UIApplication.sharedApplication beginBackgroundTaskWithName:@"ame172-jit-wait" expirationHandler:^{
+        // 宽限期到由系统挂起；恢复后循环按剩余预算继续。
+    }];
+
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        while (!isJITEnabled(false)) {
-            usleep(1000 * 200);
-        }
+        // Task169：有界等待（120s）+每 10s 心跳日志，超时走错误提示
+        //（同 RightPanel/NavCtrl 两处，病历见 utils.m）。
+        BOOL ok = ame169_waitForJITCondition(^{ return isJITEnabled(false); }, 120.0, @"isJITEnabled");
         dispatch_async(dispatch_get_main_queue(), ^{
             [jitAlert dismiss];
-            if (handler) handler();
+            if (ame172_bgt != UIBackgroundTaskInvalid) {
+                [UIApplication.sharedApplication endBackgroundTask:ame172_bgt];
+                ame172_bgt = UIBackgroundTaskInvalid;
+            }
+            if (ok) {
+                // Task172：存活性复查（同 RightPanel）：CS_DEBUGGED 已置但
+                // 调试器已死时直接启动 = brk #0x69 闪退，先重挂。
+                if (DeviceHasJITFlags(JIT_FLAG_FORCE_MIRRORED | JIT_FLAG_HAS_TXM) &&
+                    !JIT26IsLikelyDebuggerKeepAttached()) {
+                    NSLog(@"[JIT] [DownloadVC] Task172 wait satisfied but JIT26 debugger is gone — re-attaching before launch");
+                    [self ame172_reattachJIT26ThenLaunch:handler];
+                } else {
+                    if (handler) handler();
+                }
+            } else {
+                [self ame169_showJITTimeoutInlineWithRetry:handler];
+            }
         });
     });
+}
+
+/// Task172：JIT26 调试器重挂统一助手（stikjit:// + 有界等待 + 前台等待 +
+/// 后台任务断言，同 RightPanel.ame172_reattachJIT26ThenLaunch，本文本
+/// 用 DownloadVC 的 InlineMessageView 而非 UIAlertController）。
+- (void)ame172_reattachJIT26ThenLaunch:(void(^)(void))handler {
+    InlineMessageView *jitAlert = [InlineMessageView showInViewController:self
+                                                                    title:localize(@"launcher.wait_jit.title", nil)
+                                                                 message:localize(@"launcher.wait_jit.message", nil)
+                                                                    type:InlineMessageTypeLoading];
+
+    __block UIBackgroundTaskIdentifier ame172_bgt = [UIApplication.sharedApplication beginBackgroundTaskWithName:@"ame172-jit26-reattach" expirationHandler:^{
+        // 同上：宽限期到由系统挂起，恢复后继续。
+    }];
+
+    void (^ame172_fireURL)(void) = ^{
+        NSString *scriptDataString = @"";
+        NSData *scriptData = [NSData dataWithContentsOfFile:[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"UniversalJIT26.js"]];
+        if (scriptData) {
+            scriptDataString = [@"&script-data=" stringByAppendingString:[scriptData base64EncodedStringWithOptions:0]];
+        }
+        [UIApplication.sharedApplication openURL:[NSURL URLWithString:[NSString stringWithFormat:@"stikjit://enable-jit?bundle-id=%@&pid=%d%@", NSBundle.mainBundle.bundleIdentifier, getpid(), scriptDataString]] options:@{} completionHandler:nil];
+        NSLog(@"[JIT] [DownloadVC] Task172 stikjit:// re-attach fired (script=%lu bytes)",
+              (unsigned long)scriptData.length);
+    };
+
+    if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) {
+        // 后台态：openURL 无效，先等回前台再拉起（一次性监听 + 10s 兜底，
+        // 双 nil 防护防双发）。
+        __block id ame172_obs = nil;
+        ame172_obs = [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *ame172_n) {
+            [[NSNotificationCenter defaultCenter] removeObserver:ame172_obs];
+            ame172_obs = nil;
+            ame172_fireURL();
+        }];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (ame172_obs) {
+                [[NSNotificationCenter defaultCenter] removeObserver:ame172_obs];
+                ame172_obs = nil;
+                ame172_fireURL();
+            }
+        });
+    } else {
+        ame172_fireURL();
+    }
+
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        // Wait for the JIT26 debugger to actually attach (P_TRACED /
+        // exception ports / spawned-by-debugger), not for CS_DEBUGGED
+        // -- that flag is already set and would race the first brk.
+        // Task169：有界等待（120s）+心跳日志，超时走错误提示（不无限转圈）。
+        BOOL ok = ame169_waitForJITCondition(^{ return JIT26IsLikelyDebuggerKeepAttached(); }, 120.0, @"JIT26 debugger attach");
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [jitAlert dismiss];
+            if (ame172_bgt != UIBackgroundTaskInvalid) {
+                [UIApplication.sharedApplication endBackgroundTask:ame172_bgt];
+                ame172_bgt = UIBackgroundTaskInvalid;
+            }
+            if (ok) {
+                if (handler) handler();
+            } else {
+                [self ame169_showJITTimeoutInlineWithRetry:handler];
+            }
+        });
+    });
+}
+
+/// Task169：JIT 等待超时后的出路（重试 = 重新走一轮 invokeAfterJITEnabled，
+/// 会重新拉起 stikjit://；取消 = 回到当前页）。
+- (void)ame169_showJITTimeoutInlineWithRetry:(void(^)(void))handler {
+    NSLog(@"[JIT] [DownloadVC] Task169 JIT wait timed out, showing retry alert");
+    UIAlertController *retry = [UIAlertController alertControllerWithTitle:localize(@"launcher.wait_jit.title", nil)
+                                                                   message:@"JIT 开启等待超时（120 秒）。请确认 JIT 工具（StikDebug 等）已安装并可正常拉起后选择重试；也可在设置中选择其它 JIT 开启方式。\nTimeout waiting for JIT (120s). Make sure your JIT enabler app is alive, then retry."
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [retry addAction:[UIAlertAction actionWithTitle:localize(@"resman.common.cancel", nil) style:UIAlertActionStyleCancel handler:nil]];
+    [retry addAction:[UIAlertAction actionWithTitle:@"重试 / Retry" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+        [self invokeAfterJITEnabled:handler ?: ^{}];
+    }]];
+    if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad) {
+        retry.popoverPresentationController.sourceView = self.view;
+        retry.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(self.view.bounds), CGRectGetMidY(self.view.bounds), 0, 0);
+    }
+    [self presentViewController:retry animated:YES completion:nil];
 }
 
 - (void)handleInstallerDownloadResultWithVendorName:(NSString *)vendorName
@@ -4204,7 +4359,7 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
         // 这样做的目的：
         //   1. 让原版 client.jar 仍可被 inheritsFrom 引用（保留原版 jar）
         //   2. OptiFine jar 作为 launchwrapper 的 tweakClass 输入
-        //   3. mainClass 设为 net.minecraft.launchwrapper.Launch，通过 --tweakClass optifine.OptiFineTweaker 加载
+        //   3. mainClass 设为 net.minecraft.launchwrapper.Launcher，通过 --tweakClass optifine.OptiFineTweaker 加载
         NSString *optifineJarPath = [NSString stringWithFormat:@"optifine/OptiFine/%@/%@.jar", gameVersion, versionId];
         NSString *optifineJarAbsPath = [NSString stringWithFormat:@"%s/libraries/%@", getenv("POJAV_GAME_DIR"), optifineJarPath];
         // 确保 jar 文件写入到正确的 libraries 路径
@@ -4225,47 +4380,30 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
             return;
         }
 
-        // 4. 创建 version.json（参照 ZL2 Install.OptiFine）
-        // OptiFine 使用 launchwrapper 作为入口，通过 tweaker 加载：
-        //   - mainClass 必须是 net.minecraft.launchwrapper.Launch（launchwrapper 中可执行 main 的类；
-        //     net.minecraft.launchwrapper.Launcher 并不存在，会导致 "Could not find or load main class"）
-        //   - libraries 必须包含 launchwrapper：OptiFine 1.13+ 使用安装包内嵌的 launchwrapper-of，
-        //     旧版使用 net.minecraft:launchwrapper:1.12，否则启动时报 ClassNotFoundException
-        //   - OptiFine jar 必须加入 libraries 列表
-        NSString *librariesDir = [gameDir stringByAppendingPathComponent:@"libraries"];
-        NSArray *launchWrapperLibraries = [MinecraftResourceUtils optifineLaunchWrapperLibrariesWithOptiFineJarPath:optifineJarAbsPath
-                                                                                                         librariesDir:librariesDir];
-        if (!launchWrapperLibraries) {
-            NSError *err = [NSError errorWithDomain:@"OptiFineInstall" code:4
-                                         userInfo:@{NSLocalizedDescriptionKey: localize(@"i18n_str_97", nil)}];
-            [optiManager updateTaskWithId:taskId stageAtIndex:kOptiFineStageInstall status:PLTaskStageStatusFailed];
-            [optiManager updateTaskWithId:taskId stageAtIndex:kOptiFineStageInstall progress:0 message:err.localizedDescription];
-            [[DownloadTaskManager sharedManager] setTaskWithId:taskId completedWithError:err];
-            dispatch_async(dispatch_get_main_queue(), ^{
-                __strong typeof(weakSelf) strongSelf = weakSelf;
-                if (!strongSelf) return;
-                [strongSelf finishInstallerProgressWithError:err.localizedDescription];
-            });
-            return;
-        }
-        NSArray *optifineLibraries = [launchWrapperLibraries arrayByAddingObject:@{
-            @"name": [NSString stringWithFormat:@"optifine:OptiFine:%@", versionId],
-            @"downloads": @{
-                @"artifact": @{
-                    @"path": optifineJarPath,
-                    @"url": @"",  // 已下载，URL 留空
-                    @"size": @(jarData.length),
-                    @"sha1": @""
-                }
-            }
-        }];
+        // 4. 创建 version.json（参照 FCL OptiFineInstallTask / HMCL OptiFineInstallTask）
+        // OptiFine 使用 launchwrapper 作为入口，通过 tweaker 加载
+        // 关键：mainClass 必须是 net.minecraft.launchwrapper.Launcher
+        //       必须添加 --tweakClass optifine.OptiFineTweaker
+        //       OptiFine jar 必须加入 libraries 列表
         NSDictionary *versionJson = @{
             @"id": versionId,
             @"inheritsFrom": gameVersion,
             @"type": @"release",
-            @"mainClass": @"net.minecraft.launchwrapper.Launch",
+            @"mainClass": @"net.minecraft.launchwrapper.Launcher",
             @"minecraftArguments": @"--username ${auth_player_name} --version ${version_name} --gameDir ${game_directory} --assetsDir ${assets_root} --assetIndex ${assets_index_name} --uuid ${auth_uuid} --accessToken ${auth_access_token} --userType ${user_type} --versionType ${version_type} --tweakClass optifine.OptiFineTweaker",
-            @"libraries": optifineLibraries,
+            @"libraries": @[
+                @{
+                    @"name": [NSString stringWithFormat:@"optifine:OptiFine:%@", gameVersion],
+                    @"downloads": @{
+                        @"artifact": @{
+                            @"path": optifineJarPath,
+                            @"url": @"",  // 已下载，URL 留空
+                            @"size": @(jarData.length),
+                            @"sha1": @""
+                        }
+                    }
+                }
+            ],
             @"jar": gameVersion,  // 使用原版 jar
             @"minimumLauncherVersion": @21
         };
@@ -4796,6 +4934,18 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
         DownloadTaskManager *manager = [DownloadTaskManager sharedManager];
         if (success) {
             [manager setTaskWithId:taskId completedWithError:nil];
+            // 关键修复（Task 72，"找不到版本信息"根因）：整合包在线安装成功后
+            // 未发送 ReloadProfileList 通知——LauncherRootViewController /
+            // LauncherCardLayoutViewController 的 localVersionList 仍是应用启动时
+            // （viewDidLoad → initializeVersionLists）扫描的快照，刚写入 versions/ 的
+            // 唯一化版本（如 fabric-loader-0.19.5-26.2-c8cf4f2c）不在其中；
+            // 用户随即点启动 → findVersionInRemoteList 远程+本地内存列表双双未命中
+            // → 弹"找不到版本信息"（i18n_str_432）。重启 app 后列表重扫才能命中，
+            // 这正是用户"装完直接启动报错、重开应用再启动就正常"的完整解释。
+            // 直装路径（finishInstallerProgressWithSuccess，issue #61）早已补发此通知，
+            // 整合包路径是漏网之鱼，此处对齐。
+            [[NSNotificationCenter defaultCenter] postNotificationName:@"ReloadProfileList" object:nil];
+            NSLog(@"[ModpackImport] Task72 ReloadProfileList posted after online modpack install");
             NSString *loader = info[@"loader"];
             NSString *msg = [NSString stringWithFormat:localize(@"i18n_str_261", nil), info[@"name"]];
             if ([loader isEqualToString:@"Forge"] || [loader isEqualToString:@"NeoForge"]) {
