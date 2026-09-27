@@ -34,9 +34,17 @@ void toggleIsolatedPref(BOOL forceEnable) {
 /// os_proc_available_memory() 返回当前进程可安全申请的内存（iOS 13+），
 /// 减去 1200 MB 原生预留（JVM 非堆 + 渲染面 + 系统开销）即为可安全承诺的 -Xmx。
 /// 返回 0 表示不支持（老系统/模拟器），退回物理内存 × 0.6。
-/// 下限 1024 MB：Air 从不以低于 1024 MB 的 -Xmx 跑 26.x —— iPhone X 上
-/// auto 比例算出的 706 MB 会让 MC 26.3 陷入 GC 抖动，最终无栈 SIGKILL
-/// （jetsam / 看门狗都发不可捕获的 SIGKILL，日志表现为进程凭空消失）。
+///
+/// [fix/1024-floor] 1024 MB 下限【只适用于 fallback 路径】。
+/// 权威读数路径（os_proc_available_memory 可用）不再做 1024 下限——
+/// iPhone X（3GB，extended VA）实测：available=1807MB -> 安全堆顶 607MB，
+/// 旧代码把 607 强抬到 1024，等于把钳制整个架空：preference 的 706MB
+/// "未超 1024" -> 不钳 -> Xmx706 + JVM 非堆 + MG shadow 纹理/native ->
+/// footprint 爬到 1539MB 后被 jetsam SIGKILL（native-crash.log 无崩溃记录、
+/// latestlog 凭空断在 unifont 字体加载 = SIGKILL 特征，43177bd 两次复现）。
+/// Air 原版同有此下限，但 Air 用户设备 ≥4GB（ceiling 本来就 > 1024），
+/// 下限无副作用；在 3GB 设备上它把"必死的 SIGKILL"换成"可控的 GC 抖动"。
+/// 权威路径宁可要小堆：堆小只是慢，超顶是死。
 static int ame173_safeHeapCeilingMB(void) {
     static int cachedCeilingMB = -1;
     if (cachedCeilingMB > 0) return cachedCeilingMB;
@@ -45,14 +53,14 @@ static int ame173_safeHeapCeilingMB(void) {
     if (avail > 0) {
         int availMB = (int)(avail >> 20);
         ceilingMB = availMB - 1200;
-        NSLog(@"[Task173] safe heap ceiling: os_proc_available_memory=%dMB -> Xmx ceiling %dMB (native reserve 1200MB)", availMB, ceilingMB);
+        NSLog(@"[Task173] safe heap ceiling: os_proc_available_memory=%dMB -> Xmx ceiling %dMB (native reserve 1200MB, no floor on authoritative path)", availMB, ceilingMB);
     }
     if (ceilingMB <= 0) {
         int physMB = (int)(NSProcessInfo.processInfo.physicalMemory >> 20);
         ceilingMB = (int)(physMB * 0.6);
+        if (ceilingMB < 1024) ceilingMB = 1024;   // 仅 fallback：读数不可信时保底
         NSLog(@"[Task173] safe heap ceiling: fallback 60%% of physical = %dMB (phys=%dMB)", ceilingMB, physMB);
     }
-    if (ceilingMB < 1024) ceilingMB = 1024;
     cachedCeilingMB = ceilingMB;
     return ceilingMB;
 }

@@ -1638,24 +1638,37 @@ int launchJVM(NSString *accountId, id launchTarget, int width, int height, int m
     //     运行期自行解出到沙盒，不需要 Frameworks 另行放置。
     //   * 注入范围由 agent 自己判定（premain 按 MC 版本 / 加载器分流：26.2 走
     //     classes262 类集、Fabric 缺桩时跳过相应步骤、Forge 走 dummy provider
-    //     且不注入自带 slf4j）；老版本 MC 没有目标类
-    //     net/minecraft/client/PreferredGraphicsApi，转换器天然 no-op。
+    //     且不注入自带 slf4j）。
     //   * jar 不在 libs/ 时安静跳过，便于回滚与 A/B。
+    //   * [fix/java8-agent] 只对 MC major >= 26 挂载：agent 的 class 文件版本是
+    //     65.0（Java 21+ 编译），而老版本 MC 走 Java 8（class 上限 52.0）——
+    //     此前"老版本 MC 没有目标类，转换器天然 no-op"的假设漏掉了 agent
+    //     本身在 Java 8 上就加载不了这件事（UnsupportedClassVersionError ->
+    //     "processing of -javaagent failed" -> JVM 直接 abort，premain 阶段
+    //     全灭，GL/SFPEW 代码根本没机会跑）。1.7.10 + SFPEW 两路会话的
+    //     latestlog（43177bd 实测）即死于此。
+    //     26.x 强制 Java 25（ResolveLwjglVersion 同款 major 判定），class 65 可加载。
     if ([[NSFileManager defaultManager] fileExistsAtPath:
             [librariesPath stringByAppendingPathComponent:@"metallum_agent.jar"]]) {
-        PUSH_MARGV_FORMAT(@"-javaagent:%@/metallum_agent.jar=", librariesPath);
-        // 把实例的 MC 版本 id 传给 agent（按版本选 metallum 类映射）
         NSString *metallumMcVersionId = nil;
         if ([launchTarget isKindOfClass:NSDictionary.class]) {
             metallumMcVersionId = [launchTarget[@"id"] description];
         } else if ([launchTarget isKindOfClass:NSString.class]) {
             metallumMcVersionId = (NSString *)launchTarget;
         }
-        if (metallumMcVersionId.length > 0) {
-            PUSH_MARGV_FORMAT(@"-Dmetallum.mc.version=%@", metallumMcVersionId);
+        NSInteger metallumMcMajor = ame98_mcMajorFromVersionId(metallumMcVersionId);
+        if (metallumMcMajor >= 26) {
+            PUSH_MARGV_FORMAT(@"-javaagent:%@/metallum_agent.jar=", librariesPath);
+            // 把实例的 MC 版本 id 传给 agent（按版本选 metallum 类映射）
+            if (metallumMcVersionId.length > 0) {
+                PUSH_MARGV_FORMAT(@"-Dmetallum.mc.version=%@", metallumMcVersionId);
+            }
+            NSLog(@"[JavaLauncher] Metallum agent enabled: -javaagent:metallum_agent.jar (mcVersion=%@)",
+                  metallumMcVersionId);
+        } else {
+            NSLog(@"[JavaLauncher] Metallum agent skipped: MC major %ld < 26 (agent needs Java 21+ class files, this session runs Java 8)",
+                  (long)metallumMcMajor);
         }
-        NSLog(@"[JavaLauncher] Metallum agent enabled: -javaagent:metallum_agent.jar (mcVersion=%@)",
-              metallumMcVersionId);
     }
     if(getPrefBool(@"general.cosmetica")) {
         PUSH_MARGV_FORMAT(@"-javaagent:%@/arc_dns_injector.jar=23.95.137.176", librariesPath);
