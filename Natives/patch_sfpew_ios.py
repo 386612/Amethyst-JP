@@ -315,33 +315,56 @@ def patch_format_to_compat(root: Path) -> None:
         print("patch_sfpew_ios: verified -- no std::format left in tree")
 
 
+ES_DETECT_HELPER = '''
+// {marker}: iOS 上 backend “是否 OpenGL ES” 的判定在 SFPEW 内部并不统一：
+//   sfpewDesktopGLVersion()   strstr(raw, "OpenGL ES ")      带尾随空格
+//   detect_backend_target()   strstr(version, "OpenGL ES")   不带尾随空格
+// MobileGL-gles 的自述串 "4.6.0 MobileGL 26.09-dev, Direct (OpenGL ES) Backend"
+// 里 "OpenGL ES" 后面是 ')' 而不是空格，于是带空格版本判“非 ES”、不带空格
+// 版本判“ES”，同一个后端在两个函数里结论相反。
+//
+// 两种方向各自都能自圆其说，静态判断无法定夺，所以这里不写死任何一种：
+// 默认保留上游原行为（不带空格 -> 判 ES，这是当前 MobileGL-gles + SFPEW
+// 能正常出画面的组合），另开环境变量供真机 A/B，不用重新构建。
+//   AMETHYST_SFPEW_BACKEND_ES=0  -> 按桌面 backend 判定（走 GLSL 4.x0 转译）
+//   AMETHYST_SFPEW_BACKEND_ES=1  -> 按 ES backend 判定（走 ESSL 转译）
+static int sfpewIosBackendReportsES(const char* version) {{
+    const char* override = std::getenv("AMETHYST_SFPEW_BACKEND_ES");
+    if (override != nullptr && override[0] != '\\0') {{
+        return std::strcmp(override, "0") == 0 ? 0 : 1;
+    }}
+    return std::strstr(version, "OpenGL ES") != nullptr ? 1 : 0;
+}}
+'''.format(marker=MARKER)
+
+
 def patch_backend_es_detect(root: Path) -> None:
-    """统一 backend 的 “OpenGL ES” 判定（两处 strstr 写法不一致）。
+    """让 backend 的 “OpenGL ES” 判定可在运行时切换（默认保持上游原行为）。
 
-    sfpewDesktopGLVersion() 用带尾随空格的 strstr(raw, "OpenGL ES ")，
-    而 detect_backend_target() 用不带空格的 strstr(version, "OpenGL ES")。
-
-    MobileGL-gles 的自述串是 "4.6.0 MobileGL 26.09-dev, Direct (OpenGL ES) Backend"：
-    "OpenGL ES" 后面跟的是 ')' 而非空格，于是带空格版本不匹配（判非 ES，
-    glGetString 走“后端串在前”分支，把含 "OpenGL ES)" 的原串原样拼出去），
-    不带空格版本却匹配（判 ES）。同一个后端在两个函数里结论相反，shader
-    target 因此被判成 ESSL，desktop GLSL 的光影包被送去走 ESSL 转译路径。
-
-    统一为带空格的写法（与 sfpewDesktopGLVersion 一致）：真正的
-    "OpenGL ES 3.2 ..." 依然命中，而 "(OpenGL ES)" 这类描述性后缀不再误判。
+    只做两件事：注入 sfpewIosBackendReportsES()，并把 detect_backend_target()
+    里那句裸 strstr 换成调用它。默认行为与打补丁前逐字等价，因此不会影响
+    当前唯一能出画面的 MobileGL-gles + SFPEW 组合；需要验证光影包时设
+    AMETHYST_SFPEW_BACKEND_ES=0 / 1 即可，无需重新构建。
     """
     translator = root / "SimpleFPEWrapper" / "shader" / "translator.cpp"
     if not translator.is_file():
         fail(f"missing {translator}")
     t = translator.read_text(encoding="utf-8")
-    if 'std::strstr(version, "OpenGL ES ")' in t:
+    if "sfpewIosBackendReportsES" in t:
         print("patch_sfpew_ios: backend ES detect: already patched -- skip")
         return
+
+    replace_once(
+        translator,
+        "target_language_t detect_backend_target() {",
+        ES_DETECT_HELPER + "\ntarget_language_t detect_backend_target() {",
+        "backend ES detect (helper insertion)",
+    )
     replace_once(
         translator,
         'if (version != nullptr && std::strstr(version, "OpenGL ES") != nullptr) {',
-        'if (version != nullptr && std::strstr(version, "OpenGL ES ") != nullptr) {',
-        "backend ES detect (align with sfpewDesktopGLVersion)",
+        "if (version != nullptr && sfpewIosBackendReportsES(version) != 0) {",
+        "backend ES detect (call site)",
     )
 
 
