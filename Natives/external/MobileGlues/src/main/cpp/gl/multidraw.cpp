@@ -944,14 +944,14 @@ static void mg_md_bv_rebase_per_subdraw(GLenum mode, GLsizei* counts, GLenum typ
                                       static_cast<GLsizeiptr>(count) * indexSize, GL_MAP_READ_BIT);
             if (!srcData) {
                 MD_WARN_ONCE("multidraw drawelements: element buffer is not mappable for reading, "
-                             "using driver base vertex")
+                             "using driver base vertex");
                 GLES.glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, prevElementBuffer);
                 if (GLES.glDrawElementsBaseVertex) {
                     GLES.glDrawElementsBaseVertex(mode, count, type, indices[i], bv);
                 } else if (bv == 0) {
                     GLES.glDrawElements(mode, count, type, indices[i]);
                 } else {
-                    MD_WARN_ONCE("multidraw drawelements: cannot apply base vertex %d, sub-draw skipped", bv)
+                    MD_WARN_ONCE("multidraw drawelements: cannot apply base vertex %d, sub-draw skipped", bv);
                 }
                 continue;
             }
@@ -961,7 +961,7 @@ static void mg_md_bv_rebase_per_subdraw(GLenum mode, GLsizei* counts, GLenum typ
             mg_rebase_indices_to_u32(rebased.data(), indices[i], count, type, bv, restart_enabled, restart_value);
         } else {
             MD_WARN_ONCE("multidraw drawelements: no element buffer bound and indices[%d] is null; "
-                         "sub-draw skipped", i)
+                         "sub-draw skipped", i);
             continue;
         }
 
@@ -1023,7 +1023,7 @@ void mg_glMultiDrawElementsBaseVertex_drawelements(GLenum mode, GLsizei* counts,
             if (count <= 0) continue;
             if (prevElementBuffer == 0 && indices[i] == nullptr) {
                 MD_WARN_ONCE("multidraw drawelements: no element buffer bound and indices[%d] is null; "
-                             "sub-draw skipped", i)
+                             "sub-draw skipped", i);
                 continue;
             }
             GLES.glDrawElements(mode, count, type, indices[i]);
