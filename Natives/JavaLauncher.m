@@ -2111,6 +2111,77 @@ int launchJVM(NSString *accountId, id launchTarget, int width, int height, int m
 // 逐个执行 processor 的（ForgeProcessorRunner 复刻该行为）。
 //
 // 注意：调用后进程内 JVM 已创建，游戏启动必须重启 app（见 gJvmUsedInProcess）。
+// Task 139（参照 Air 移植）：按 debug.jit_enabler 偏好打开 JIT 申请 URL 并弹
+// 等待框。forceStikJIT=YES 时忽略偏好、固定走 stikjit:// 带脚本再附（TXM
+// 再附路径）。openURL 与弹框必须在主线程：headless 通常在后台队列，
+// 加守卫防主线程误调时 dispatch_sync 死锁。
+static void ame139_requestJIT(BOOL forceStikJIT) {
+    dispatch_block_t work = ^{
+        NSString *enabler = nil;
+        if (forceStikJIT) {
+            enabler = @"stikjit";
+        } else {
+            enabler = getPrefObject(@"debug.jit_enabler");
+            if (![enabler isKindOfClass:NSString.class] || enabler.length == 0) {
+                enabler = @"auto";
+            }
+        }
+        BOOL noScript = getPrefBool(@"debug.jit26_script_disable");
+        NSString *bundleId = NSBundle.mainBundle.bundleIdentifier;
+        NSLog(@"[JIT] [Headless] Task139 enabler=%@ noScript=%d forceStikJIT=%d",
+              enabler, noScript, forceStikJIT);
+        NSURL *url = nil;
+        if ([enabler isEqualToString:@"trollstore"]) {
+            url = [NSURL URLWithString:[NSString stringWithFormat:
+                @"apple-magnifier://enable-jit?bundle-id=%@", bundleId]];
+        } else if ([enabler isEqualToString:@"sidestore"]) {
+            url = [NSURL URLWithString:[NSString stringWithFormat:
+                @"sidestore://enable-jit?bundle-id=%@", bundleId]];
+        } else if ([enabler isEqualToString:@"stosdebug"]) {
+            NSString *appName = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleDisplayName"] ?: @"Amethyst";
+            NSMutableString *u = [NSMutableString stringWithFormat:
+                @"stosdebug://enableJIT?bundleId=%@&appName=%@", bundleId, appName];
+            if (!noScript) {
+                NSData *script = [NSData dataWithContentsOfFile:
+                    [NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"UniversalJIT26.js"]];
+                if (script) {
+                    [u appendFormat:@"&script=%@", [script base64EncodedStringWithOptions:0]];
+                }
+            }
+            url = [NSURL URLWithString:u];
+        } else if ([enabler isEqualToString:@"jitstreamer"]) {
+            url = [NSURL URLWithString:[NSString stringWithFormat:
+                @"http://[fd00::]:9172/launch_app/%@", bundleId]];
+        } else if ([enabler isEqualToString:@"manual"]) {
+            // 手动模式：不跳转，仅弹窗告知（维持旧语义）。
+        } else if (@available(iOS 17.4, *)) {
+            // auto / stikjit 共用 stikjit://
+            NSString *scriptData = @"";
+            if (!noScript) {
+                NSData *script = [NSData dataWithContentsOfFile:
+                    [NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"UniversalJIT26.js"]];
+                if (script) {
+                    scriptData = [@"&script-data=" stringByAppendingString:[script base64EncodedStringWithOptions:0]];
+                }
+            }
+            url = [NSURL URLWithString:[NSString stringWithFormat:
+                @"stikjit://enable-jit?bundle-id=%@&pid=%d%@", bundleId, getpid(), scriptData]];
+        } else {
+            url = [NSURL URLWithString:[NSString stringWithFormat:
+                @"sidestore://sidejit-enable?pid=%d", getpid()]];
+        }
+        if (url) {
+            [UIApplication.sharedApplication openURL:url options:@{} completionHandler:nil];
+        }
+        showDialog(localize(@"i18n_str_437", nil), localize(@"i18n_str_439", nil));
+    };
+    if ([NSThread isMainThread]) {
+        work();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), work);
+    }
+}
+
 int launchHeadlessJVM(NSString *mainClass, NSArray<NSString *> *args, int minJavaVersion) {
     NSLog(@"[JavaLauncher] Beginning headless JVM launch: %@ (minJava=%d)", mainClass, minJavaVersion);
 
@@ -2125,14 +2196,26 @@ int launchHeadlessJVM(NSString *mainClass, NSArray<NSString *> *args, int minJav
         return -5;
     }
 
-    // JIT 前置检查：processor 执行与游戏一样依赖 JIT（HotSpot 始终 JIT 编译，
-    // 无 JIT 时必然 SIGILL 崩溃）。提前给出明确错误而不是让 JVM 莫名崩溃。
+    // JIT 前置检查（参照 Air Task139）：无 JIT 时按偏好自动申请并有界等待，
+    // 而非直接报错——否则非 StikDebug 用户安装 Forge/NeoForge 永远卡死。
+    // processor 执行与游戏一样依赖 JIT（HotSpot 始终 JIT 编译，
+    // 无 JIT 时必然 SIGILL 崩溃）。申请仍失败则明确报错而不是让 JVM 莫名崩溃。
     if (!isJITEnabled(NO)) {
-        NSLog(@"[JavaLauncher] launchHeadlessJVM: JIT is not enabled, cannot run processors");
-        showDialog(localize(@"Error", nil),
-            @"Java JIT is not enabled. Forge/NeoForge installation requires JIT.\n"
-            @"Please enable JIT (e.g. via StikDebug) and try again.");
-        return -1;
+        if (getPrefBool(@"debug.debug_skip_wait_jit")) {
+            NSLog(@"[JavaLauncher] launchHeadlessJVM: debug_skip_wait_jit set, proceeding without JIT");
+        } else {
+            NSLog(@"[JavaLauncher] launchHeadlessJVM: Task139 JIT not enabled -- auto-requesting via configured enabler");
+            ame139_requestJIT(NO);
+            // 有界等待 120s（ame169：心跳+挂起豁免）；超时则明确报错而非无限转圈。
+            if (!ame169_waitForJITCondition(^BOOL{ return isJITEnabled(NO); }, 120.0, @"Headless JIT")) {
+                NSLog(@"[JavaLauncher] launchHeadlessJVM: Task139 JIT wait timed out");
+                showDialog(localize(@"Error", nil),
+                    @"JIT 开启等待超时（120 秒）。请确认 JIT 工具已安装并可正常拉起后重试，也可在设置中选择其它 JIT 开启方式。\n"
+                    @"Timed out waiting for JIT (120s). Make sure the JIT enabler app can be launched, or pick another enabler in Settings, then retry.");
+                return -1;
+            }
+            NSLog(@"[JavaLauncher] launchHeadlessJVM: Task139 JIT became enabled, continuing");
+        }
     }
 
     init_loadDefaultEnv();
@@ -2146,6 +2229,18 @@ int launchHeadlessJVM(NSString *mainClass, NSArray<NSString *> *args, int minJav
     DeviceGetJITFlags(YES);
     BOOL requiresDebugJITMapping = DeviceNeedsDebugJITMapping();
     BOOL jit26AlwaysAttached = getPrefBool(@"debug.debug_always_attached_jit");
+    // Task 139（参照 Air）：TXM 再附。CS_DEBUGGED 只证明 JIT 曾为本进程开启过；
+    // 调试器离场后下方 Safe 探针的 brk #0x69 无人应答。无活跃调试器且脚本
+    // 未禁用时，先经 stikjit:// 带脚本再附并有界等待；成败都继续走下方
+    // Safe 探针（失败会优雅报错而非闪退，与 Air 同构）。
+    if (DeviceHasJITFlags(JIT_FLAG_FORCE_MIRRORED | JIT_FLAG_HAS_TXM) &&
+        !JIT26IsLikelyDebuggerKeepAttached() &&
+        !getPrefBool(@"debug.jit26_script_disable")) {
+        NSLog(@"[JIT] [Headless] Task139: CS_DEBUGGED set but no live JIT26 debugger — re-attaching script via stikjit://");
+        ame139_requestJIT(YES);
+        ame169_waitForJITCondition(^BOOL{ return JIT26IsLikelyDebuggerKeepAttached(); }, 120.0, @"Headless JIT26 reattach");
+        NSLog(@"[JIT] [Headless] Task139: JIT26 debugger re-attach wait finished, continuing");
+    }
     if (requiresDebugJITMapping) {
         static void *result;
         if (!result) result = JIT26CreateRegionLegacySafe(getpagesize());
