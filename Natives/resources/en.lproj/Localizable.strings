@@ -1965,3 +1965,17 @@
 "i18n_str_jit26_pending" = "JIT: Enabled (attaches on launch)";
 "jit.timeout_retry_msg" = "Timed out waiting for JIT (120s). The JIT tool may not have responded. Tap Retry to try again, or attach a debugger manually and retry.";
 "jit.retry" = "Retry";
+
+// Task 134: JIT enabler picker (ported from Air)
+"preference.debug.jit_enabler.auto" = "Auto (recommended)";
+"preference.debug.jit_enabler.stikjit" = "StikDebug / StikJIT";
+"preference.debug.jit_enabler.sidestore" = "SideStore";
+"preference.debug.jit_enabler.stosdebug" = "StosDebug";
+"preference.debug.jit_enabler.jitstreamer" = "JitStreamer-EB";
+"preference.debug.jit_enabler.trollstore" = "TrollStore";
+"preference.debug.jit_enabler.manual" = "Manual (attach a debugger yourself)";
+"preference.title.jit_enabler" = "JIT Enabler";
+"preference.detail.jit_enabler" = "Choose the app used to enable JIT. If you don't have StikDebug installed, pick SideStore, StosDebug, JitStreamer-EB or TrollStore instead, otherwise tapping Launch does nothing. Auto (default) tries TrollStore, then StikDebug, then SideStore depending on your device.";
+"preference.title.jit26_script_disable" = "Disable iOS 26 JS-Script JIT";
+"preference.detail.jit26_script_disable" = "Stop sending UniversalJIT26.js to the JIT tool when launching the game (plain debugger-attach JIT). Only turn this on if your tool doesn't support scripts or the script misbehaves; devices that need system-level memory mapping (TXM) may fail to launch the game with this enabled.";
+"i18n_str_jit26_not_ready" = "JIT26 debugger is not ready: the JIT breakpoint went unanswered. Please re-enable JIT with the Universal script assigned in StikDebug, then tap Play again.";

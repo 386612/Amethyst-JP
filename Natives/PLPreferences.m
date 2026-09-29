@@ -200,6 +200,10 @@ NSString *const PREF_MOD_MIRROR = @"general.mod_mirror";
             @"debug_universal_script_jit": @NO,
             @"debug_always_attached_jit": @NO,
             @"debug_skip_wait_jit": @NO,
+            // Task 134（参照 Air）：JIT 开启工具选择（auto = 原自动判定）与
+            // iOS 26 JS 脚本 JIT 开关（默认携带脚本）
+            @"jit_enabler": @"auto",
+            @"jit26_script_disable": @NO,
             @"debug_hide_home_indicator": @NO,
             @"debug_ipad_ui": @(realUIIdiom == UIUserInterfaceIdiomPad),
             @"debug_auto_correction": @YES,

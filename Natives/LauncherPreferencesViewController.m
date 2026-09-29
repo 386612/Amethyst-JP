@@ -1150,6 +1150,46 @@
                 @"type": self.typeSwitch,
                 @"enableCondition": whenNotInGame
             },
+            // --- [Task 134] JIT 开启工具（参照 Air，多工具方案） ---
+            // 部分用户没有安装 StikDebug 而使用 SideStore/StosDebug/JITStreamer
+            // 等其它工具——此前安装器只认 StikDebug（"点了没反应、JIT
+            // 永远开不了"）。现提供工具选择：auto 沿用原自动判定，其余选项
+            // 强制走对应工具的 URL scheme（Task139 消费）。
+            @{@"key": @"jit_enabler",
+                @"hasDetail": @YES,
+                @"icon": @"bolt.badge.clock",
+                @"type": self.typePickField,
+                @"enableCondition": whenNotInGame,
+                @"pickKeys": @[
+                    @"auto",
+                    @"stikjit",
+                    @"sidestore",
+                    @"stosdebug",
+                    @"jitstreamer",
+                    @"trollstore",
+                    @"manual"
+                ],
+                @"pickList": @[
+                    localize(@"preference.debug.jit_enabler.auto", nil),
+                    localize(@"preference.debug.jit_enabler.stikjit", nil),
+                    localize(@"preference.debug.jit_enabler.sidestore", nil),
+                    localize(@"preference.debug.jit_enabler.stosdebug", nil),
+                    localize(@"preference.debug.jit_enabler.jitstreamer", nil),
+                    localize(@"preference.debug.jit_enabler.trollstore", nil),
+                    localize(@"preference.debug.jit_enabler.manual", nil)
+                ]
+            },
+            // --- [Task 134] iOS 26 JS 脚本 JIT 开关（参照 Air） ---
+            // 关闭后 stikjit:// 请求不再附带 UniversalJIT26.js 的
+            // script-data（纯调试器附加式 JIT）。注意：TXM 设备（系统级
+            // 内存映射依赖脚本服务 brk）关闭后可能无法启动游戏。
+            @{@"key": @"jit26_script_disable",
+                @"hasDetail": @YES,
+                @"icon": @"scroll",
+                @"type": self.typeSwitch,
+                @"enableCondition": whenNotInGame,
+                @"requestReload": @YES
+            },
             @{@"key": @"debug_hide_home_indicator",
                 @"hasDetail": @YES,
                 @"icon": @"iphone.and.arrow.forward",
