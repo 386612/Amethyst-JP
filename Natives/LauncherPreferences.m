@@ -69,7 +69,13 @@ int ame141_currentLaunchAllocMem(void) {
     int deviceMB = (int)(NSProcessInfo.processInfo.physicalMemory >> 20);
     int allocmem;
     if (getPrefBool(@"java.auto_ram")) {
-        CGFloat autoRatio = getEntitlementValue(@"com.apple.private.memorystatus") ? 0.5 : 0.25;
+        // Flux 同款修复：jetsam 上限有两条抬升路径——越狱的
+        // com.apple.private.memorystatus，以及带 profile 签名的
+        // com.apple.developer.kernel.increased-memory-limit。只查前者会把正确
+        // entitled 的包按无 entitlement 的 0.25 算，小堆在加载界面静默 GC 空转。
+        BOOL raisedCeiling = getEntitlementValue(@"com.apple.private.memorystatus")
+            || getEntitlementValue(@"com.apple.developer.kernel.increased-memory-limit");
+        CGFloat autoRatio = raisedCeiling ? 0.5 : 0.25;
         allocmem = (int)roundf(deviceMB * autoRatio);
         NSLog(@"[Task141] launch memory from auto ratio %.2f x %dMB = %d MB", autoRatio, deviceMB, allocmem);
     } else {

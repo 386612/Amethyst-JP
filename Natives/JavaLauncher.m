@@ -1763,6 +1763,15 @@ int launchJVM(NSString *accountId, id launchTarget, int width, int height, int m
         NSLog(@"[JavaLauncher] Java 8 detected, skipping G1GC tuning (using default GC)");
     }
 
+    // Flux 同款内存修复（大整合包生死线）：iOS 上决定整合包能否运行的是进程
+    // 上限而非 -Xmx，而线程栈是进程里最大可压缩项——JVM 在本平台每线程 commit
+    // 2MB，MC 线程众多而栈深几乎用不到；-Xss1m 与桌面 64 位 Linux 默认一致，
+    // 会爆栈的 mod 在桌面同样会爆，约还 129MB。软引用宽限从每 MB 空闲
+    // 堆 1 秒降到 250ms，让材质/模型缓存在压力下及时释放而不是 GC 空转。
+    // Java 8/17+ 通用，与 GC 选择无关。
+    PUSH_MARGV_LITERAL("-Xss1m");
+    PUSH_MARGV_LITERAL("-XX:SoftRefLRUPolicyMSPerMB=250");
+
     setenv("INTERNAL_JLI_PATH", (isJava8 ? libjlipath8 : libjlipath11).UTF8String, 1);
     void* libjli = dlopen(getenv("INTERNAL_JLI_PATH"), RTLD_GLOBAL);
 
