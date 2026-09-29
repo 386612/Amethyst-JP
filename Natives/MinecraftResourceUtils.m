@@ -332,6 +332,10 @@
             library[@"downloads"][@"artifact"][@"path"] = @"net/java/dev/jna/jna/5.13.0/jna-5.13.0.jar";
             library[@"downloads"][@"artifact"][@"url"] = @"https://repo1.maven.org/maven2/net/java/dev/jna/jna/5.13.0/jna-5.13.0.jar";
             library[@"downloads"][@"artifact"][@"sha1"] = @"1200e7ebeedbe0d10062093f32925a912020e747";
+            // Flux 同款修复：size 仍是被替换掉的旧版的长度。完整性检查拿新包字节数
+            // 对旧长度→判"下载截断"→重试 3 次放弃→每次启动重下→离线不可用。
+            // 删掉它，以 SHA1 为准（hash 能抓住截断，长度只能有时抓住）。
+            [library[@"downloads"][@"artifact"] removeObjectForKey:@"size"];
         } else if ([library[@"name"] hasPrefix:@"org.ow2.asm:asm-all:"]) {
             // Early versions of the ASM library get repalced with 5.0.4 because Pojav's LWJGL is compiled for
             // Java 8, which is not supported by old ASM versions. Mod loaders like Forge, which depend on this
@@ -341,6 +345,8 @@
             library[@"downloads"][@"artifact"][@"path"] = @"org/ow2/asm/asm-all/5.0.4/asm-all-5.0.4.jar";
             library[@"downloads"][@"artifact"][@"sha1"] = @"e6244859997b3d4237a552669279780876228909";
             library[@"downloads"][@"artifact"][@"url"] = @"https://repo1.maven.org/maven2/org/ow2/asm/asm-all/5.0.4/asm-all-5.0.4.jar";
+            // 同上：继承的 size 属于被替换的版本，一并删掉。
+            [library[@"downloads"][@"artifact"] removeObjectForKey:@"size"];
         }
     }
 

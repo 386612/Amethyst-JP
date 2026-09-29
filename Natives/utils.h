@@ -193,6 +193,9 @@ void openLink(UIViewController* sender, NSURL* link);
 void handle_fatal_exit(int code);
 
 NSString* localize(NSString* key, NSString* comment);
+// YES 表示 NSError 是"当前没有可用网络"，而非服务器返回了不喜欢的内容。
+// 账户刷新只认 NSURLErrorDataNotAllowed 会漏掉飞行模式/无 Wi-Fi 等常见离线形态。
+BOOL isConnectivityError(NSError *error);
 NSMutableDictionary* parseJSONFromFile(NSString *path);
 NSError* saveJSONToFile(NSDictionary *dict, NSString *path);
 void customNSLog(const char *file, int lineNumber, const char *functionName, NSString *format, ...);

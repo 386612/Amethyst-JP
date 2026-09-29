@@ -117,6 +117,28 @@ NSString* localize(NSString* key, NSString* comment) {
     return value;
 }
 
+// 该错误是否意味着设备根本连不上网。值得穷举：原来只认
+// NSURLErrorDataNotAllowed（应用被关蜂窝数据这一种窄形态），而最常见的离线
+// 形态——飞行模式、无 Wi-Fi——是 NSURLErrorNotConnectedToInternet。
+BOOL isConnectivityError(NSError *error) {
+    if (![error.domain isEqualToString:NSURLErrorDomain]) return NO;
+    switch (error.code) {
+        case NSURLErrorNotConnectedToInternet:   // 飞行模式、无 Wi-Fi、无信号
+        case NSURLErrorDataNotAllowed:           // 应用被关蜂窝数据
+        case NSURLErrorNetworkConnectionLost:    // 请求中途掉线
+        case NSURLErrorCannotConnectToHost:
+        case NSURLErrorCannotFindHost:
+        case NSURLErrorDNSLookupFailed:          // captive portal 与坏 DNS
+        case NSURLErrorTimedOut:
+        case NSURLErrorInternationalRoamingOff:
+        case NSURLErrorCallIsActive:
+        case NSURLErrorResourceUnavailable:
+            return YES;
+        default:
+            return NO;
+    }
+}
+
 void customNSLog(const char *file, int lineNumber, const char *functionName, NSString *format, ...)
 {
     va_list ap; 
