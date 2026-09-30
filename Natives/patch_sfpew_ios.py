@@ -380,6 +380,103 @@ def patch_backend_es_detect(root: Path) -> None:
     )
 
 
+GL_VERSION_OVERRIDE_HELPER = '''
+#include <cstdlib>
+#include <string>
+// {marker}: iOS 上 SFPEW 对外上报的 desktop GL / GLSL 级别覆盖开关。
+//
+// 背景（两份实测日志 + 源码行为，非推断）：
+//   安卓 FCL「SFPEW + MobileGlues 开 BSL 光影」实测通过：后端自述
+//   "4.0.0 MobileGlues 1.3.5"，SFPEW 据此上报 "4.0 SFPEW ... (4.0.0
+//   MobileGlues 1.3.5)"，OptiFine 解析出 MC_GLSL_VERSION 400，光影正常。
+//   iOS「SFPEW + MobileGL-gles」实测黑屏：MobileGL-gles 自述
+//   "4.6.0 MobileGL 26.09-dev, Direct (OpenGL ES) Backend"，SFPEW 照 4.6 上报，
+//   OptiFine 解析出 MC_GLSL_VERSION 460；BSL v10 在 460 分支里生成 texture(...)
+//   函数调用，而文件头仍是 "#version 120" 且声明了 uniform sampler2D texture;
+//   —— GLSL 120 里 texture 不是内建函数，glslang 直接报
+//   "'texture' : can't use function syntax on variable"，转译失败 -> 回退原码 ->
+//   原码同样编译失败 -> program 链接失败 -> 光影黑屏。
+//
+// 把上报级别拉回已验证可行的 400 档即可绕开该矛盾：OptiFine 走 120 分支生成，
+// 不再产出与同名 sampler 冲突的 texture() 调用。
+// 不设环境变量时行为与上游逐字一致（无覆盖）。
+//   AMETHYST_SFPEW_GL_VERSION=40     -> 上报 GL 4.0 / GLSL 4.00（安卓实测可行档）
+//   AMETHYST_SFPEW_GL_VERSION=4.0    同上；46 / 4.6 / 330 / 3.30 同理。
+static void sfpewIosApplyGlVersionOverride(int* major, int* minor) {{
+    if (major == nullptr || minor == nullptr) return;
+    const char* v = std::getenv("AMETHYST_SFPEW_GL_VERSION");
+    if (v == nullptr || v[0] == '\\0') return;
+    const std::string s(v);
+    const size_t dot = s.find('.');
+    int a = 0, b = 0;
+    try {{
+        if (dot == std::string::npos) {{
+            if (s.size() >= 3) {{
+                a = std::stoi(s.substr(0, s.size() - 2));
+                b = std::stoi(s.substr(s.size() - 2));
+            }} else if (s.size() == 2) {{
+                a = std::stoi(s.substr(0, 1));
+                b = std::stoi(s.substr(1));
+            }} else {{
+                return;
+            }}
+        }} else {{
+            a = std::stoi(s.substr(0, dot));
+            const std::string rest = s.substr(dot + 1);
+            b = rest.empty() ? 0 : std::stoi(rest);
+        }}
+    }} catch (...) {{
+        return;
+    }}
+    if (a <= 0) return;
+    *major = a;
+    *minor = b;
+}}
+'''.format(marker=MARKER)
+
+
+def patch_gl_version_override(root: Path) -> None:
+    """给 glGetString 的 GL_VERSION / GL_SHADING_LANGUAGE_VERSION 加级别覆盖。
+
+    只在设置了 AMETHYST_SFPEW_GL_VERSION 时生效，未设置时与上游逐字一致。
+    用于把 OptiFine 的 MC_GLSL_VERSION 从 460（MobileGL-gles 自述 4.6）拉回
+    400（安卓 FCL 实测可行档），绕开 BSL v10 在 "#version 120" 里生成
+    texture() 调用导致的转译失败 + 光影黑屏。
+    """
+    gvs = root / "SimpleFPEWrapper" / "getter_version_strings.cpp"
+    if not gvs.is_file():
+        fail(f"missing {gvs}")
+    t = gvs.read_text(encoding="utf-8")
+    if "sfpewIosApplyGlVersionOverride" in t:
+        print("patch_sfpew_ios: GL version override: already patched -- skip")
+        return
+
+    replace_once(
+        gvs,
+        "const GLubyte* glGetString(GLenum name) {",
+        GL_VERSION_OVERRIDE_HELPER + "\nconst GLubyte* glGetString(GLenum name) {",
+        "GL version override (helper insertion)",
+    )
+    replace_once(
+        gvs,
+        "            if (sfpewDesktopGLVersion(&major, &minor)) {\n"
+        "                // Desktop-parseable level first, then who is answering and",
+        "            if (sfpewDesktopGLVersion(&major, &minor)) {\n"
+        "                sfpewIosApplyGlVersionOverride(&major, &minor);\n"
+        "                // Desktop-parseable level first, then who is answering and",
+        "GL version override (GL_VERSION call site)",
+    )
+    replace_once(
+        gvs,
+        "            if (sfpewDesktopGLVersion(&major, &minor)) {\n"
+        "                const GLubyte* backend = g_glFuncs.glGetString(GL_SHADING_LANGUAGE_VERSION);",
+        "            if (sfpewDesktopGLVersion(&major, &minor)) {\n"
+        "                sfpewIosApplyGlVersionOverride(&major, &minor);\n"
+        "                const GLubyte* backend = g_glFuncs.glGetString(GL_SHADING_LANGUAGE_VERSION);",
+        "GL version override (GLSL call site)",
+    )
+
+
 def main() -> None:
     if len(sys.argv) != 2:
         fail(f"usage: {sys.argv[0]} <SimpleFPEWrapper source dir>")
@@ -391,6 +488,7 @@ def main() -> None:
     patch_float_call_site(root)
     patch_format_to_compat(root)
     patch_backend_es_detect(root)
+    patch_gl_version_override(root)
 
 
 if __name__ == "__main__":
