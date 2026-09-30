@@ -6,7 +6,7 @@
 
 /// 弹窗强调色。项目未提供全局 accentColor()，此处本地定义，
 /// 避免隐式函数声明（Xcode 15/clang 下会直接编译失败）。
-static UIColor *accentColor(void) {
+UIColor *accentColor(void) {
     return [UIColor systemBlueColor];
 }
 
@@ -369,7 +369,7 @@ static NSAttributedString *AMERenderMarkdown(NSString *markdown, UIFont *bodyFon
     if (date == nil) return @"";
     NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
     formatter.dateStyle = NSDateFormatterMediumStyle;
-    formatter.timeStyle = NSDateFormatterNoTime;
+    formatter.timeStyle = NSDateFormatterNoStyle;
     NSString *dateStr = [formatter stringFromDate:date];
     if (dateStr.length == 0) return @"";
     return [NSString stringWithFormat:localize(@"update_dialog.published_at", @"Published %@"), dateStr];
