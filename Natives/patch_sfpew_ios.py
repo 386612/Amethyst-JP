@@ -320,7 +320,7 @@ ES_DETECT_HELPER = '''
 //   sfpewDesktopGLVersion()   strstr(raw, "OpenGL ES ")      带尾随空格
 //   detect_backend_target()   strstr(version, "OpenGL ES")   不带尾随空格
 // MobileGL-gles 的自述串 "4.6.0 MobileGL 26.09-dev, Direct (OpenGL ES) Backend"
-// 里 "OpenGL ES" 后面是 ')' 而不是空格，于是带空格版本判“非 ES”、不带空格
+// 里 "OpenGL ES" 后面紧跟右括号而不是空格，于是带空格版本判“非 ES”、不带空格
 // 版本判“ES”，同一个后端在两个函数里结论相反。
 //
 // 默认取“带空格”那一支，理由（实测，非推断）：MobileGL-gles 是
@@ -519,6 +519,69 @@ def patch_gl_version_override(root: Path) -> None:
         "                sfpewIosApplyGlVersionOverride(&major, &minor);\n"
         "                const GLubyte* backend = g_glFuncs.glGetString(GL_SHADING_LANGUAGE_VERSION);",
         "GL version override (GLSL call site)",
+    )
+
+    # ---- else 分支：MobileGL-gles 实际走的是这里 ----
+    # sfpewDesktopGLVersion() 用 strstr(raw, "OpenGL ES ")（带尾随空格）判定，
+    # MobileGL-gles 的自述串 "4.6.0 MobileGL 26.09-dev, Direct (OpenGL ES) Backend"
+    # 里 "OpenGL ES" 后面是 ')' 不是空格 -> cached_is_es = 0 -> 函数返回 false。
+    # 于是 glGetString 走 else 分支（原样上报后端串），上面 if 分支里的覆盖对
+    # MobileGL-gles 永远不触发 —— 等于死代码。必须在这里也加一次。
+    replace_once(
+        gvs,
+        """            } else {
+                // A desktop backend's own string already parses, so it stays
+                // first and the wrapper appends itself - with the commit,
+                // same as above: which build answered is the question a
+                // report has to be able to settle either way.
+                cachedVersionString = std::string((const char*)backend) + \" (with \" +
+                                      kSfpewProjectFullName + \" \" + sfpewVersionAndCommit() + \")\";
+            }""",
+        """            } else {
+                // A desktop backend's own string already parses, so it stays
+                // first and the wrapper appends itself - with the commit,
+                // same as above: which build answered is the question a
+                // report has to be able to settle either way.
+                //
+                // iOS: 覆盖开关必须在本分支也生效。MobileGL-gles 的自述串里
+                // \"OpenGL ES\" 后接右括号，sfpewDesktopGLVersion()（带尾随空格匹配）
+                // 判它为 desktop 后端并返回 false，走的正是本 else 分支 ——
+                // 上面 if 分支里的覆盖对它永远是死代码。
+                // 覆盖生效时改用「可解析级别在前」的同一格式，保证 GL_VERSION 与
+                // GL_SHADING_LANGUAGE_VERSION 成对。
+                sfpewIosApplyGlVersionOverride(&major, &minor);
+                if (major > 0) {
+                    cachedVersionString = std::to_string(major) + \".\" + std::to_string(minor) + \" \" +
+                                          kSfpewProjectName + \" \" + sfpewVersionAndCommit() + \" (\" +
+                                          (const char*)backend + \")\";
+                } else {
+                    cachedVersionString = std::string((const char*)backend) + \" (with \" +
+                                          kSfpewProjectFullName + \" \" + sfpewVersionAndCommit() + \")\";
+                }
+            }""",
+        "GL version override (else branch, GL_VERSION)",
+    )
+    replace_once(
+        gvs,
+        """            } else {
+                const GLubyte* backend = g_glFuncs.glGetString(GL_SHADING_LANGUAGE_VERSION);
+                if (!backend) return nullptr;
+                cachedGlslString = (const char*)backend;
+            }""",
+        """            } else {
+                // iOS: 同上，MobileGL-gles 走本分支，覆盖必须在此生效。
+                sfpewIosApplyGlVersionOverride(&major, &minor);
+                if (major > 0) {
+                    const GLubyte* be = g_glFuncs.glGetString(GL_SHADING_LANGUAGE_VERSION);
+                    cachedGlslString = std::to_string(major) + \".\" + std::to_string(minor) +
+                                       \"0 SFPEW (\" + (be ? (const char*)be : \"\") + \")\";
+                } else {
+                    const GLubyte* backend = g_glFuncs.glGetString(GL_SHADING_LANGUAGE_VERSION);
+                    if (!backend) return nullptr;
+                    cachedGlslString = (const char*)backend;
+                }
+            }""",
+        "GL version override (else branch, GLSL)",
     )
 
 
