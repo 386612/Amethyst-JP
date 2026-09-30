@@ -490,6 +490,7 @@ add_executable(AngelAuraAmethyst
 
   # Update checker（参考 FCL/ZL2，使用 GitHub Releases API 检查正式版更新）
   UpdateChecker.m
+  UpdateDialogViewController.m
 
   # Minecraft 新闻（参考 PCL-CE，调用 minecraft-services.net 官方新闻 API）
   MinecraftNewsItem.m
