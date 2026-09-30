@@ -636,6 +636,11 @@
               @"action": ^void(){
                   [self checkForUpdateFromSettings];
               }
+            },
+            @{@"key": @"auto_check_update",
+              @"hasDetail": @YES,
+              @"icon": @"arrow.triangle.2.circlepath",
+              @"type": self.typeSwitch
             }
         ], @[
             // Download mirror policy settings（分类镜像策略，由 PLMirrorCenter 统一读取）
@@ -1531,36 +1536,11 @@
 
 #pragma mark - Check For Update
 
-/// 设置页"检查更新"入口：调用 UpdateChecker 检查正式版更新，弹窗显示结果。
+/// 设置页"检查更新"入口（参照 ZL2 手动检查）：
+/// 走 UpdateDialogViewController 弹窗 —— 顶部版本号、中间完整可滚动的更新日志、
+/// 底部"忽略此版本 / 稍后 / 更新"，点更新跳转到本次查到的那个 release 页面。
 - (void)checkForUpdateFromSettings {
-    /* 显示加载中的 alert */
-    UIAlertController *loadingAlert = [UIAlertController
-        alertControllerWithTitle:localize(@"check_update.checking", @"正在检查更新…")
-                         message:nil
-                  preferredStyle:UIAlertControllerStyleAlert];
-    [self presentViewController:loadingAlert animated:YES completion:nil];
-
-    [UpdateChecker checkForUpdateWithCompletion:^(UpdateInfo *info, NSError *error) {
-        [loadingAlert dismissViewControllerAnimated:YES completion:^{
-            if (error || info == nil) {
-                [self showUpdateAlertWithTitle:localize(@"check_update.failed", @"检查更新失败")
-                                         message:error.localizedDescription ?: localize(@"i18n_str_97", nil)
-                                       hasUpdate:NO
-                                          info:nil];
-                return;
-            }
-            if (info.hasUpdate) {
-                [self showUpdateAvailableAlert:info];
-            } else {
-                [self showUpdateAlertWithTitle:localize(@"check_update.up_to_date", @"已是最新版本")
-                                         message:[NSString stringWithFormat:
-                                             localize(@"check_update.current_version", @"当前版本 %@，已是最新正式版。"),
-                                             info.currentVersion]
-                                       hasUpdate:NO
-                                          info:nil];
-            }
-        }];
-    }];
+    [UpdateChecker performManualCheckFromPresenter:self showUpToDate:YES];
 }
 
 - (void)showUpdateAlertWithTitle:(NSString *)title

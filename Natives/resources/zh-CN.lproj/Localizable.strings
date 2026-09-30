@@ -1972,3 +1972,13 @@
 "preference.title.jit26_script_disable" = "禁用 iOS 26 JS 脚本 JIT";
 "preference.detail.jit26_script_disable" = "启动游戏时不再向 JIT 工具发送 UniversalJIT26.js 脚本（纯调试器附加式 JIT）。仅当你的工具不支持脚本、或脚本导致异常时才需要开启；依赖系统级内存映射的设备（TXM）开启后可能无法启动游戏。";
 "i18n_str_jit26_not_ready" = "JIT26 调试器未就绪：JIT 断点无人应答。请确认已在 StikDebug 中指定 Universal JIT 脚本并重新开启 JIT，然后再点击启动。";
+
+// 启动器检查更新（ZL2 风格弹窗 + 启动自动检查）
+"update_dialog.title" = "发现新版本";
+"update_dialog.version_from" = "%@（当前：%@）";
+"update_dialog.published_at" = "发布于 %@";
+"update_dialog.ignore" = "忽略此版本";
+"update_dialog.later" = "稍后";
+"update_dialog.update" = "更新";
+"preference.title.auto_check_update" = "启动时检查更新";
+"preference.detail.auto_check_update" = "启动启动器时自动检查 GitHub Releases。每小时最多检查一次，被你选择忽略的版本不会再提示。";
