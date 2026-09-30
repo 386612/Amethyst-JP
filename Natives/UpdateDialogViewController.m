@@ -6,7 +6,7 @@
 
 /// 弹窗强调色。项目未提供全局 accentColor()，此处本地定义，
 /// 避免隐式函数声明（Xcode 15/clang 下会直接编译失败）。
-UIColor *accentColor(void) {
+static UIColor *accentColor(void) {
     return [UIColor systemBlueColor];
 }
 
