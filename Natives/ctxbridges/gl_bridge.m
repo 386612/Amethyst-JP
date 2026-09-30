@@ -1422,7 +1422,15 @@ static bool dlsym_EGL() {
     //
     // 其余 EGL 函数（eglChooseConfig / eglCreateWindowSurface / eglSwapBuffers 等）
     // LTW 不做 wrapper，直接从 ANGLE 解析。
-    BOOL useLTW = renderer && strcmp(renderer, RENDERER_NAME_LTW) == 0;
+    // 必须按「真后端」eglRenderer 判定，不能用 renderer：
+    // SFPEW 顶替模式下 AMETHYST_RENDERER 已是 libSimpleFPEWrapper.dylib，
+    // renderer 永远不等于 libltw.dylib，于是 useLTW 恒为 NO —— LTW 的
+    // eglCreateContext / eglDestroyContext / eglMakeCurrent 三个 wrapper 一次都
+    // 不会被解析（下面 load_egl_symbol(ltw_handle, ...) 整段被跳过），LTW 注入的
+    // 「建 ES3 上下文 + 安装 GL 函数指针转译表 + 伪装 ARB 扩展」完全不生效，
+    // 转译层形同未接入，画面必黑。非 SFPEW 模式下 eglRenderer == renderer，
+    // 与改动前逐字等价。
+    BOOL useLTW = eglRenderer && strcmp(eglRenderer, RENDERER_NAME_LTW) == 0;
     void *ltw_handle = NULL;
     if (useLTW) {
         ltw_handle = dlopen("@rpath/" RENDERER_NAME_LTW, RTLD_NOW | RTLD_LOCAL);
