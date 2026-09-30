@@ -6,10 +6,6 @@
 
 /// 弹窗强调色。项目未提供全局 accentColor()，此处本地定义，
 /// 避免隐式函数声明（Xcode 15/clang 下会直接编译失败）。
-static UIColor *accentColor(void) {
-    return [UIColor systemBlueColor];
-}
-
 #pragma mark - 简易 Markdown 渲染
 
 typedef NS_ENUM(NSInteger, AMEInlineKind) {
