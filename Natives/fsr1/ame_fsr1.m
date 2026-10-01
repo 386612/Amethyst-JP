@@ -84,6 +84,10 @@ typedef void (*ame_fn_v)(void);
 // ---------------------------------------------------------------------------
 static void *g_rendererHandle = NULL;
 static int   g_rendererMiss   = 0;
+// 诊断用：解析失败/空转都只打一次，避免每帧刷屏（日志会瞬间顶满）。
+static BOOL  g_resolveFailLogged = NO;
+static BOOL  g_unresolvedLogged  = NO;
+static BOOL  g_idleLogged        = NO;
 
 static void *ameRendererHandle(void) {
     if (g_rendererHandle != NULL) return g_rendererHandle;
@@ -182,7 +186,10 @@ static void (*ame_glClearColor)(ame_GLfloat, ame_GLfloat, ame_GLfloat, ame_GLflo
 static void (*ame_glClear)(ame_GLenum);
 static void (*ame_glPixelStorei)(ame_GLenum, ame_GLint);
 
-#define AME_RESOLVE(dst, name) do { (dst) = ameResolveGL(name); if ((dst) == NULL) { allOK = NO; } } while (0)
+#define AME_RESOLVE(dst, name) do { (dst) = ameResolveGL(name); if ((dst) == NULL) { \
+    if (!g_resolveFailLogged) { g_resolveFailLogged = YES; \
+        NSLog(@"[FSR1] resolve failed: %s", name); } \
+    allOK = NO; } } while (0)
 
 static BOOL ameResolveAll(void) {
     BOOL allOK = YES;
@@ -693,8 +700,17 @@ void ameFsr1Present(int surfaceW, int surfaceH) {
     if (!ameFsr1Wanted()) return;
 
     if (!g_s.resolved) {
-        if (!ameResolveAll()) return;      // 渲染器可能还没载入，下一帧再试
+        if (!ameResolveAll()) {
+            // 渲染器可能还没载入，下一帧再试；但至少留一条可诊断的痕迹，
+            // 免得"完全无效果"却连一行日志都没有（本次排查的最大障碍）。
+            if (!g_unresolvedLogged) {
+                g_unresolvedLogged = YES;
+                NSLog(@"[FSR1] inactive: GL entry points unresolved (renderer not loaded yet?)");
+            }
+            return;
+        }
         g_s.resolved = YES;
+        g_unresolvedLogged = NO;
     }
 
     // 源区域取 MC 当前的实际 viewport，而不是按 scale 算出的理论渲染尺寸：
@@ -706,7 +722,17 @@ void ameFsr1Present(int surfaceW, int surfaceH) {
     if (srcW < 2 || srcH < 2) return;
     if (srcW > surfaceW) srcW = surfaceW;
     if (srcH > surfaceH) srcH = surfaceH;
-    if (srcW >= surfaceW && srcH >= surfaceH) return;   // 未缩放，无需上采样
+    if (srcW >= surfaceW && srcH >= surfaceH) {
+        // 常见成因：video.resolution 仍是 100%（没有可上采样的东西），
+        // 或 MC 的 viewport 已被别处纠正成 surface 尺寸。留一次日志。
+        if (!g_idleLogged) {
+            g_idleLogged = YES;
+            NSLog(@"[FSR1] idle: viewport %dx%d == surface %dx%d (nothing to upscale; "
+                  @"set Resolution below 100%%)", srcW, srcH, surfaceW, surfaceH);
+        }
+        return;   // 未缩放，无需上采样
+    }
+    g_idleLogged = NO;
 
     if (!g_s.built ||
         g_s.surfaceW != surfaceW || g_s.surfaceH != surfaceH ||
