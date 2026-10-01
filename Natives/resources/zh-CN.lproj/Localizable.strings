@@ -245,6 +245,7 @@
 "preference.title.renderer.debug.zink" = "Zink（Mesa 25.0.7）- OpenGL 4.1";
 "preference.title.renderer.debug.ltw" = "LTW （1.17+）- gl2es（严重不稳定）";
 "preference.title.renderer.debug.vulkan" = "MoltenVK（26.2+）- Vulkan 1.4";
+"preference.title.renderer.debug.nggl4es" = "Krypton Wrapper（≤26.2）- ZL2 同款 gl4es，老版本首选（原 NG-GL4ES）";
 
 "preference.detail.renderer" = "更改使用的渲染器";
 

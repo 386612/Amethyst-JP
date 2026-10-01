@@ -1263,6 +1263,23 @@ int launchJVM(NSString *accountId, id launchTarget, int width, int height, int m
         if (isMithrilRenderer(renderer.UTF8String)) {
             NSLog(@"[JavaLauncher] Mithril renderer active: EGL/GL from libmithril.dylib (Vulkan backend)");
         }
+
+        // NG-GL4ES（"Krypton Wrapper"，ZL2 同款 gl4es）。NGG_DIR_PATH 指向
+        // POJAV_HOME 下的 ngg/（上游默认 /sdcard/NGG 在 iOS 必然 fopen 失败——
+        // config_refresh 对缺失文件静默返回，无 config.json 时行为与默认完全
+        // 一致；指到可写目录只是让高级用户可以放 config.json 调参）。
+        // 其余零环境需求：EGL 由宿主 gl_bridge 提供（egl_bridge 的渲染器分支
+        // 零 EGL 动作），dylib 由 LWJGL 作为 opengl.libname 加载。
+        if ([renderer isEqualToString:@ RENDERER_NAME_NGGL4ES]) {
+            const char *ngg_home = getenv("POJAV_HOME");
+            if (ngg_home && *ngg_home) {
+                char ngg_path[1024];
+                snprintf(ngg_path, sizeof(ngg_path), "%s/ngg", ngg_home);
+                setenv("NGG_DIR_PATH", ngg_path, 1);
+            }
+            NSLog(@"[JavaLauncher] NG-GL4ES renderer active (NGG_DIR_PATH=%s)",
+                  getenv("NGG_DIR_PATH") ?: "<unset>");
+        }
         // Setup AMETHYST_GRAPHICS_API（MC 26.2+ Graphics API：default/vulkan/opengl）
         // 仅 MC 26.2+ 识别此选项，旧版本 MC 会忽略 options.txt 中的 graphicsApi 字段。
         //
