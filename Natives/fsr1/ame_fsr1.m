@@ -462,6 +462,7 @@ typedef struct {
 
     int     surfaceW, surfaceH;   // EGL surface（全分辨率）
     int     renderW,  renderH;    // 渲染分辨率（低）
+    int     deadW,    deadH;      // 置死时的 surface 几何（用于几何变化后复活）
 
     ame_GLuint texLow;      // 渲染分辨率的拷贝
     ame_GLuint fboLow;
@@ -474,6 +475,25 @@ typedef struct {
 } AmeFsr1State;
 
 static AmeFsr1State g_s = {0};
+
+static void ameReleaseResources(void);   // 定义在下方「资源」一节
+
+// —— 置死（自我关闭）——
+// 记录置死时的 surface 几何：几何变了（改分辨率、旋转、重建 surface）就允许
+// 复活重试。旧行为是「出过一次错就永久关闭」，于是启动期的任何瞬时故障
+// （ANGLE 还在建面、MC 临时绑着离屏 FBO、上下文刚切换）都会让 FSR1 在本局
+// 余下时间彻底沉默，且日志里只有一行 disabled —— 用户看到的是「开了没效果」。
+// 复活只在几何真的变化时发生，不会在正常帧循环里反复重试失败的操作。
+static void ameMarkDead(int surfaceW, int surfaceH) {
+    if (!g_s.dead) {
+        NSLog(@"[FSR1] self-disabled at surface %dx%d (recovers if the surface geometry changes)",
+              surfaceW, surfaceH);
+    }
+    g_s.dead = YES;
+    g_s.deadW = surfaceW;
+    g_s.deadH = surfaceH;
+    ameReleaseResources();
+}
 
 static float ameFsr1Scale(void) {
     // 优先环境变量（便于 A/B，不用改设置），其次设置项。
@@ -696,7 +716,21 @@ static BOOL ameBuild(int surfaceW, int surfaceH, int renderW, int renderH) {
 // ---------------------------------------------------------------------------
 void ameFsr1Present(int surfaceW, int surfaceH) {
     if (surfaceW <= 0 || surfaceH <= 0) return;
-    if (g_s.dead) return;
+    // 置死后只允许在 surface 几何变化时复活：本局的启动期瞬时故障
+    // （ANGLE 尚未建稳、MC 临时绑着离屏 FBO、上下文刚切换）不该让 FSR1 在
+    // 余下时间里彻底沉默。几何没变则立即返回，不会在正常帧循环里反复重试
+    // 注定失败的操作（与置死前的行为一致）。
+    if (g_s.dead) {
+        if (g_s.deadW != surfaceW || g_s.deadH != surfaceH) {
+            NSLog(@"[FSR1] retry after geometry change: dead at %dx%d, now %dx%d",
+                  g_s.deadW, g_s.deadH, surfaceW, surfaceH);
+            g_s.dead = NO;
+            g_s.deadW = 0; g_s.deadH = 0;
+            g_s.logged = NO;
+        } else {
+            return;
+        }
+    }
     if (!ameFsr1Wanted()) return;
 
     if (!g_s.resolved) {
@@ -739,8 +773,7 @@ void ameFsr1Present(int surfaceW, int surfaceH) {
         g_s.renderW  != srcW     || g_s.renderH  != srcH) {
         if (!ameBuild(surfaceW, surfaceH, srcW, srcH)) {
             NSLog(@"[FSR1] disabled: resource setup failed");
-            g_s.dead = YES;
-            ameReleaseResources();
+            ameMarkDead(surfaceW, surfaceH);
             return;
         }
         if (!g_s.logged) {
@@ -785,8 +818,7 @@ void ameFsr1Present(int surfaceW, int surfaceH) {
 
     if (prevSamples > 1) {
         NSLog(@"[FSR1] disabled: window surface is multisampled (samples=%d)", prevSamples);
-        g_s.dead = YES;
-        ameReleaseResources();
+        ameMarkDead(surfaceW, surfaceH);
         aborted = YES;
     }
 
@@ -799,8 +831,7 @@ void ameFsr1Present(int surfaceW, int surfaceH) {
 
         if (ame_glGetError() != AME_GL_NO_ERROR) {
             NSLog(@"[FSR1] disabled: blit to render-resolution target failed");
-            g_s.dead = YES;
-            ameReleaseResources();
+            ameMarkDead(surfaceW, surfaceH);
             aborted = YES;
         }
     }
@@ -843,8 +874,7 @@ void ameFsr1Present(int surfaceW, int surfaceH) {
     // 出错就自我关闭，绝不停在半截状态
     if (!aborted && ame_glGetError() != AME_GL_NO_ERROR) {
         NSLog(@"[FSR1] disabled: GL error during upscale pass");
-        g_s.dead = YES;
-        ameReleaseResources();
+        ameMarkDead(surfaceW, surfaceH);
     }
 
     // —— 恢复 GL 状态 ——
