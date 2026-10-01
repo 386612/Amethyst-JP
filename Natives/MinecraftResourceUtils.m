@@ -313,7 +313,11 @@
             library[@"downloads"][@"classifiers"] != nil ||
             library[@"natives"] != nil ||
             // Exclude LWJGL libraries
-            [library[@"name"] hasPrefix:@"org.lwjgl"]
+            // 放行 lwjgl-glfw：Forge/NeoForge 的 fmlearlywindow 依赖 org.lwjgl:lwjgl-glfw，
+            // 全部跳过会 NoClassDefFoundError: org/lwjgl/glfw/GLFW 并 exit(1)。
+            ([library[@"name"] hasPrefix:@"org.lwjgl"]
+             && ![library[@"name"] hasPrefix:@"org.lwjgl:lwjgl-glfw"]
+             && ![library[@"name"] hasPrefix:@"org.lwjgl:lwjgl-natives"])
         );
 
         NSString *versionStr = [library[@"name"] componentsSeparatedByString:@":"][2];
