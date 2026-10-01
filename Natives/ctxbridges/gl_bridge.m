@@ -2,6 +2,10 @@
 #import <QuartzCore/QuartzCore.h>
 #import "SurfaceViewController.h"
 #import "LauncherPreferences.h"
+// 启动器侧 FSR1（Natives/fsr1/ame_fsr1.m）。与 egl_bridge.m 同一个头：
+// gl_bridge 的 Task60 对齐块需要 ameFsr1NeedsFullResSurface() 来判断
+// 「surface 该建全分辨率还是缩放分辨率」。
+#import "fsr1/ame_fsr1.h"
 
 #include <dlfcn.h>
 #include <string.h>
@@ -1825,6 +1829,30 @@ gl_render_window_t* gl_init_context(gl_render_window_t *share) {
             // updateSavedResolution 单独缩至 surface/fsr_scale，本块只负责
             // surface/drawable 口径，不受 fsr_scale 影响。
             CGFloat rs60 = resolutionScale;
+            // —— FSR1（启动器侧上采样）：surface 必须是全分辨率 ——
+            // FSR1 的工作前提是「surface（framebuffer 0）全分辨率 + MC 按缩放
+            // 后的低分辨率绘制」：低分辨率画面落在 surface 左下角，由
+            // ameFsr1Present 在 swap 前 EASU 上采样铺满。交给 MC 的窗口尺寸
+            // 由 updateSavedResolution 单独缩到 resolutionScale，与此处无关。
+            //
+            // 若这里仍按 resolutionScale 把 surface 一起缩掉，有两个后果：
+            //   1) surface == MC viewport —— ameFsr1Present 判定「没有可上采样
+            //      的东西」直接空转（日志 [FSR1] idle），用户看到的就是
+            //      「开了跟没开一样」；
+            //   2) 更要命的是本块会覆盖 updateSavedResolution 刚写好的全分辨率
+            //      drawableSize（后者在 FSR1 下刻意写 physical），把 layer 拉回
+            //      低分辨率，而 ANGLE 已按新的 contentsScale(=screenScale) 把
+            //      EGL surface 建成全分辨率 —— present 的全分辨率 backbuffer 被
+            //      塞进低分辨率 drawable，CoreAnimation 再拉伸上屏，表现正是
+            //      「画面跑到左下角、被放大且超出屏幕」。
+            // FSR1 关闭或 resolution=100% 时该判定为假，rs60 与旧行为逐字一致
+            // （零回归）。
+            if (ameFsr1NeedsFullResSurface()) {
+                rs60 = 1.0;
+                NSLog(@"[GLGeo] Task60 FSR1 full-res surface: resolutionScale %.2f "
+                      @"NOT applied to the surface (render resolution goes to MC's window; "
+                      @"FSR1 upscales it at present)", resolutionScale);
+            }
             if (rs60 <= 0.0) rs60 = 1.0;  // 防御：全局未初始化（JavaGUI 等路径）
             oldDrawable50 = ml60.drawableSize;
             oldScale50 = layer.contentsScale;
