@@ -260,7 +260,18 @@ static NSString * const kAiSessionMessagesDidChangeNotification = @"AiSessionMes
                         chunkHandler:chunkHandler
                   completionHandler:completionHandler];
         } else {
-            // 无工具调用，正常结束
+            // 无工具调用，正常结束：若 finish_reason 为 length/content_filter，
+            // 说明被 maxTokens/内容过滤截断，追加一句中文提示，避免“话说一半就停”无解释。
+            id finishReason = [fullResponse isKindOfClass:[NSDictionary class]] ? fullResponse[@"finish_reason"] : nil;
+            if ([finishReason isKindOfClass:[NSString class]]) {
+                if ([finishReason isEqualToString:@"length"]) {
+                    NSString *hint = @"\n\n⚠️ 回答因达到最大 Token 被截断（显示不全），可在 AI 提供商设置里调大 maxTokens 后重试，或让我分段继续。";
+                    assistantMessage.content = [(assistantMessage.content ?: @"") stringByAppendingString:hint];
+                } else if ([finishReason isEqualToString:@"content_filter"]) {
+                    NSString *hint = @"\n\n⚠️ 回答被内容过滤截断（显示不全），请换个问法重试。";
+                    assistantMessage.content = [(assistantMessage.content ?: @"") stringByAppendingString:hint];
+                }
+            }
             [strongSelf saveSession:session];
             strongSelf.running = NO;
             if (completionHandler) completionHandler(nil);
