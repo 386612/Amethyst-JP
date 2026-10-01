@@ -748,15 +748,36 @@ static void ame_task41_swap_forensics(EGLSurface surface, unsigned long swapInde
     // viewport 双维严格小于 surface：转置形态（一维大一维小，如 820x1180 vs
     // 1180x820）不满足 → 真正的几何事故仍会走自愈链。FSR 关闭或非 MG
     // 渲染器时 viewport==surface，豁免天然无操作。
-    static int s_task78_fsr_link = -1;
-    if (s_task78_fsr_link < 0) {
+    // 启动器侧 FSR1（video.fsr1，见 Natives/fsr1/ame_fsr1.m）与 MG 内置 FSR1
+    // 在几何上是同一种形态：surface 保持全分辨率、MC 按低分辨率绘制，画面落
+    // 在 surface 一角再由 FSR1 上采样铺满。若不把它纳入豁免，本函数就会把这
+    // 个「按设计存在的失配」判成几何事故，Task49 geo-heal / Task55 realign
+    // 会试图把 surface 拉回 viewport 尺寸，而 transposed 标志恒为真又会挡住
+    // SurfaceViewController 对 drawableSize 的写入 —— 全分辨率 backbuffer 被
+    // 塞进低分辨率 drawable 再上屏，表现正是「画面跑到左下角、被放大且超出
+    // 屏幕」。真正的几何事故（转置：一维大一维小）不满足下方的双维严格小于
+    // 条件，仍会走自愈链；100% 分辨率下 viewport==surface，豁免天然无操作。
+    // 每帧重算而非缓存：设置页可以在运行中改开关/分辨率并重建 surface，
+    // 缓存会让豁免在 FSR1 已开启后仍停在关闭态。两个 getenv + 一次偏好读取
+    // 每帧一次，开销可忽略（日志仍只打一次）。
+    int s_task78_fsr_link = 0;
+    {
         const char *ame78_renderer = getenv("AMETHYST_RENDERER");
         NSInteger ame78_fsr = getPrefInt(@"mobileglues.fsr1_setting");
-        s_task78_fsr_link = (ame78_renderer != NULL &&
-                             strcmp(ame78_renderer, RENDERER_NAME_MOBILEGLUES) == 0 &&
-                             ame78_fsr > 0) ? 1 : 0;
-        if (s_task78_fsr_link) {
-            NSLog(@"[GLGeo] Task78 FSR linkage active: renderer=MobileGlues fsr1_setting=%ld -- viewport (render) < surface is the expected upscale geometry, compensation chain exempted", (long)ame78_fsr);
+        BOOL ame78_on = getPrefBool(@"video.fsr1");
+        const char *ame78_env = getenv("AMETHYST_FSR1");
+        if (ame78_env != NULL) {
+            if (strcmp(ame78_env, "0") == 0) ame78_on = NO;
+            else if (strcmp(ame78_env, "1") == 0) ame78_on = YES;
+        }
+        const BOOL ame78_mg = (ame78_renderer != NULL &&
+                               strcmp(ame78_renderer, RENDERER_NAME_MOBILEGLUES) == 0 &&
+                               ame78_fsr > 0);
+        s_task78_fsr_link = (ame78_mg || ame78_on) ? 1 : 0;
+        static BOOL s_task78_link_logged = NO;
+        if (s_task78_fsr_link && !s_task78_link_logged) {
+            s_task78_link_logged = YES;
+            NSLog(@"[GLGeo] Task78 FSR linkage active: mg_fsr1_setting=%ld launcher_fsr1=%d -- viewport (render) < surface is the expected upscale geometry, compensation chain exempted", (long)ame78_fsr, (int)ame78_on);
         }
     }
     const BOOL geoMismatch = (viewport[2] > 0 && viewport[3] > 0 &&

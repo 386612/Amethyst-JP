@@ -1380,12 +1380,22 @@ static UIView *findSDL_uikitview(UIView *root);
         // FSR1 接管时写全分辨率（physical），否则维持原语义（windowWidth/Height）
         const CGFloat drawW = fsr1FullResSurface ? MAX(physicalWidth, 1)  : MAX(windowWidth, 1);
         const CGFloat drawH = fsr1FullResSurface ? MAX(physicalHeight, 1) : MAX(windowHeight, 1);
+        // FSR1 接管时**必须**写 drawableSize，不能被下面的失配 gate 拦掉：
+        // 此时 surface 是全分辨率、MC 按低分辨率绘制，二者「失配」正是 FSR1
+        // 上采样的输入前提，于是 Task53 的 ame_gl_surface_transposed() 恒为
+        // 真。若沿用该 gate，drawableSize 会被整段跳过、停留在上一次的低分
+        // 辨率值，而 ANGLE 已按新的 contentsScale(=screenScale) 把 EGL
+        // surface 建成全分辨率 —— present 的全分辨率 backbuffer 被塞进低分
+        // 辨率 drawable，CoreAnimation 再把它拉伸上屏，表现就是「画面跑到
+        // 左下角、被放大且超出屏幕」。FSR1 场景下 surface == drawable ==
+        // bounds x contentsScale == physical 恒成立，此处写入是治愈而非与
+        // 重对齐链拉锯。
         if (ame_gl_surface_owns_layer()) {
-            if (!ame_gl_surface_transposed()) {
+            if (fsr1FullResSurface || !ame_gl_surface_transposed()) {
                 metalLayer.drawableSize = CGSizeMake(drawW, drawH);
-                NSLog(@"[SurfaceVC] drawableSize=%dx%d (contentsScale %.2f, resolution %.0f%%)",
+                NSLog(@"[SurfaceVC] drawableSize=%dx%d (contentsScale %.2f, resolution %.0f%%, fsr1FullResSurface=%d)",
                       (int)metalLayer.drawableSize.width, (int)metalLayer.drawableSize.height,
-                      metalLayer.contentsScale, resolutionScale * 100.0f);
+                      metalLayer.contentsScale, resolutionScale * 100.0f, (int)fsr1FullResSurface);
             }
         } else {
             metalLayer.drawableSize = CGSizeMake(drawW, drawH);
