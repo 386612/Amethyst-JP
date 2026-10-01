@@ -11,8 +11,8 @@
 #import "AiToolRegistry.h"
 #import "AiSafetyManager.h"
 
-/// 工具循环最多轮数
-static const NSInteger kMaxToolRounds = 10;
+/// 工具循环最多轮数（单次对话内模型→工具→模型往返上限）
+static const NSInteger kMaxToolRounds = 100;
 /// 同一工具调用最多尝试次数（含失败）
 static const NSInteger kMaxToolAttempts = 3;
 
