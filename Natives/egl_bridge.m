@@ -227,7 +227,7 @@ static int pojavFinishOpenGLInit(int result) {
 
 // ---- NG-GL4ES（"Krypton Wrapper"，ZL2 同款 gl4es）后端钉扎 + 初始化时序 ----
 //
-// vendored 源码：ThirdParty/ZalithLauncher2（BZLZHH/NG-GL4ES，MIT），随包构建为
+// vendored 源码：ThirdParty/NG-GL4ES（BZLZHH/NG-GL4ES，MIT），随包构建为
 // libnggl4es.dylib（Makefile dep_nggl4es）。它只做 GL 转译，EGL 全部由宿主
 // ANGLE 提供（本文件的渲染器分支零 EGL 动作）。
 //

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """task206_gen_nggl4es_aliases.py -- generate
-ThirdParty/ZalithLauncher2/src/gl/wrap/nggl4es_darwin_aliases.c
+ThirdParty/NG-GL4ES/src/gl/wrap/nggl4es_darwin_aliases.c
 
 Task206 (NG-GL4ES / "Krypton Wrapper" port, the gl4es used by ZalithLauncher 2).
 

@@ -905,7 +905,7 @@ assets:
 
 # --- dep_nggl4es：NG-GL4ES（"Krypton Wrapper"，BZLZHH/NG-GL4ES，MIT）-----------
 # ZalithLauncher 2 用的 gl4es 分支：能处理更高级的着色器、几乎全 MC 版本可跑。
-# vendored 源码在 ThirdParty/ZalithLauncher2（见其 CMakeLists 的 PROVENANCE 头）。
+# vendored 源码在 ThirdParty/NG-GL4ES（见其 CMakeLists 的 PROVENANCE 头）。
 # 作为独立 cmake 树构建，链接 dep_mg 出来的 glslang 静态库（pin f5f664d 15.0.0 +
 # lvalue-nullguard + pool-zero/size-guards 双崩溃补丁，继承崩溃家族修复；NG 自带的
 # 15.4 头已从树中移除，防头/库漂移）与预编译的 SPIRV-Cross C API impl dylib。
@@ -947,7 +947,7 @@ dep_nggl4es: dep_mg
 		-DNGGL4ES_GLSLANG_LIBS="$$ngg_libs" \
 		-DNGGL4ES_SPVC_IMPL="$(SOURCEDIR)/Natives/resources/Frameworks/libspirv-cross-c-shared.0.impl.dylib" \
 		-DNGGL4ES_FRAMEWORK_DIR="$(SOURCEDIR)/Natives/resources/Frameworks" \
-		$(SOURCEDIR)/ThirdParty/ZalithLauncher2/ || exit 1
+		$(SOURCEDIR)/ThirdParty/NG-GL4ES/ || exit 1
 	cmake --build $(WORKINGDIR)/nggl4es --config RelWithDebInfo -j$(JOBS) --target nggl4es || exit 1
 	cp $(WORKINGDIR)/nggl4es/libnggl4es.dylib $(WORKINGDIR)/ || exit 1
 	echo '[Amethyst v$(VERSION)] dep_nggl4es - end'
