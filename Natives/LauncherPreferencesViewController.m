@@ -735,6 +735,18 @@
               @"min": @(25),
               @"max": @(150)
             },
+            // 启动器侧 FSR1（EASU 边缘自适应上采样 + RCAS 锐化）。
+            // 它接管 video.resolution 的缩放：把原本由 CoreAnimation 做的双线性
+            // 拉伸换成 FSR1，低分辨率渲染 + 高质量还原，换帧率。
+            // 位置在 EGL 之上、渲染器之外，只依赖当前上下文能解析到的 GL 入口点，
+            // 因此不挑后端（MG / MobileGlues / ANGLE / LTW / SFPEW 通用）。
+            // 只有 video.resolution < 100% 时才真正介入；100% 时无东西可上采样。
+            @{@"key": @"fsr1",
+              @"hasDetail": @YES,
+              @"icon": @"arrow.up.left.and.arrow.up.right",
+              @"type": self.typeSwitch,
+              @"enableCondition": whenNotInGame
+            },
             // 帧率限制选项已移除：CADisplayLink 始终采用 30-120Hz 自适应范围，
             // 由屏幕硬件能力决定实际帧率（60Hz 设备仍为 60，120Hz ProMotion 设备可达 120）。
             // 不再提供"最大帧率限制 60FPS"开关，避免用户误关闭导致帧率被人为锁死。

@@ -1,4 +1,5 @@
 #import "SurfaceViewController.h"
+#import "fsr1/ame_fsr1.h"
 
 #include "jni.h"
 #include <assert.h>
@@ -624,6 +625,20 @@ static void pojavEnforceViewportAtSwap(void) {
     if (!pojavEglSurfacePixelSize(&eglW, &eglH)) return;
     if (eglW <= 0 || eglH <= 0) return;
 
+    // FSR1 生效时，MC 应当按「渲染分辨率」绘制，画面落在 surface（全分辨率）
+    // 左下角的一块矩形里，由 fsr1 在 present 前上采样铺满。此时正确的 viewport
+    // 是渲染分辨率而不是 surface 尺寸 —— 若此处仍按 surface 纠正，游戏就会
+    // 按全分辨率渲染，FSR1 失去意义，且 fsr1 读到的源区域也不再是缩放后的画面。
+    // ameFsr1RenderSize 在 FSR1 未生效时把 out 写成 surface 尺寸并返回 false，
+    // 故这条路径对关闭态完全无副作用。
+    {
+        int rw = 0, rh = 0;
+        if (ameFsr1RenderSize(eglW, eglH, &rw, &rh) && rw > 0 && rh > 0) {
+            eglW = rw;
+            eglH = rh;
+        }
+    }
+
     typedef void (*fn_getiv_t)(uint32_t, int32_t *);
     typedef void (*fn_vp_t)(int32_t, int32_t, int32_t, int32_t);
     // 先看当前绑定的 framebuffer。这是判定能否安全纠正的依据：
@@ -845,6 +860,18 @@ void pojavSwapBuffers() {
     }
 
     if (!br_swap_buffers) return;
+
+    // 启动器侧 FSR1：present 之前把渲染分辨率的内容上采样铺满 surface。
+    // 位置必须在 viewport 守护之后 —— 守护保证当前 viewport 等于渲染分辨率，
+    // fsr1 正是拿 viewport 当源区域（自适应，不依赖理论值）。
+    // 编译风暴期间同样跳过：那时画面还没稳定，多一趟全屏 pass 纯属浪费。
+    if (heavyWorkAllowed) {
+        int fsrW = 0, fsrH = 0;
+        if (pojavEglSurfacePixelSize(&fsrW, &fsrH) && fsrW > 0 && fsrH > 0) {
+            ameFsr1Present(fsrW, fsrH);
+        }
+    }
+
     br_swap_buffers();
 }
 

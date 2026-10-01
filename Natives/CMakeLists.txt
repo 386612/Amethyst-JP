@@ -390,6 +390,7 @@ add_executable(AngelAuraAmethyst
   SurfaceViewController+Navigation.m
   TrackedTextField.m
   egl_bridge.m
+  fsr1/ame_fsr1.m
   ZinkConfig.m
   input_bridge_v3.m
   ios_uikit_bridge.m

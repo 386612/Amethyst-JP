@@ -16,6 +16,7 @@
 #import "MinecraftResourceUtils.h"
 #import "PLProfiles.h"
 #import "SurfaceViewController.h"
+#import "fsr1/ame_fsr1.h"
 #import "utils.h"
 #import "GameMenuOverlayView.h"
 #import "TrackedTextField.h"
@@ -1326,7 +1327,20 @@ static UIView *findSDL_uikitview(UIView *root);
         NSLog(@"[SurfaceVC] video.resolution invalid (%.4f) -> falling back to 100%%", resolutionScale);
         resolutionScale = 1.0f;
     }
-    self.surfaceView.layer.contentsScale = self.screenScale * resolutionScale;
+    // —— FSR1（启动器侧上采样）——
+    // FSR1 接管缩放时，几何分工与常规缩放相反：
+    //   * surface / drawable 必须是全分辨率 —— 它是 framebuffer 0，FSR1 要在这个
+    //     分辨率上输出，也是最终 present 的面
+    //   * 交给 MC 的 windowWidth/Height 仍是缩放后的值 —— MC 因此按低分辨率设
+    //     viewport，画面落在 surface 左下角，由 fsr1 在 swap 前上采样铺满
+    // 若此处仍按常规把 surface 也缩掉，FSR1 就没有全分辨率的目标可写，且
+    // CoreAnimation 会先做一次双线性拉伸，等于把 EASU 的边缘自适应丢掉。
+    const BOOL fsr1FullResSurface = ameFsr1NeedsFullResSurface();
+    const CGFloat fsrSurfaceContentsScale = fsr1FullResSurface
+        ? self.screenScale
+        : (self.screenScale * resolutionScale);
+
+    self.surfaceView.layer.contentsScale = fsrSurfaceContentsScale;
 
     physicalWidth = roundf(self.surfaceView.frame.size.width * self.screenScale);
     physicalHeight = roundf(self.surfaceView.frame.size.height * self.screenScale);
@@ -1363,15 +1377,18 @@ static UIView *findSDL_uikitview(UIView *root);
         // drawableSize —— 此期由 gl_bridge 的几何重对齐独占写权保持 present
         // 自洽；本函数若继续写会与之每帧拉锯 = 画面分裂（Air Task53 同款 gate）。
         // 重对齐成功后 surface==drawable==bounds 像素，本写入变为同值 no-op。
+        // FSR1 接管时写全分辨率（physical），否则维持原语义（windowWidth/Height）
+        const CGFloat drawW = fsr1FullResSurface ? MAX(physicalWidth, 1)  : MAX(windowWidth, 1);
+        const CGFloat drawH = fsr1FullResSurface ? MAX(physicalHeight, 1) : MAX(windowHeight, 1);
         if (ame_gl_surface_owns_layer()) {
             if (!ame_gl_surface_transposed()) {
-                metalLayer.drawableSize = CGSizeMake(MAX(windowWidth, 1), MAX(windowHeight, 1));
+                metalLayer.drawableSize = CGSizeMake(drawW, drawH);
                 NSLog(@"[SurfaceVC] drawableSize=%dx%d (contentsScale %.2f, resolution %.0f%%)",
                       (int)metalLayer.drawableSize.width, (int)metalLayer.drawableSize.height,
                       metalLayer.contentsScale, resolutionScale * 100.0f);
             }
         } else {
-            metalLayer.drawableSize = CGSizeMake(MAX(windowWidth, 1), MAX(windowHeight, 1));
+            metalLayer.drawableSize = CGSizeMake(drawW, drawH);
             NSLog(@"[SurfaceVC] drawableSize=%dx%d (contentsScale %.2f, resolution %.0f%%)",
                   (int)metalLayer.drawableSize.width, (int)metalLayer.drawableSize.height,
                   metalLayer.contentsScale, resolutionScale * 100.0f);
