@@ -1705,9 +1705,12 @@ int launchJVM(NSString *accountId, id launchTarget, int width, int height, int m
             // 关闭时必须删掉旧文件：否则用户上一轮开过、这一轮关掉，mod 仍按残留配置
             // 启用 MetalFX，开关形同虚设（这正是"老设备不能被搞崩"要防的）。
             {
+                // 注意：本文件顶部有 `#define fm NSFileManager.defaultManager`。
+                // 这里绝不能再写 `NSFileManager *fm = ...` —— 宏展开后
+                // `fm` 变成 `NSFileManager.defaultManager`，声明直接语法错误
+                // （曾导致 CI gmake exit 2）。直接用 fm 即可。
                 NSString *fxDir = [gameDir stringByAppendingPathComponent:@"config"];
                 NSString *fxPath = [fxDir stringByAppendingPathComponent:@"metallum_fx.properties"];
-                NSFileManager *fm = [NSFileManager defaultManager];
                 if (!getPrefBool(@"video.metalfx_enable")) {
                     if ([fm fileExistsAtPath:fxPath]) {
                         NSError *rmErr = nil;
