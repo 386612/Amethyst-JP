@@ -1707,7 +1707,7 @@ int launchJVM(NSString *accountId, id launchTarget, int width, int height, int m
             {
                 NSString *fxDir = [gameDir stringByAppendingPathComponent:@"config"];
                 NSString *fxPath = [fxDir stringByAppendingPathComponent:@"metallum_fx.properties"];
-                NSFileManager *fm = NSFileManager.defaultManager;
+                NSFileManager *fm = [NSFileManager defaultManager];
                 if (!getPrefBool(@"video.metalfx_enable")) {
                     if ([fm fileExistsAtPath:fxPath]) {
                         NSError *rmErr = nil;
@@ -1720,9 +1720,16 @@ int launchJVM(NSString *accountId, id launchTarget, int width, int height, int m
                     // 顺序与 MetalFxConfig.SpatialMode 严格一一对应：
                     // OFF(1.0) QUALITY(0.77) BALANCED(0.67) PERFORMANCE(0.56)
                     // ULTRA_PERFORMANCE(0.33)
-                    NSArray<NSString *> *spatialNames = @[@"OFF", @"QUALITY", @"BALANCED",
-                                                          @"PERFORMANCE", @"ULTRA_PERFORMANCE"];
-                    NSString *spatial = spatialNames[spatialIdx];
+                    NSString *spatial = @"OFF";
+                    if (spatialIdx == 1) {
+                        spatial = @"QUALITY";
+                    } else if (spatialIdx == 2) {
+                        spatial = @"BALANCED";
+                    } else if (spatialIdx == 3) {
+                        spatial = @"PERFORMANCE";
+                    } else if (spatialIdx == 4) {
+                        spatial = @"ULTRA_PERFORMANCE";
+                    }
                     NSString *temporal = getPrefBool(@"video.metalfx_temporal") ? @"AUTO" : @"OFF";
                     NSString *interp  = getPrefBool(@"video.metalfx_interpolation") ? @"AUTO" : @"OFF";
                     // acknowledged=true：用户在启动器里主动开启即视为已知晓风险。

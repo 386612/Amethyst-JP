@@ -127,6 +127,29 @@ jobs:
             gmake -j$(sysctl -n hw.ncpu) dsym package PLATFORM=${{ matrix.platform }} 2>&1 | tee ci-logs/build.log
           fi
 
+      - name: Surface iOS build errors as check annotations
+        # 主构建（gmake dsym package）的真实编译错误只存在于 job log，而 job log
+        # 与 artifact 走 blob storage，外部（含协作者）取不回来，此前只能靠猜。
+        # 这里把日志里的 error 行以 workflow command 写成 check annotation：
+        # 之后经 check-runs annotations API 就能直接读到出错的文件与行号。
+        # 单条 annotation 用 %0A 拼接多行，避免被"每级 10 条"的上限截断。
+        if: matrix.platform_name == 'ios' && always()
+        continue-on-error: true
+        run: |
+          LOG=ci-logs/ios-build.log
+          [ -f "$LOG" ] || LOG=ci-logs/ios-build-trollstore.log
+          if [ ! -f "$LOG" ]; then echo "[ci] no ios build log captured"; exit 0; fi
+          echo "[ci] build log: $LOG ($(wc -l < "$LOG") lines)"
+          esc() { sed -e 's/%/%25/g' -e 's/\r/%0D/g'; }
+          MSG=$(grep -nE "error:|fatal error:|Undefined symbols|duplicate symbol|ld: |clang: |No rule to make target|\*\*\* " "$LOG" | head -25 | esc | awk '{printf "%s%%0A", $0}')
+          if [ -n "$MSG" ]; then
+            echo "::error title=build-errors::$MSG"
+          else
+            echo "::error title=build-errors::(no error: line matched -- see tail)"
+          fi
+          TAIL=$(tail -20 "$LOG" | esc | awk '{printf "%s%%0A", $0}')
+          echo "::error title=build-tail::$TAIL"
+
       - name: Upload MobileGL dylib (if built)
         # MobileGL 从源码编译，产物在 Natives/build/ 下。单独上传一份，
         # 这样验证通过后可以直接拿到 dylib 提交进仓库，不必下载 195MB 的 ipa 再提取。
@@ -224,7 +247,7 @@ jobs:
           BRANCH_NAME="${GITHUB_REF#refs/heads/}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add ci-logs/ios-build.log ci-logs/ios-build-trollstore.log 2>/dev/null || true
+          git add -f ci-logs/ios-build.log ci-logs/ios-build-trollstore.log 2>/dev/null || true
           if git diff --cached --quiet; then exit 0; fi
           git commit -m "ci(ios): 提交主构建日志用于定位 [skip ci]"
           git pull --rebase origin "$BRANCH_NAME" || true
@@ -247,7 +270,7 @@ jobs:
           cp Natives/build/sfpew_build.log ci-logs/sfpew-build.log
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add ci-logs/sfpew-build.log
+          git add -f ci-logs/sfpew-build.log
           if git diff --cached --quiet; then exit 0; fi
           git commit -m "ci(sfpew): 提交构建日志用于定位 [skip ci]"
           git push origin HEAD:"$BRANCH_NAME" || { git pull --rebase origin "$BRANCH_NAME"; git push origin HEAD:"$BRANCH_NAME"; }
