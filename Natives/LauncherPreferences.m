@@ -166,6 +166,34 @@ id getPrefObject(NSString *key) {
 BOOL getPrefBool(NSString *key) {
     return [getPrefObject(key) boolValue];
 }
+
+#pragma mark - ★ [UI-LAYOUT-MIGRATE] / [TC-MOVEVIEW-MIGRATE] 统一解析函数
+
+/// ★ [UI-LAYOUT-MIGRATE] UI 布局唯一解析函数。
+/// 返回 @"vs"（标准，LauncherRootViewController）或 @"card"（卡片，LauncherCardLayoutViewController）。
+/// 按【物理机型】判定，不读遗留的 general.ui_layout —— 该键的值已在启动最早期被
+/// PLPreferences 迁移（iPhone 上的 card 主动写回 vs）。若今后确需读该键，请只在本
+/// 函数内读，让所有调用方（SceneDelegate 等）走同一解析口径，避免"各读各的"。
+NSString *ameResolveUILayout(void) {
+    NSString *model = [[UIDevice currentDevice].model lowercaseString];
+    BOOL isPad = [model containsString:@"ipad"];
+    if (!isPad && !([model containsString:@"iphone"] || [model containsString:@"ipod"])) {
+        // 未识别机型（模拟器）：idiom 兜底（此时 hook 尚未按机型分叉）。
+        isPad = (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad);
+    }
+    return isPad ? @"card" : @"vs";
+}
+
+/// ★ [TC-MOVEVIEW-MIGRATE] 「视角摇晃/移动视角」唯一解析函数。
+/// 该功能已移除：无论存量 control.mod_touch_moveview_enable 存什么，一律返回 NO。
+/// 启动迁移（PLPreferences）已把库里的 enable 主动写回 disable；这里是运行期口径保证，
+/// 防止迁移前已构造的会话 / 竞态 / 未落盘值漏网，并统一所有读取方。
+BOOL ameResolveTouchMoveViewEnabled(void) {
+    if (getPrefBool(@"control.mod_touch_moveview_enable")) {
+        NSLog(@"[TC-MOVEVIEW] legacy control.mod_touch_moveview_enable=enable ignored at runtime (feature removed) -> disabled");
+    }
+    return NO;
+}
 float getPrefFloat(NSString *key) {
     return [getPrefObject(key) floatValue];
 }
@@ -262,6 +290,36 @@ UIEdgeInsets getDefaultSafeArea() {
 
 #pragma mark Java runtime
 
+// ★ [JRE-NEST] 判断一个目录是否是**可用的 JRE 根**。
+//   iOS 的 JRE 没有 bin/java(打包时被删)，判据是 release + lib/server/libjvm.dylib。
+static BOOL ameJREHomeLooksValid(NSString *dir) {
+    if (dir.length == 0) return NO;
+    NSFileManager *fm = NSFileManager.defaultManager;
+    return [fm fileExistsAtPath:[dir stringByAppendingPathComponent:@"release"]] &&
+           [fm fileExistsAtPath:[dir stringByAppendingPathComponent:@"lib/server/libjvm.dylib"]];
+}
+
+// ★ [JRE-NEST] 归一化层级：解包若“多套一层”(如 java-8-openjdk/jre8-…/lib/…)，
+//   直接返回 java-8-openjdk 会得到死路径(目录在、libjvm 不在) ⇒ 运行期读不到 JRE。
+//   这里向下探测一层并自动纠正；仍找不到就打印实际布局并返回 nil(明确报错，不静默)。
+static NSString *ameNormalizeJREHome(NSString *dir) {
+    if (ameJREHomeLooksValid(dir)) return dir;
+    NSError *err = nil;
+    NSArray<NSString *> *subs = [NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:&err];
+    for (NSString *sub in subs) {
+        NSString *cand = [dir stringByAppendingPathComponent:sub];
+        BOOL isDir = NO;
+        if ([NSFileManager.defaultManager fileExistsAtPath:cand isDirectory:&isDir] && isDir &&
+            ameJREHomeLooksValid(cand)) {
+            NSLog(@"★ [JRE-NEST] 归一化 JRE 层级: %@ -> %@", dir, cand);
+            return cand;
+        }
+    }
+    NSLog(@"★ [JRE-NEST] ERROR: %@ 缺 release / lib/server/libjvm.dylib，实际布局:", dir);
+    for (NSString *s in subs) NSLog(@"★ [JRE-NEST]     %@", s);
+    return nil;
+}
+
 NSString* getSelectedJavaHome(NSString* defaultJRETag, int minVersion) {
     NSDictionary *pref = getPrefObject(@"java.java_homes");
     NSDictionary<NSString *, NSString *> *selected = pref[@"0"];
@@ -293,7 +351,11 @@ NSString* getSelectedJavaHome(NSString* defaultJRETag, int minVersion) {
     }
 
     if ([NSFileManager.defaultManager fileExistsAtPath:selectedDir]) {
-        return selectedDir;
+        // ★ [JRE-NEST] 目录存在 ≠ 是可用的 JRE 根：探测真身(release+libjvm)并自动纠正一层嵌套。
+        NSString *normalized = ameNormalizeJREHome(selectedDir);
+        if (normalized) return normalized;
+        NSLog(@"★ [JRE-NEST] selected runtime invalid: %@", selectedDir);
+        return nil;
     } else {
         NSLog(@"Error: selected runtime for %@ does not exist: %@", defaultJRETag, selectedDir);
         return nil;
@@ -368,15 +430,23 @@ static NSArray<NSDictionary *> *rendererCandidates(void) {
         @{@"key": @ RENDERER_NAME_METAL,
           @"name": localize(@"preference.title.renderer.debug.metal", nil),
           @"file": @ RENDERER_NAME_METAL},
-        // NG-GL4ES（"Krypton Wrapper"，ZL2 同款 gl4es——glslang+SPIRV-Cross 着色器
-        // 管线，官方口径几乎全版本可跑）。刻意追加在表末（与上方 metal 条目同规则）：
-        // 已有 profile / 全局偏好里存的 renderer 值（libxxx.dylib）在 pick 控件里
-        // 按下标配对，插到中间会让这些已存值显示错位。dylib 由 Makefile 的
-        // dep_nggl4es 目标随包构建——rendererLibraryExists 的存在性过滤天然处理
-        // 构建失败 / 裁剪场景（不会显示一个点了就崩的选项）。
-        @{@"key": @ RENDERER_NAME_NGGL4ES,
-          @"name": localize(@"preference.title.renderer.debug.nggl4es", nil),
-          @"file": @ RENDERER_NAME_NGGL4ES}
+        // ★ [RENDERER-GAP] 队友仓库（Gsjsjzhznsz/Air-Minecraft-iOS-Launcher）有而我们
+        // 没有的渲染器入口。全部追加在表末：既有的 profile/全局偏好里存的渲染器值
+        // （libxxx.dylib）在 pick 控件里按下标配对，追加在末尾不会让任何既有下标错位。
+        // 这些 dylib 未随包（由 Makefile dep_* / CMake 目标构建），
+        // availableRendererCandidates() 的存在性过滤会把它们隐藏 —— 默认界面/行为不变；
+        // 构建出对应 dylib 后设置页才会出现这些选项。
+        @{@"key": @ RENDERER_NAME_VGPU,
+          @"name": localize(@"preference.title.renderer.debug.vgpu", nil),
+          @"file": @ RENDERER_NAME_VGPU},
+        @{@"key": @ RENDERER_NAME_VIRGL,
+          @"name": localize(@"preference.title.renderer.debug.virgl", nil),
+          @"file": @ RENDERER_NAME_VIRGL},
+        // ★ [DROP-NGG4ES] 原 RENDERER_NAME_NGGL4ES 候选表项（preference.title.renderer.debug.nggl4es）
+        //   已随该支移除；其余三支（VGPU/VirGL/GL4ESZL2）原样保留。
+        @{@"key": @ RENDERER_NAME_GL4ESZL2,
+          @"name": localize(@"preference.title.renderer.debug.gl4eszl2", nil),
+          @"file": @ RENDERER_NAME_GL4ESZL2}
     ];
 }
 

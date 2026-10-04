@@ -8,6 +8,17 @@
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
+	<!-- ★ [I18N] 声明我们真正支持的界面语言：iOS 会据此把系统语言(含变体)匹配到对应
+	     .lproj（并用于「设置 > App > 语言」列表）。与 AmeLauncherSupportedLanguageCodes() 一致；
+	     未列出的 .lproj 是上游遗留空壳，不声明，避免系统误配到"没翻译的语言"。 -->
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>zh-Hans</string>
+		<string>zh-Hant</string>
+		<string>en</string>
+		<string>ja</string>
+		<string>km</string>
+	</array>
 	<key>CFBundleDisplayName</key>
 	<string>Air</string>
 	<key>CFBundleExecutable</key>
@@ -131,6 +142,15 @@
 		<string>santander</string>
 		<string>shareddocuments</string>
 		<string>zerotier</string>
+		<!-- ★ [POCKETJ-JIT] JIT 获取/使能工具 scheme(PocketJ INTEGRATION.md 要求:
+		     若用 canOpenURL 探测 stikdebug 就必须登记)。本 App 目前对 stikjit://
+		     只用 openURL 的 completionHandler,但登记后 canOpenURL 探测也可用,
+		     便于设置页显示"是否已安装"、以及后续 stikdebug:// 路径。 -->
+		<string>stikdebug</string>
+		<string>stikjit</string>
+		<string>sidestore</string>
+		<string>trollstore</string>
+		<string>stosdebug</string>
 	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
@@ -179,8 +199,9 @@
 		<string>audio</string>
 		<string>fetch</string>
 	</array>
-	<key>UIDesignRequiresCompatibility</key>
-	<true/>
+	<!-- ★ [GLASSUI] 2026-10-03 移除此键:UIDesignRequiresCompatibility = true 会让 App 退回
+	     iOS 26 之前的外观,等于主动放弃系统液态玻璃。上游 5.1.0 置 true,fork 版里没有此键;
+	     两侧对比已确认:去掉才出玻璃。 -->
 	<key>UIDeviceFamily</key>
 	<array>
 		<integer>1</integer>

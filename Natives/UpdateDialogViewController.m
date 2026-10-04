@@ -207,6 +207,7 @@ static NSAttributedString *AMERenderMarkdown(NSString *markdown, UIFont *bodyFon
         container.backgroundColor = [UIColor whiteColor];
     }
     container.layer.cornerRadius = 14.0;
+    container.layer.cornerCurve = kCACornerCurveContinuous;   // ★ [CORNER-FIX] 连续圆角(与系统卡片一致)
     container.clipsToBounds = YES;
     [self.view addSubview:container];
     self.containerView = container;
@@ -330,6 +331,7 @@ static NSAttributedString *AMERenderMarkdown(NSString *markdown, UIFont *bodyFon
         if (prominent == YES) {
             button.backgroundColor = accentColor();
             button.layer.cornerRadius = 8.0;
+            button.layer.cornerCurve = kCACornerCurveContinuous;   // ★ [CORNER-FIX] 连续圆角(与系统卡片一致)
             [button setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
         }
     }

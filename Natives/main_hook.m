@@ -9,7 +9,12 @@
 #include <execinfo.h>
 #include <fcntl.h>
 #include <libgen.h>
+// ★ [SHADER-SIGBUS] 崩溃归属取证需要：task_threads/thread_get_state/ARM_THREAD_STATE64
+// （取各线程 PC 做 dladdr 归属）与 uintptr_t/uint64_t。
+#include <mach/mach.h>
+#include <stdint.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,6 +30,99 @@ void (*orig_abort)();
 void (*orig_exit)(int code);
 void* (*orig_dlopen)(const char* path, int mode);
 void* (*orig_dlsym)(void* handle, const char* name);
+
+// ★ [SHADER-SIGBUS] ==========================================================
+// 崩溃归属取证（native 侧）—— 让下一次真机日志直接给出答案，不用再猜。
+//
+// 背景：glslang 那一类崩溃是「dlopen 期静态初始化 SIGBUS → JVM os::abort →
+// 被 hooked_abort 接管」。此时：
+//   · hooked_abort 拿到的回溯是 *abort 自己的* 栈（信号处理上下文的帧指针链
+//     在 sigtramp 处断开，真正的故障帧不在链上）⇒ 回溯里的 dylib 是 libjvm，
+//     不是元凶；
+//   · latestlog 里的 "35s THREAD DUMP" 只有标题、没有线程栈
+//     ⇒「卡在哪个线程 / 归属哪个 dylib / 偏移多少」这份日志答不了。
+// 本块补上三件事（全部只读旁路，不改变任何既有行为）：
+//   ① 记录最后一个 dlopen/System.load 的目标路径
+//      —— dlopen 期崩溃的元凶就是这个镜像（真机上就是被解包到 home 的那份）；
+//   ② 记录 abort 线程的 名字 + 数值 id（与 JVM hs_err 的 tid 对齐）；
+//   ③ 遍历所有线程取 PC/FP，用 dladdr 归属成「dylib + 偏移 + 符号」，并标注
+//      该地址是否落在 JIT26 已 PrepareRegion 的匿名区（区分"JIT 区"与"真镜像"）。
+// 全部 malloc-free（只用 mach 调用 + dladdr + snprintf），与既有的
+// ame_write_fatal_trace 同一套纪律（heap 损坏场景下仍要能落盘）。
+// ============================================================================
+
+#define AME_DLOPEN_PATH_MAX 1024
+// 仅由 hooked_dlopen / hooked_dlopen_26_ppl 在分发前写入（单写多读，长度有限）。
+static char g_ame_lastDlopenPath[AME_DLOPEN_PATH_MAX];
+static volatile sig_atomic_t g_ame_lastDlopenSet = 0;
+
+void ame_record_dlopen_target(const char *path) {
+    if (path == NULL) return;
+    size_t n = strlen(path);
+    if (n >= AME_DLOPEN_PATH_MAX) n = AME_DLOPEN_PATH_MAX - 1;
+    memcpy(g_ame_lastDlopenPath, path, n);
+    g_ame_lastDlopenPath[n] = '\0';
+    g_ame_lastDlopenSet = 1;
+}
+
+static const char *ame_short_image_name(const char *full) {
+    if (full == NULL) return "(?)";
+    const char *s = strrchr(full, '/');
+    return s ? s + 1 : full;
+}
+
+// 所有线程的 PC 快照 → 「归属 dylib + 偏移 + 符号」+ JIT 区标注。
+// 返回写入字节数；任何一步失败都只是少几行，不抛不崩。
+static size_t ame_snapshot_all_threads(char *out, size_t cap) {
+    if (out == NULL || cap < 256) return 0;
+    size_t len = 0;
+#if defined(__arm64__) || defined(__aarch64__)
+    thread_act_array_t threads = NULL;
+    mach_msg_type_number_t count = 0;
+    if (task_threads(mach_task_self(), &threads, &count) != KERN_SUCCESS || threads == NULL) {
+        return (size_t)snprintf(out, cap, "  (task_threads failed -- no thread snapshot)\n");
+    }
+    unsigned shown = 0;
+    for (mach_msg_type_number_t i = 0; i < count; i++) {
+        if (shown >= 48 || len + 256 >= cap) break;
+        arm_thread_state64_t st;
+        mach_msg_type_number_t sc = ARM_THREAD_STATE64_COUNT;
+        memset(&st, 0, sizeof(st));
+        if (thread_get_state(threads[i], ARM_THREAD_STATE64,
+                             (thread_state_t)&st, &sc) != KERN_SUCCESS) {
+            continue;
+        }
+        uint64_t pc = (uint64_t)arm_thread_state64_get_pc(st);
+        uint64_t lr = (uint64_t)arm_thread_state64_get_lr(st);
+        uint64_t tid = 0;
+        char tname[64] = {0};
+        pthread_t pt = pthread_from_mach_thread_np(threads[i]);
+        if (pt != NULL) {
+            pthread_threadid_np(pt, &tid);
+            pthread_getname_np(pt, tname, sizeof(tname));
+        }
+        Dl_info info;
+        memset(&info, 0, sizeof(info));
+        int ok = (pc != 0) ? dladdr((void *)(uintptr_t)pc, &info) : 0;
+        unsigned long long off = ok ? (unsigned long long)(pc - (uintptr_t)info.dli_fbase) : 0;
+        len += (size_t)snprintf(out + len, cap - len,
+            "  thread[%02u] id=%-10llu name=%-22s pc=%s+0x%llx sym=%s %s lr=0x%llx\n",
+            shown, (unsigned long long)tid,
+            tname[0] ? tname : "(unnamed)",
+            ok ? ame_short_image_name(info.dli_fname) : "(unknown-image)",
+            off,
+            (ok && info.dli_sname) ? info.dli_sname : "?",
+            JIT26AddressInPreparedRegion((const void *)(uintptr_t)pc) ? "[JIT-REGION]" : "",
+            (unsigned long long)lr);
+        shown++;
+    }
+    vm_deallocate(mach_task_self(), (vm_address_t)threads,
+                  (vm_size_t)(count * sizeof(thread_t)));
+#else
+    len += (size_t)snprintf(out, cap, "  (thread PC snapshot unsupported on this arch)\n");
+#endif
+    return len;
+}
 
 // Task 144：headless JVM（Forge/NeoForge 直装的 processors）执行期 exit 抑制。
 // 病历（装机 latestlog 20:42 会话，9aa15c8 构建）：Forge 处理器全部跑完、
@@ -218,7 +316,9 @@ void ame_write_fatal_trace(const char *reason) {
         return;
     }
 
-    static char report[16384];
+    // 16384 → 32768：★ [SHADER-SIGBUS] 追加了各线程 PC 快照（最多 48 行），
+    // 原容量在帧多时会截断归属块；单次 write(fd,…) 的写法不变。
+    static char report[32768];
     size_t len = 0;
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
@@ -241,14 +341,45 @@ void ame_write_fatal_trace(const char *reason) {
         Dl_info info;
         memset(&info, 0, sizeof(info));
         if (dladdr(frames[i], &info) && info.dli_fname) {
+            // ★ [SHADER-SIGBUS] 每帧标注归属 dylib + 偏移 + 符号 + 是否在 JIT 区
             len += (size_t)snprintf(report + len, sizeof(report) - len,
-                "  #%02d %p  %s  %s + %llu\n", i, frames[i],
+                "  #%02d %p  %s  %s + %llu %s\n", i, frames[i],
                 info.dli_fname,
                 info.dli_sname ? info.dli_sname : "?",
-                (unsigned long long)((uintptr_t)frames[i] - (uintptr_t)info.dli_fbase));
+                (unsigned long long)((uintptr_t)frames[i] - (uintptr_t)info.dli_fbase),
+                JIT26AddressInPreparedRegion(frames[i]) ? "[JIT-REGION]" : "");
         } else {
             len += (size_t)snprintf(report + len, sizeof(report) - len,
-                "  #%02d %p\n", i, frames[i]);
+                "  #%02d %p  <anonymous/JIT?>\n", i, frames[i]);
+        }
+    }
+
+    // ★ [SHADER-SIGBUS] 崩溃归属块：dlopen 目标 + 线程 id + 各线程 PC 归属。
+    //   为什么必须加：上面这段回溯是 *abort 自己* 的栈（信号处理上下文里帧指针
+    //   链在 sigtramp 处断开，真正的故障帧不在链上）；对 SIGBUS/dlopen 期静态
+    //   初始化这类崩溃，回溯里的 dylib 只会是 libjvm，元凶要靠"最后一个 dlopen
+    //   目标"和"各线程 PC 的 dladdr 归属"来指认。
+    //   exit(0)/exit(n) 的正常退出取证不含本块（避免刷无关线程快照）。
+    if (reason == NULL || strstr(reason, "exit(") == NULL) {
+        if (g_ame_lastDlopenSet) {
+            len += (size_t)snprintf(report + len, sizeof(report) - len,
+                "★ attribution: last dlopen/System.load target = %s\n"
+                "  (dlopen-time crash 的元凶通常就是这个镜像；home/tmp 下的就是"
+                "被解包出来的副本)\n", g_ame_lastDlopenPath);
+        } else {
+            len += (size_t)snprintf(report + len, sizeof(report) - len,
+                "★ attribution: no dlopen recorded before this abort\n");
+        }
+        uint64_t selfTid = 0;
+        pthread_threadid_np(NULL, &selfTid);
+        len += (size_t)snprintf(report + len, sizeof(report) - len,
+            "★ aborting thread: name=%s id=%llu\n",
+            tname[0] ? tname : "(unnamed)", (unsigned long long)selfTid);
+        if (len + 1024 < sizeof(report)) {
+            len += (size_t)snprintf(report + len, sizeof(report) - len,
+                "-- all-thread PC snapshot (pc → image+offset, [JIT-REGION] = "
+                "落在 JIT26 已 PrepareRegion 的匿名区) --\n");
+            len += ame_snapshot_all_threads(report + len, sizeof(report) - len);
         }
     }
 
@@ -367,6 +498,21 @@ void hooked_exit(int code) {
     orig_exit(code);
 }
 
+// ★ [SPVC-PATH] =============================================================
+// 结论（不做路径改道，理由见下）——本仓库**故意不**在 Frameworks 里随包
+// spvc 垫片：payload 段（`# [fix/shim-overwrite-v2]`，见 Makefile）在拷入
+// WORKINGDIR 的构建产物之后，又用 Natives/resources/Frameworks/ 里的**真库**
+// 把 `libspirv-cross-c-shared.0.dylib`（52KB 垫片）覆盖回去，并断言 ≥1MB。
+// 该注释记录的直接原因：把垫片当作 LWJGL 实际加载的 spvc 库会得到
+// `SPVC_ERROR_INVALID_ARGUMENT (-4) "Invalid backend"`（create_compiler backend=3）。
+// 因此：**不能**把设备上的 spvc 调用改道到 Frameworks 垫片 —— 那会复现 -4。
+// 设备上真正可用、且属于本工作树的那条"可控/会报错"路径 = 本文件的 dlsym 包装
+// （amethyst_spvc_parse_spirv / amethyst_spvc_compiler_compile）：26.4 日志已
+// 证明它在热路径上（[spvc][26.4-SPVC] 行），并给出魔数/长度/last_error。
+// spvc 垫片（Natives/spvc_shim.c）仍会随独立构建/未来打包重新进入，其取证逻辑
+// 与本文件的 ame_spvc_audit_input 同族。
+// ---------------------------------------------------------------------------
+
 void* hooked_dlopen(const char* path, int mode) {
     // ------------------------------------------------------------------
     // Task 106（BMC2 创建存档闪退根治）：拦截 spark 的原生分析器。
@@ -400,6 +546,18 @@ void* hooked_dlopen(const char* path, int mode) {
             NSLog(@"[Amethyst] Task106: blocked dlopen of signed macOS profiler lib (%s) -- platform retag would invalidate its code signature and dyld would kill the process; spark falls back to its Java sampler (world creation proceeds)", path);
         }
         return NULL;
+    }
+    // ★ [SHADER-SIGBUS] 记录本次 dlopen/System.load 目标（崩溃归属用）。
+    //   必须在所有分发分支（含 musttail 尾返回）之前写入 —— 尾返回没有回头路，
+    //   只能在入口记。若随后在该 dlopen 内崩溃，fatal_trace 会直接点名这个镜像。
+    ame_record_dlopen_target(path);
+    if (path != NULL && strstr(path, "glslang") != NULL) {
+        // ★ [SHADER-SIGBUS] 判据行：glslang 到底从哪加载。
+        //   home/tmp 下的 libglslang_metallum.dylib = 从 jar 解包出的【未签名副本】
+        //   （dlopen 期静态初始化 SIGBUS 的温床）；
+        //   <app>/Frameworks/libglslang.dylib = 包里随 app 一起被 ad-hoc 签名的副本。
+        //   修好后这两行只应出现 Frameworks 那条。
+        NSLog(@"[Amethyst][SHADER-SIGBUS] dlopen(glslang) -> %s", path);
     }
     // 同步自上游：非 TXM 的 iOS 26+ 设备需要硬件断点重定向（hooked_dlopen_26_ppl）
     BOOL shouldUseDyldBypass26PPL = NO;
@@ -504,6 +662,8 @@ void *exception_handler(void *unused) {
 }
 
 void *hooked_dlopen_26_ppl(const char *path, int mode) {
+    // ★ [SHADER-SIGBUS] 同 hooked_dlopen：记录目标（本分支只在非 TXM 的 iOS 26+ 走）。
+    ame_record_dlopen_target(path);
     if (!excPort) {
         mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &excPort);
         mach_port_insert_right(mach_task_self(), excPort, excPort, MACH_MSG_TYPE_MAKE_SEND);
@@ -1700,9 +1860,210 @@ static void *ame_spvc_compile_job_main(void *arg) {
     return NULL;
 }
 
+// ★ [26.4-SPVC] SPIR-V 交接取证 + 结构预检 + 尾部零填充收敛。
+//
+// 真机现场（iPhone 17 Pro / iOS 27.2 / 26.4-snapshot-2，首次 UI 管线
+// minecraft:pipeline/gui）：MetalCrossShaderCompiler.spirvToMsl:341 收到
+//   "SPIRV-Cross error at spvc_context_parse_spirv: -1"
+// -1 = SPVC_ERROR_INVALID_SPIRV（spirv_cross_c.h:170）。spvc_context_parse_spirv
+// 把 Parser::parse() 整个包在 SPVC_END_SAFE_SCOPE(context, SPVC_ERROR_INVALID_SPIRV)
+// 里（spirv_cross_c.cpp:244-265），**任何** std::exception 都映射成这个 -1，
+// 所以它并不等于"版本不兼容"。Parser::parse() 真正会抛的形态（spirv_parser.cpp:79-125）：
+//   · len < 5                                  → "SPIRV file too small."
+//   · magic != 0x07230203 或版本 ∉ {1.0..1.6, 99} → "Invalid SPIRV format."
+//   · IR[3] (bound) > 0x3fffff                  → "ID bound exceeds limit"
+//   · 某指令字 count == 0                       → "instructions cannot consume 0 words"
+//       （★ 缓冲区被 0 填充/超长时必中此条 —— 尾部 padding 全是 0 字）
+//   · 指令越界 / 无 current_block / 缺 OpEntryPoint / 函数或块未终结 / 字符串未终结
+//
+// 26.4 与 26.3 的唯一相关差异：gui.vsh/gui.fsh 从"内联 uniform 块"改成
+// `#include <minecraft:dynamictransforms.glsl>` 等（26.3 gui 明确注释
+// "Can't moj_import in things used during startup"），首次 UI 管线因此第一次
+// 走 shim 的 #include 文本展开路径。展开本身已实测字节精确（374 -> 901 与真机
+// 日志逐字一致），故这里把**真正交给 SPIRV-Cross 的字节**与自洽性打成一行，
+// 并对唯一可安全修复的破损形态（尾部零填充）做收敛：任何合法 SPIR-V 都不可能
+// 含 count==0 的指令字，故收敛对合法输入零影响，却能把"必崩的 -1"变成可编译。
+// ★ [SPVC-PATH] —— SPIR-V 交接取证 v2：缓冲区身份 + use-after-free 就地修复。
+//
+// 真机 26.4 新日志（用户原文）把形态钉死：
+//   parse#1 words=503 head=[07230203 00010500 ...]            ← 合法
+//   parse#2 words=385 head=[07230203 ...]                     ← 合法
+//   parse#3 words=503 head=[66297a96 e3a84b13 00000180 ...]   ← 非 SPIR-V
+//            stream_complete=1 overrun=0 trimmed_zero_tail=0
+//            rc=-1 last_error='Invalid SPIRV format.'
+// parse#3 与 parse#1 **同长(503 字)且自第 6 个字起逐字相同**，只有前 16 字节变了。
+// 这 16 字节正是 libmalloc 释放块里写的 (next ^ cookie) 链表头 —— 即交给
+// SPIRV-Cross 的 ByteBuffer **已被 free**：标准 use-after-free。对应 Java 侧
+// com.mojang.blaze3d.vulkan.glsl.IntermediaryShaderModule（record，close() 里
+// MemoryUtil.memFree(this.spirv)）的 spirv 缓冲在"反射解析"（createFromSpirv）
+// 与"MSL 解析"（MetalCrossShaderCompiler.spirvToMsl）之间被释放，而同一个
+// IntermediaryShaderModule 仍被 MetalDevice.shaderCache 引用后被再次使用。
+//
+// 本层（tree510 内、可验证）：
+//   · 逐次打印缓冲区地址 + 调用序号 + 魔数，把"是哪个指针被复用"钉死；
+//   · 记住每个 (ptr,words) 上一次**合法**的 SPIR-V 快照；当同一 (ptr,words)
+//     再次出现而魔数不再合法（= 被就地释放/覆盖）时，**从快照恢复**并把铁证
+//     打进日志。恢复只在"先前同一指针同长解析成功、现在魔数非法"这一种形态
+//     触发 —— 对任何合法输入零影响（魔数正确时永不进此分支）。
+#define AME_SPVC_FP_SLOTS 8
+typedef struct {
+    const unsigned    *ptr;
+    size_t             words;
+    unsigned char     *snapshot;
+    unsigned long long seq;
+} ame_spvc_fp_t;
+static ame_spvc_fp_t   g_ame_spvc_fp[AME_SPVC_FP_SLOTS];
+static pthread_mutex_t g_ame_spvc_fp_lock = PTHREAD_MUTEX_INITIALIZER;
+static unsigned long long g_ame_spvc_callseq = 0;
+
+static void ame_spvc_fp_remember(const unsigned *spirv, size_t words,
+                                 unsigned long long seq) {
+    if (spirv == NULL || words == 0 || words > (1u << 22)) return;
+    size_t bytes = words * sizeof(unsigned);
+    unsigned char *snap = (unsigned char *)malloc(bytes);
+    if (snap == NULL) return;
+    memcpy(snap, spirv, bytes);
+    pthread_mutex_lock(&g_ame_spvc_fp_lock);
+    int slot = -1, free_slot = -1;
+    for (int i = 0; i < AME_SPVC_FP_SLOTS; ++i) {
+        if (g_ame_spvc_fp[i].ptr == spirv && g_ame_spvc_fp[i].words == words) { slot = i; break; }
+        if (g_ame_spvc_fp[i].snapshot == NULL && free_slot < 0) free_slot = i;
+    }
+    if (slot < 0) slot = (free_slot >= 0) ? free_slot : (int)(seq % AME_SPVC_FP_SLOTS);
+    if (g_ame_spvc_fp[slot].snapshot != NULL) free(g_ame_spvc_fp[slot].snapshot);
+    g_ame_spvc_fp[slot].ptr = spirv;
+    g_ame_spvc_fp[slot].words = words;
+    g_ame_spvc_fp[slot].snapshot = snap;
+    g_ame_spvc_fp[slot].seq = seq;
+    pthread_mutex_unlock(&g_ame_spvc_fp_lock);
+}
+
+// 命中并**就地恢复**：仅当 (ptr,words) 有旧快照时。返回旧快照的记录序号，或 0。
+static unsigned long long ame_spvc_fp_restore(unsigned *spirv, size_t words) {
+    unsigned long long seq = 0;
+    pthread_mutex_lock(&g_ame_spvc_fp_lock);
+    for (int i = 0; i < AME_SPVC_FP_SLOTS; ++i) {
+        if (g_ame_spvc_fp[i].snapshot != NULL &&
+            g_ame_spvc_fp[i].ptr == (const unsigned *)spirv &&
+            g_ame_spvc_fp[i].words == words) {
+            memcpy(spirv, g_ame_spvc_fp[i].snapshot, words * sizeof(unsigned));
+            seq = g_ame_spvc_fp[i].seq;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_ame_spvc_fp_lock);
+    return seq;
+}
+
+static void ame_spvc_audit_input(const unsigned *spirv, size_t *word_count,
+                                 unsigned long long seq) {
+    if (spirv == NULL || word_count == NULL || *word_count == 0) {
+        NSLog(@"[spvc][26.4-SPVC] parse_spirv input: NULL/empty (words=%zu seq=%llu)",
+              word_count ? *word_count : (size_t)0, seq);
+        return;
+    }
+    uint32_t *w = (uint32_t *)spirv;   // 允许在 UAF 形态下就地恢复
+    size_t words = *word_count;
+    // ★ [SPVC-PATH] 魔数校验 + UAF 就地修复（见函数上方说明）。
+    if (w[0] != 0x07230203u) {
+        unsigned long long prev = ame_spvc_fp_restore(w, words);
+        if (prev != 0) {
+            NSLog(@"[spvc][26.4-SPVC] ★ [SPVC-PATH] input buffer FREED/CLOBBERED in "
+                  @"place: ptr=%p words=%zu magic=0x%08x (expected 07230203). Same "
+                  @"(ptr,len) parsed OK at call#%llu -> RESTORED from snapshot (first "
+                  @"16 bytes are libmalloc free-list metadata = use-after-free of the "
+                  @"SPIR-V ByteBuffer)", spirv, words, w[0], prev);
+        } else {
+            NSLog(@"[spvc][26.4-SPVC] ★ [SPVC-PATH] input buffer has BAD magic 0x%08x "
+                  @"(expected 07230203) ptr=%p words=%zu seq=%llu -- no prior valid "
+                  @"snapshot for this (ptr,len); passing through so SPIRV-Cross reports "
+                  @"the named error", w[0], spirv, words, seq);
+        }
+    } else {
+        // 合法输入：留快照，供同一 (ptr,len) 将来被就地释放时恢复。
+        ame_spvc_fp_remember(spirv, words, seq);
+    }
+    // 从 IR[5] 起按指令字 count 走一遍，求指令流真实终点。
+    size_t off = (words >= 5) ? 5 : words;
+    int overrun = 0;
+    while (off < words) {
+        size_t cnt = (size_t)((w[off] >> 16) & 0xffffu);
+        if (cnt == 0) break;             // 0 字指令（含零填充）→ 停
+        off += cnt;
+        if (off > words) { overrun = 1; break; }
+    }
+    size_t effective = words;
+    size_t trimmed = 0;
+    if (!overrun && off < words) {
+        // ★ 只有"off 之后全是 0 字"才收敛 —— 这才是纯粹的尾部零填充。
+        //   若零字后面还有非零字（真·指令流破损），保持原样交给 SPIRV-Cross
+        //   自己抛错，日志已把形态记下。
+        int all_zero = 1;
+        for (size_t i = off; i < words; ++i) {
+            if (w[i] != 0) { all_zero = 0; break; }
+        }
+        if (all_zero) {
+            effective = (off < 5) ? 5 : off;
+            if (effective > words) effective = words;
+            trimmed = words - effective;
+        }
+    }
+    char head[128];
+    size_t hn = 0, lim = (words < 8) ? words : 8;
+    for (size_t i = 0; i < lim && hn + 10 < sizeof head; ++i)
+        hn += (size_t)snprintf(head + hn, sizeof head - hn, "%08x ", w[i]);
+    NSLog(@"[spvc][26.4-SPVC] parse_spirv input: seq=%llu ptr=%p words=%zu bytes=%zu "
+          @"head8=[%s] stream_end=%zu overrun=%d stream_complete=%d effective_words=%zu "
+          @"trimmed_zero_tail=%zu",
+          seq, (const void *)spirv, words, words * sizeof(unsigned), head, off, overrun,
+          (off == words), effective, trimmed);
+    if (trimmed > 0) {
+        NSLog(@"[spvc][26.4-SPVC] WARN buffer over-sized: trimmed %zu trailing "
+              @"zero word(s) %zu -> %zu (a count==0 instruction word is fatal to "
+              @"SPIRV-Cross: \"instructions cannot consume 0 words\")",
+              trimmed, words, effective);
+    }
+    *word_count = effective;
+}
+
+// ★ [26.4-SPVC] 失败时把 SPIRV-Cross 的 last_error 打出来。
+// checkSpvc 只拿到整数 -1，parser 抛出的具体文本此前一直丢失；这是区分
+// "magic/版本/0 字指令/越界/无 entry point" 的唯一第一手证据。
+static const char *ame_spvc_last_error(void *context) {
+    static const char *(*fn)(void *) = NULL;
+    static volatile int tried = 0;
+    if (!tried) {
+        tried = 1;
+        void *p = orig_dlsym(RTLD_DEFAULT, "spvc_context_get_last_error_string");
+        if (p == NULL) p = orig_dlsym(RTLD_DEFAULT, "spvc_context_get_last_error");
+        fn = (const char *(*)(void *))p;
+    }
+    if (fn == NULL || context == NULL) return NULL;
+    return fn(context);
+}
+
 static int amethyst_spvc_parse_spirv(void *context, const unsigned *spirv, size_t word_count,
                                      void **parsed_ir) {
     ame_log_redirect_once("spvc");
+    // ★ [SPVC-PATH] 每次调用的身份 + 来源库（一次性）—— 把"哪个指针 / 哪条链"钉死。
+    unsigned long long seq = __sync_add_and_fetch(&g_ame_spvc_callseq, 1);
+    {
+        static volatile int s_provider_logged = 0;
+        if (!s_provider_logged) {
+            s_provider_logged = 1;
+            Dl_info di;
+            if (g_real_spvc_parse_spirv != NULL &&
+                dladdr((void *)g_real_spvc_parse_spirv, &di) && di.dli_fname != NULL) {
+                NSLog(@"[spvc][26.4-SPVC] provider: spvc_context_parse_spirv @%p <- %s",
+                      (void *)g_real_spvc_parse_spirv, di.dli_fname);
+            } else {
+                NSLog(@"[spvc][26.4-SPVC] provider: spvc_context_parse_spirv @%p "
+                      @"(dladdr unavailable)", (void *)g_real_spvc_parse_spirv);
+            }
+        }
+    }
+    // ★ [26.4-SPVC] 先取证/预检（尾部零填充收敛 + 魔数校验/UAF 就地修复）。
+    ame_spvc_audit_input(spirv, &word_count, seq);
     // 同 shaderc：输入 SPIR-V 可能也在 JVM 侧可回收内存里；输出槽（parsed_ir
     // 指向的指针位）同样如此。job 线程全程用副本/本地槽，join 后在调用方线程回写。
     unsigned *spirv_copy = (spirv != NULL && word_count != 0)
@@ -1719,6 +2080,13 @@ static int amethyst_spvc_parse_spirv(void *context, const unsigned *spirv, size_
         return g_real_spvc_parse_spirv(context, spirv, word_count, parsed_ir);
     }
     if (parsed_ir != NULL) *parsed_ir = ir_slot;
+    // ★ [26.4-SPVC] -1 的成因只有 SPIRV-Cross 知道；把它自己的话打出来。
+    if (job.rc != 0) {
+        const char *err = ame_spvc_last_error(context);
+        NSLog(@"[spvc][26.4-SPVC] parse_spirv seq=%llu ctx=%p rc=%d (spvc_result; "
+              @"-1=INVALID_SPIRV) last_error='%s'",
+              seq, context, job.rc, (err != NULL) ? err : "(unavailable)");
+    }
     return job.rc;
 }
 

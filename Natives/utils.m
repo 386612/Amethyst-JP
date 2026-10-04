@@ -102,19 +102,283 @@ NSError* saveJSONToFile(NSDictionary *dict, NSString *path) {
     return nil;
 }
 
-NSString* localize(NSString* key, NSString* comment) {
-    NSString *value = NSLocalizedString(key, nil);
-    if (![NSLocale.preferredLanguages[0] isEqualToString:@"en"] && [value isEqualToString:key]) {
-        NSString* path = [NSBundle.mainBundle pathForResource:@"en" ofType:@"lproj"];
-        NSBundle* languageBundle = [NSBundle bundleWithPath:path];
-        value = [languageBundle localizedStringForKey:key value:nil table:nil];
+// ★ [I18N] 启动器界面语言覆盖：持久化键。
+// 刻意与系统的 AppleLanguages 分开——那是全局键，会牵动 App 内所有 bundle 的语言
+// 选择，也不适合作为「跟随系统 / 指定语言」这种应用内偏好的保存位置。
+NSString * const AmeLauncherLanguageDefaultsKey = @"ame_launcher_language";
 
-        if ([value isEqualToString:key]) {
-            value = [[NSBundle bundleWithIdentifier:@"com.apple.UIKit"] localizedStringForKey:key value:nil table:nil];
+#pragma mark - ★ [I18N] 语言解析核心（单一事实源）
+
+// ★ [I18N] 语言解析缓存：'生效语言' 结果缓存 + 代数号（写入覆盖时自增使其失效）。
+static NSInteger sAmeLanguageGeneration = 0;
+static NSInteger sAmeEffectiveCodeGeneration = -1;
+static NSString *sAmeEffectiveCodeCache = nil;
+// 已加载的 <code>.lproj 包缓存（NSNull 表示"查过、没有"）。
+static NSMutableDictionary<NSString *, id> *sAmeLangBundleCache = nil;
+static NSString *sAmeResolvedLanguageCode = nil;
+static NSBundle *sAmeResolvedLanguageBundle = nil;
+
+// ★ [I18N] 启动器真正支持的语言（curated 白名单）。
+// 依据：对 Natives/resources/*.lproj/Localizable.strings 的键集合盘点（见
+// D:\CTF\_I18N_FIX.md「覆盖度表」）：只有 zh-Hans / zh-Hant / zh-CN / en / ja / km
+// 这 6 个的翻译覆盖率 ≥95%；其余 48 个（de/ar/fr/ru…）覆盖率 ≤12%（上游 Pojav
+// 遗留的旧键集合），选它们等于大面积回退英文 ⇒ 是"选了没用的壳子"，一律不列。
+// zh-CN 与 zh-Hans 同为简体且被变体映射到 zh-Hans，不单独作为一项。
+NSArray<NSString *> *AmeLauncherSupportedLanguageCodes(void) {
+    static NSArray<NSString *> *codes;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        codes = @[@"zh-Hans", @"zh-Hant", @"en", @"ja", @"km"];
+    });
+    return codes;
+}
+
+// ★ [I18N] 系统语言代码 → 我们实际使用的 .lproj 代码（含变体映射）。
+// 处理 zh-Hans-CN / zh-Hant-TW / en-GB / ja-JP / km-KH 这类带脚本或地区后缀的代码，
+// 以及 iOS 常见的"裸语言"（zh / en / ja）。匹配不到返回 nil（调用方回退 en）。
+NSString *AmeLauncherMatchLanguageCode(NSString *systemCode) {
+    if (systemCode.length == 0) return nil;
+
+    NSArray<NSString *> *supported = AmeLauncherSupportedLanguageCodes();
+    NSString *lower = systemCode.lowercaseString;
+    NSArray<NSString *> *parts = [lower componentsSeparatedByString:@"-"];
+    NSString *lang = parts.count ? parts.firstObject : lower;
+    NSString *script = nil;   // 4 字母脚本子标签：hans / hant / latn…
+    NSString *region = nil;   // 2 字母或 3 位数字地区：cn / tw / us…
+    for (NSUInteger i = 1; i < parts.count; i++) {
+        NSString *p = parts[i];
+        if (p.length == 0) continue;
+        BOOL hasDigit = [p rangeOfCharacterFromSet:[NSCharacterSet decimalDigitCharacterSet]].location != NSNotFound;
+        if (p.length == 4 && !hasDigit) {
+            script = p;
+        } else if ((p.length == 2 && !hasDigit) || p.length == 3) {
+            region = p;
         }
     }
 
-    return value;
+    // 1) 精确命中我们的代码（zh-Hans / zh-Hant / en / ja / km，大小写不敏感）
+    for (NSString *code in supported) {
+        if ([code.lowercaseString isEqualToString:lower]) return code;
+    }
+    // 2) 中文：按脚本 / 地区判定简繁，其余一律简体
+    if ([lang isEqualToString:@"zh"]) {
+        if ([script isEqualToString:@"hant"]) return @"zh-Hant";
+        if ([script isEqualToString:@"hans"]) return @"zh-Hans";
+        static NSSet *tradRegions;
+        static dispatch_once_t onceTrad;
+        dispatch_once(&onceTrad, ^{
+            tradRegions = [NSSet setWithArray:@[@"tw", @"hk", @"mo"]];
+        });
+        if (region && [tradRegions containsObject:region]) return @"zh-Hant";
+        return @"zh-Hans";   // zh / zh-CN / zh-SG / zh-MY …
+    }
+    // 3) 其它语言：语言码直接对应（en-US→en, ja-JP→ja, km-KH→km, …）
+    for (NSString *code in supported) {
+        if ([code.lowercaseString isEqualToString:lang]) return code;
+    }
+    // 4) 兜底：交给 Apple 的匹配器在"我们支持的语言"里挑（处理未覆盖的变体）
+    NSArray<NSString *> *best = [NSBundle preferredLocalizationsFromArray:supported
+                                                          forPreferences:@[systemCode]];
+    if (best.count > 0 && [supported containsObject:best.firstObject]) {
+        return best.firstObject;
+    }
+    return nil;
+}
+
+// ★ [I18N] 当前"实际生效"的界面语言代码。
+// 语义：用户明确选择的语言 → 系统偏好语言最佳匹配 → 开发语言 en。
+// 设置页显示与实际渲染都用它 ⇒ 显示与内容永远一致，不再"系统是英文却显示中文"。
+NSString *AmeLauncherEffectiveLanguageCode(void) {
+    if (sAmeEffectiveCodeCache.length > 0 && sAmeEffectiveCodeGeneration == sAmeLanguageGeneration) {
+        return sAmeEffectiveCodeCache;
+    }
+    NSString *result = nil;
+    NSString *override = AmeLauncherPreferredLanguageOverride();
+    if (override.length > 0) {
+        result = override;
+    } else {
+        for (NSString *pref in [NSLocale preferredLanguages]) {
+            NSString *m = AmeLauncherMatchLanguageCode(pref);
+            if (m.length > 0) { result = m; break; }
+        }
+    }
+    if (result.length == 0) result = @"en";
+    sAmeEffectiveCodeCache = result;
+    sAmeEffectiveCodeGeneration = sAmeLanguageGeneration;
+    return result;
+}
+
+// ★ [I18N] 读取用户选择；空串 / nil / 已不支持的旧值一律视为「跟随系统」。
+// "已不支持"（旧版可能存过 de/ar 等空壳语言）会被当作未选择并顺手清理，
+// 避免出现"切了却大面积英文"的破碎界面（幂等迁移）。
+NSString *AmeLauncherPreferredLanguageOverride(void) {
+    NSString *code = [[NSUserDefaults standardUserDefaults] stringForKey:AmeLauncherLanguageDefaultsKey];
+    if (code.length == 0) return nil;
+    if (![AmeLauncherSupportedLanguageCodes() containsObject:code]) {
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:AmeLauncherLanguageDefaultsKey];
+        return nil;
+    }
+    return code;
+}
+
+// ★ [I18N] 写入/清除覆盖。code 为 nil 或空串时清除（回到跟随系统）。
+void AmeLauncherSetPreferredLanguageOverride(NSString *code) {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    if (code.length > 0) {
+        [defaults setObject:code forKey:AmeLauncherLanguageDefaultsKey];
+    } else {
+        [defaults removeObjectForKey:AmeLauncherLanguageDefaultsKey];
+    }
+    [defaults synchronize];
+    sAmeLanguageGeneration++;   // ★ [I18N] 使缓存的"生效语言"失效，下次 localize 重新解析
+}
+
+// ★ [I18N] 语言代码 → 人读显示名（用系统当前语言本地化）。取不到时回退返回代码本身。
+// 例：系统中文时 zh-Hans → 「简体中文」；系统英文时 → 「Chinese, Simplified」。
+NSString *AmeLauncherDisplayNameForLanguageCode(NSString *code) {
+    if (code.length == 0) return @"";
+    NSString *name = [[NSLocale currentLocale] localizedStringForLanguageCode:code];
+    return name.length > 0 ? name : code;
+}
+
+// ★ [I18N] 语言选单要列出的语言（= 真正支持的白名单，按显示名排序）。
+// 保留旧函数名以兼容调用方；语义从"枚举包内所有 .lproj"收窄为白名单：
+// 只列 AmeLauncherSupportedLanguageCodes()，绝不把空壳语言摆进选单。
+NSArray<NSString *> *AmeLauncherAvailableLanguageCodes(void) {
+    NSArray<NSString *> *codes = AmeLauncherSupportedLanguageCodes();
+    return [codes sortedArrayUsingComparator:^NSComparisonResult(NSString *a, NSString *b) {
+        return [AmeLauncherDisplayNameForLanguageCode(a) localizedCaseInsensitiveCompare:
+                AmeLauncherDisplayNameForLanguageCode(b)];
+    }];
+}
+
+#pragma mark - ★ [I18N] 翻译覆盖率（选单标"部分翻译"用）
+
+// ★ [I18N] 解析 <code>.lproj/Localizable.strings 为 键→值（仅用于覆盖率统计；
+// 运行时取词仍走 bundle）。解析失败返回 nil ⇒ 上层按 100% 处理，统计绝不砸界面。
+static NSDictionary<NSString *, NSString *> *AmeLauncherParseStrings(NSString *code) {
+    if (code.length == 0) return nil;
+    NSString *dir = [code stringByAppendingPathExtension:@"lproj"];
+    NSString *path = [[[NSBundle mainBundle].resourcePath stringByAppendingPathComponent:dir]
+                      stringByAppendingPathComponent:@"Localizable.strings"];
+    NSString *text = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:NULL];
+    if (text.length == 0) return nil;
+    NSMutableDictionary<NSString *, NSString *> *map = [NSMutableDictionary dictionary];
+    for (NSString *raw in [text componentsSeparatedByString:@"\n"]) {
+        NSString *line = [raw stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        if (![line hasPrefix:@"\""]) continue;   // 跳过注释与空行
+        NSRange kOpen = [line rangeOfString:@"\""];
+        if (kOpen.location == NSNotFound) continue;
+        NSRange kClose = [line rangeOfString:@"\"" options:0
+                                       range:NSMakeRange(kOpen.location + 1, line.length - kOpen.location - 1)];
+        if (kClose.location == NSNotFound) continue;
+        NSString *key = [line substringWithRange:NSMakeRange(kOpen.location + 1, kClose.location - kOpen.location - 1)];
+        NSRange eq = [line rangeOfString:@"=" options:0 range:NSMakeRange(kClose.location, line.length - kClose.location)];
+        if (eq.location == NSNotFound) continue;
+        NSRange vOpen = [line rangeOfString:@"\"" options:0 range:NSMakeRange(eq.location, line.length - eq.location)];
+        if (vOpen.location == NSNotFound) continue;
+        NSRange vClose = [line rangeOfString:@"\"" options:NSBackwardsSearch
+                                       range:NSMakeRange(vOpen.location + 1, line.length - vOpen.location - 1)];
+        if (vClose.location == NSNotFound) continue;
+        NSString *val = [line substringWithRange:NSMakeRange(vOpen.location + 1, vClose.location - vOpen.location - 1)];
+        if (key.length > 0) map[key] = val;
+    }
+    return map.count ? map : nil;
+}
+
+// ★ [I18N-ORDER] 某语言的"人工翻译率"（0.0~1.0）。以【英文】为基准键集：
+// 值存在且与英文逐字不同 ⇒ 计为已翻译。
+// ✗ 旧版以 zh-Hans 为基准、并对所有 zh* 直接返回 1.0；而 zh-Hans.lproj 当时是"英文占位
+//   文件"，于是这个基准本身是错的，且永远报 100%，把"渲染成英文"的缺陷整个掩盖掉。
+double AmeLauncherLanguageTranslatedRatio(NSString *code) {
+    if (code.length == 0) return 1.0;
+    if ([code isEqualToString:@"en"]) return 1.0;   // 英文即基准
+    static NSDictionary<NSString *, NSString *> *en;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        en = AmeLauncherParseStrings(@"en");
+    });
+    NSDictionary<NSString *, NSString *> *tgt = AmeLauncherParseStrings(code);
+    if (en.count == 0 || tgt.count == 0) return 1.0;   // 统计失败：不标百分比
+    NSUInteger total = 0, localized = 0;
+    for (NSString *k in en) {
+        NSString *tv = tgt[k];
+        if (tv.length == 0) continue;                    // 缺键 = 未翻译
+        total++;
+        if ([tv isEqualToString:en[k]]) continue;        // 与英文逐字相同 = 占位/未译
+        localized++;
+    }
+    if (total == 0) return 1.0;
+    return (double)localized / (double)total;
+}
+
+// ★ [I18N] 取词：在指定 <code>.lproj> 包里查 key；命中失败返回 nil。
+static NSString *AmeLocalizedValue(NSBundle *bundle, NSString *key) {
+    if (bundle == nil || key.length == 0) return nil;
+    NSString *value = [bundle localizedStringForKey:key value:nil table:nil];
+    if (value.length > 0 && ![value isEqualToString:key]) return value;
+    return nil;
+}
+
+// ★ [I18N] <code>.lproj 包查询（带缓存）；找不到返回 nil。
+static NSBundle *AmeBundleForLanguageCode(NSString *code) {
+    if (code.length == 0) return nil;
+    if (sAmeLangBundleCache == nil) sAmeLangBundleCache = [NSMutableDictionary dictionary];
+    id cached = sAmeLangBundleCache[code];
+    if (cached == (id)[NSNull null]) return nil;
+    if ([cached isKindOfClass:[NSBundle class]]) return cached;
+    NSString *path = [[NSBundle mainBundle] pathForResource:code ofType:@"lproj"];
+    NSBundle *bundle = path.length ? [NSBundle bundleWithPath:path] : nil;
+    sAmeLangBundleCache[code] = bundle ?: (id)[NSNull null];
+    return bundle;
+}
+
+// ★ [I18N-ORDER] 启动最早期(任何 UI 构建之前)调用一次:解析并缓存"生效语言"、预热
+// <code>.lproj 包缓存,并打印【自证日志】——生效语言 / 实际使用的 .lproj / 该语言的
+// 真实翻译覆盖率 / Bundle.main 首选本地化 / 系统首选语言。
+// 目的:让"设置显示中文、界面却渲染英文"这类【显示与渲染分叉】在日志里一眼可见
+// (根因即:生效语言=zh-Hans,而 zh-Hans.lproj 曾是英文占位文件)。
+void AmeLauncherPrimeLanguage(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSString *code = AmeLauncherEffectiveLanguageCode();   // 解析 + 缓存(单一事实源)
+        NSBundle *bundle = AmeBundleForLanguageCode(code);     // 预热 bundle 缓存
+        BOOL hasOverride = (AmeLauncherPreferredLanguageOverride().length > 0);
+        double coverage = AmeLauncherLanguageTranslatedRatio(code);
+        NSLog(@"[i18n][I18N-ORDER] effective=%@ followSystem=%@ bundle=%@ coverage=%.2f bundlePref=%@ systemPref=%@",
+              code,
+              hasOverride ? @"NO" : @"YES",
+              bundle.bundlePath ?: @"(nil)",
+              coverage,
+              [[NSBundle mainBundle] preferredLocalizations].firstObject ?: @"(nil)",
+              [NSLocale preferredLanguages].firstObject ?: @"(nil)");
+        if (bundle == nil) {
+            NSLog(@"[i18n][I18N-ORDER] ★ 警告:生效语言 %@ 没有对应 .lproj ⇒ 界面会整体回退英文", code);
+        }
+    });
+}
+
+// ★ [I18N] 统一取词入口（全启动器 2093 处调用都经此）。
+// 单一事实源 = AmeLauncherEffectiveLanguageCode()（用户选择 → 系统最佳匹配 → en）：
+// 不再依赖 NSLocalizedString 的"系统 bundle 解析"，因此改语言后只要重跑一次文案
+// 就真的换过来；设置页显示的语言与这里实际渲染的语言永远一致。
+// 回退链：当前语言 → en → 系统 UIKit 内建（"OK"/"Cancel" 等）→ key 本身。
+NSString* localize(NSString* key, NSString* comment) {
+    if (key.length == 0) return key ?: @"";
+    NSString *code = AmeLauncherEffectiveLanguageCode();
+    if (![code isEqualToString:sAmeResolvedLanguageCode] || sAmeResolvedLanguageBundle == nil) {
+        sAmeResolvedLanguageCode = code;
+        sAmeResolvedLanguageBundle = AmeBundleForLanguageCode(code);
+    }
+    NSString *value = AmeLocalizedValue(sAmeResolvedLanguageBundle, key);
+    if (value) return value;
+    if (![code isEqualToString:@"en"]) {
+        value = AmeLocalizedValue(AmeBundleForLanguageCode(@"en"), key);
+        if (value) return value;
+    }
+    value = AmeLocalizedValue([NSBundle bundleWithIdentifier:@"com.apple.UIKit"], key);
+    if (value) return value;
+    return key;
 }
 
 // 该错误是否意味着设备根本连不上网。值得穷举：原来只认
@@ -185,6 +449,25 @@ void* JIT26CreateRegionLegacy(size_t len) {
     asm("brk #0x69 \n"
         "ret");
 }
+// ★ [POCKETJ-JIT] Universal JIT 协议第 0 号调用:显式请求调试器脱离。
+//   参考:EricoEC/PocketJLauncher · Vendor/StikJIT/Resources/universal.js(commands[0])
+//   与 Vendor/StikJIT/INTEGRATION.md「Implement the universal protocol」给出的签名:
+//     void JIT26Detach(void) { mov x16, #0; brk #0xf00d; ret }
+//   x16=0 ⇒ universal.js 的 JIT26Detach() ⇒ 向 debugserver 发 "D" 并结束脚本循环。
+//   ⚠ 调用时机(INTEGRATION.md 强制):必须先对【所有】初始 RX 区完成
+//     JIT26PrepareRegion、建好可写别名,再调本函数;脚本一旦脱离,后加入的 RX 区
+//     就无法再被服务。本仓库现有启动流程靠 universal.js 的 detachAfterFirstBr
+//     在 dyld 补丁阶段的 JIT26PrepareRegion / JIT26PrepareRegionForPatching 之后
+//     隐式脱离,故这里只补齐协议原语,不在启动路径上另加调用点 —— 擅自提前脱离会让
+//     后续 brk 落在"无人服务"的窗口里,从而整体降级(★ [JIT-NOCRASH] 起,各调用
+//     点已走 Safe 包装,不再硬崩,但 JIT 功能会因此退化)。详见
+//     Natives/pocketj_jit/PORTING_NOTES.md。
+__attribute__((noinline,optnone,naked))
+void JIT26Detach(void) {
+    asm("mov x16, #0 \n"
+        "brk #0xf00d \n"
+        "ret");
+}
 __attribute__((noinline,optnone,naked))
 void* JIT26PrepareRegion(void *addr, size_t len) {
     asm("mov x16, #1 \n"
@@ -214,42 +497,390 @@ void JIT26SendJITScript(NSString* script) {
     BreakSendJITScript((char*)script.UTF8String, script.length);
 }
 
-// brk #0x69 无人应答时的 SIGTRAP 安全网：裸函数会直接致死（议题 #133
-// "开启 JIT 后闪退"），这里在调用窗口内捕获并返回 NULL，把必死崩溃转成
-// 调用方的优雅报错；调试器正常应答时走调试器例外端口/ptrace，本处理器
-// 不会被触发，行为不变。
-static sigjmp_buf g_jit26TrapEnv;
-static volatile sig_atomic_t g_jit26TrapArmed = 0;
+// ★ [JIT-NOCRASH] ============================================================
+// JIT26 brk 协议的统一 SIGTRAP 安全网
+//
+// universal 协议的每一步都靠 `brk` 与调试器握手（legacy 建区为 brk #0x69；其余
+// 全部为 brk #0xf00d）。**调试器未就岗时执行 brk ⇒ SIGTRAP ⇒ 进程直接死**，
+// 连"优雅放弃"的机会都没有（议题 #133「开启 JIT 后闪退」）。这里在调用窗口内
+// 布一层 SIGTRAP handler + sigsetjmp/siglongjmp：无人应答时把"必死崩溃"转成
+// "函数返回失败/降级"，由调用方跳过该步；调试器在岗时 brk 由调试器例外端口/
+// ptrace 现场服务（Mach 例外优先于信号转换），本 handler 根本不会触发，成功
+// 路径与裸调用逐字节一致 —— 安全网只在"无人应答"时兜底，不干扰正常 JIT。
+//
+// 嵌套/可重入（硬约束 5）：裸协议函数全是叶子（naked asm，只 brk+ret，不再调用
+// 别人），单次窗口不会自嵌套；但调用方可能嵌套（外层窗口未退出时又走进另一个
+// [JIT-NOCRASH] 包装）。旧的单缓冲 g_jit26TrapEnv 一旦被内层 sigsetjmp 覆盖，
+// 外层的 siglongjmp 目标即失效 —— 故这里改成【按深度索引的 sigjmp_buf 槽位
+// 栈】：第 0 层复用 g_jit26TrapEnv（保留旧名），更深层用 g_jit26TrapNestEnv[]；
+// handler 永远跳到最内层活动窗口，最内层在跳回后把 depth 回退到自己的槽位，
+// 外层窗口继续存活。g_jit26TrapArmed 保留为"是否有窗口在等 brk 应答"的兼容标志。
+// ============================================================================
+#define JIT26_TRAP_MAX_DEPTH 8
+
+static sigjmp_buf g_jit26TrapEnv;                            // 第 0 层窗口缓冲（复用旧名）
+static sigjmp_buf g_jit26TrapNestEnv[JIT26_TRAP_MAX_DEPTH];  // 更深层窗口槽位
+static volatile sig_atomic_t g_jit26TrapDepth = 0;           // 活动窗口层数（0=未布网）
+static volatile sig_atomic_t g_jit26TrapArmed = 0;           // 兼容标志：>0 即有窗口在等 brk
+
+// 取 depth 对应的窗口缓冲。返回值恒非 NULL（depth 已被 push/pop 约束在 [0,MAX)）。
+static sigjmp_buf *JIT26TrapSlotForDepth(int depth) {
+    if (depth <= 0) return &g_jit26TrapEnv;
+    if (depth < JIT26_TRAP_MAX_DEPTH) return &g_jit26TrapNestEnv[depth];
+    return &g_jit26TrapNestEnv[JIT26_TRAP_MAX_DEPTH - 1];
+}
 
 static void JIT26TrapCatch(int sig) {
-    if (!g_jit26TrapArmed) {
+    if (!g_jit26TrapArmed || g_jit26TrapDepth <= 0) {
         // 不属于本安全网的 SIGTRAP：恢复默认语义原样致死，不吞异常
         signal(sig, SIG_DFL);
         raise(sig);
         return;
     }
-    g_jit26TrapArmed = 0;
-    siglongjmp(g_jit26TrapEnv, 1);
+    // 跳到最内层活动窗口；depth 与 sigaction 由该窗口自己回退。
+    sigjmp_buf *env = JIT26TrapSlotForDepth((int)g_jit26TrapDepth - 1);
+    siglongjmp(*env, 1);
 }
 
-void* JIT26CreateRegionLegacySafe(size_t len) {
-    struct sigaction sa, oldsa;
+// 进入窗口：安装 handler、登记本层槽位。返回本层索引；<0 = 深度超限无法布网，
+// 调用方【必须】据此直接降级，绝不能再调用裸 brk 函数。
+static int JIT26TrapWindowPush(struct sigaction *oldsa, sigjmp_buf **outEnv) {
+    struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = JIT26TrapCatch;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = SA_NODEFER;
-    sigaction(SIGTRAP, &sa, &oldsa);
+    if (oldsa) memset(oldsa, 0, sizeof(*oldsa));   // sigaction 万一失败也不回装垃圾
+    sigaction(SIGTRAP, &sa, oldsa);
 
-    void *result = NULL;
-    if (sigsetjmp(g_jit26TrapEnv, 1) == 0) {
-        g_jit26TrapArmed = 1;
-        result = JIT26CreateRegionLegacy(len);
+    int idx = (int)g_jit26TrapDepth;
+    if (idx < 0 || idx >= JIT26_TRAP_MAX_DEPTH) {
+        sigaction(SIGTRAP, oldsa, NULL);   // 回滚，保持环境原样
+        if (outEnv) *outEnv = NULL;
+        return -1;
+    }
+    if (outEnv) *outEnv = JIT26TrapSlotForDepth(idx);
+    g_jit26TrapDepth = idx + 1;
+    g_jit26TrapArmed = 1;
+    return idx;
+}
+
+// 退出窗口：把 depth 回退到本层（处理"从 handler 跳回时更内层已被解开"的情形），
+// 恢复原 SIGTRAP 处置。idx<0（未曾布网成功）时不动 depth。
+static void JIT26TrapWindowPop(int idx, struct sigaction *oldsa) {
+    if (idx >= 0 && g_jit26TrapDepth > idx) {
+        g_jit26TrapDepth = idx;
+    }
+    if (g_jit26TrapDepth <= 0) {
         g_jit26TrapArmed = 0;
+    }
+    sigaction(SIGTRAP, oldsa, NULL);
+}
+
+// 布网失败（深度超限）时的统一降级日志。
+static void JIT26LogWindowOverflow(const char *op) {
+    NSLog(@"[JIT26] [JIT-NOCRASH] %s: trap-window depth overflow (%d) -- skipping raw brk (degrade)",
+          op, (int)JIT26_TRAP_MAX_DEPTH);
+}
+
+// ★ [SHADER-SIGBUS] ============================================================
+// 已 PrepareRegion 的 JIT 区登记表（纯旁路：只记录，不改变任何行为）。
+//
+// 为什么需要：SIGBUS 那一类崩溃的归属判定卡在"地址落在匿名 JIT 区"还是
+// "落在真实 dylib 镜像"上（上一轮只有 `pc − region_base == dylib 偏移` 这一
+// 条算式，两种解释都成立）。这张表让崩溃取证能直接标注每一帧的类别。
+// 容量 32 已远超实际（启动期 PrepareRegion 调用不超过十余次）；满了就丢弃
+// 最早的记录并计数，绝不分配内存（崩溃路径只读，写入点也在 JIT 握手路径上）。
+// ============================================================================
+#define JIT26_REGION_MAX 32
+static struct { void *addr; size_t len; } g_jit26PreparedRegions[JIT26_REGION_MAX];
+static volatile sig_atomic_t g_jit26PreparedCount = 0;   // 已登记条数（<= MAX）
+static volatile sig_atomic_t g_jit26PreparedDropped = 0; // 溢出丢弃计数
+
+void JIT26RecordPreparedRegion(void *addr, size_t len) {
+    if (addr == NULL || len == 0) return;
+    int n = (int)g_jit26PreparedCount;
+    if (n < 0) n = 0;
+    if (n >= JIT26_REGION_MAX) {
+        g_jit26PreparedDropped = (sig_atomic_t)(g_jit26PreparedDropped + 1);
+        return;
+    }
+    g_jit26PreparedRegions[n].addr = addr;
+    g_jit26PreparedRegions[n].len  = len;
+    g_jit26PreparedCount = (sig_atomic_t)(n + 1);
+}
+
+BOOL JIT26AddressInPreparedRegion(const void *p) {
+    uintptr_t a = (uintptr_t)p;
+    int n = (int)g_jit26PreparedCount;
+    if (n > JIT26_REGION_MAX) n = JIT26_REGION_MAX;
+    for (int i = 0; i < n; i++) {
+        uintptr_t base = (uintptr_t)g_jit26PreparedRegions[i].addr;
+        uintptr_t end  = base + g_jit26PreparedRegions[i].len;
+        if (a >= base && a < end) return YES;
+    }
+    return NO;
+}
+
+// brk #0x69（legacy 建区）安全网：无人应答返回 NULL；调试器在岗返回裸函数值。
+void* JIT26CreateRegionLegacySafe(size_t len) {
+    struct sigaction oldsa;
+    sigjmp_buf *env = NULL;
+    int idx = JIT26TrapWindowPush(&oldsa, &env);
+    if (idx < 0) {
+        JIT26LogWindowOverflow("JIT26CreateRegionLegacySafe");
+        return NULL;
+    }
+    void *result = NULL;
+    if (sigsetjmp(*env, 1) == 0) {
+        result = JIT26CreateRegionLegacy(len);
     } else {
+        NSLog(@"[JIT26] [JIT-NOCRASH] brk #0x69 NOT serviced (no debugger) -- degraded, returning NULL");
         result = NULL;
     }
-    sigaction(SIGTRAP, &oldsa, NULL);
+    JIT26TrapWindowPop(idx, &oldsa);
     return result;
+}
+
+// ★ [POCKETJ-JIT] brk #0xf00d cmd=0（显式请求调试器脱离）安全网：与
+//   JIT26CreateRegionLegacySafe 同款。调试器已脱离时 brk 无人应答，捕获后返回
+//   NO 而不使进程致死；调试器在岗时 brk 由调试器例外端口服务，行为与裸函数一致。
+BOOL JIT26DetachSafe(void) {
+    struct sigaction oldsa;
+    sigjmp_buf *env = NULL;
+    int idx = JIT26TrapWindowPush(&oldsa, &env);
+    if (idx < 0) {
+        JIT26LogWindowOverflow("JIT26DetachSafe");
+        return NO;
+    }
+    BOOL serviced = YES;
+    if (sigsetjmp(*env, 1) == 0) {
+        JIT26Detach();
+    } else {
+        NSLog(@"[JIT26] [JIT-NOCRASH] brk #0xf00d(cmd=0 detach) NOT serviced -- degraded");
+        serviced = NO;
+    }
+    JIT26TrapWindowPop(idx, &oldsa);
+    return serviced;
+}
+
+// ★ [JIT-NOCRASH] brk #0xf00d cmd=1（准备可写别名）安全网。裸函数返回值无调用方
+//   使用，这里只报"是否被调试器服务"；降级返回 NO。
+BOOL JIT26PrepareRegionSafe(void *addr, size_t len) {
+    struct sigaction oldsa;
+    sigjmp_buf *env = NULL;
+    int idx = JIT26TrapWindowPush(&oldsa, &env);
+    if (idx < 0) {
+        JIT26LogWindowOverflow("JIT26PrepareRegionSafe");
+        return NO;
+    }
+    BOOL serviced = YES;
+    if (sigsetjmp(*env, 1) == 0) {
+        (void)JIT26PrepareRegion(addr, len);
+        // ★ [SHADER-SIGBUS] 登记本区（只记录），供崩溃取证区分"匿名 JIT 区"与"真实 dylib"。
+        JIT26RecordPreparedRegion(addr, len);
+        NSDebugLog(@"[JIT26] [JIT-NOCRASH] PrepareRegion serviced (addr=%p len=%lu)", addr, (unsigned long)len);
+    } else {
+        NSLog(@"[JIT26] [JIT-NOCRASH] brk #0xf00d(cmd=1 PrepareRegion) NOT serviced -- degraded");
+        serviced = NO;
+    }
+    JIT26TrapWindowPop(idx, &oldsa);
+    return serviced;
+}
+
+// ★ [JIT-NOCRASH] brk #0xf00d cmd=4（小区域、保留内容）安全网；降级返回 NO。
+BOOL JIT26PrepareRegionForPatchingSafe(void *addr, size_t len) {
+    struct sigaction oldsa;
+    sigjmp_buf *env = NULL;
+    int idx = JIT26TrapWindowPush(&oldsa, &env);
+    if (idx < 0) {
+        JIT26LogWindowOverflow("JIT26PrepareRegionForPatchingSafe");
+        return NO;
+    }
+    BOOL serviced = YES;
+    if (sigsetjmp(*env, 1) == 0) {
+        JIT26PrepareRegionForPatching(addr, len);
+        // ★ [SHADER-SIGBUS] 同 PrepareRegionSafe：登记本区供崩溃取证。
+        JIT26RecordPreparedRegion(addr, len);
+        NSDebugLog(@"[JIT26] [JIT-NOCRASH] PrepareRegionForPatching serviced (addr=%p len=%lu)", addr, (unsigned long)len);
+    } else {
+        NSLog(@"[JIT26] [JIT-NOCRASH] brk #0xf00d(cmd=4 PrepareRegionForPatching) NOT serviced -- degraded");
+        serviced = NO;
+    }
+    JIT26TrapWindowPop(idx, &oldsa);
+    return serviced;
+}
+
+// ★ [JIT-NOCRASH] brk #0xf00d cmd=2（下发 UniversalJIT26 script）安全网；降级返回 NO。
+BOOL JIT26SendJITScriptSafe(NSString *script) {
+    if (script == nil) {
+        NSLog(@"[JIT26] [JIT-NOCRASH] SendJITScript skipped: script is nil");
+        return NO;
+    }
+    struct sigaction oldsa;
+    sigjmp_buf *env = NULL;
+    int idx = JIT26TrapWindowPush(&oldsa, &env);
+    if (idx < 0) {
+        JIT26LogWindowOverflow("JIT26SendJITScriptSafe");
+        return NO;
+    }
+    BOOL serviced = YES;
+    if (sigsetjmp(*env, 1) == 0) {
+        JIT26SendJITScript(script);
+        NSDebugLog(@"[JIT26] [JIT-NOCRASH] SendJITScript serviced");
+    } else {
+        NSLog(@"[JIT26] [JIT-NOCRASH] brk #0xf00d(cmd=2 SendJITScript) NOT serviced -- degraded");
+        serviced = NO;
+    }
+    JIT26TrapWindowPop(idx, &oldsa);
+    return serviced;
+}
+
+// ★ [JIT-NOCRASH] brk #0xf00d cmd=3（首次 brk 后是否自动脱离）安全网；降级返回 NO。
+BOOL JIT26SetDetachAfterFirstBrSafe(BOOL value) {
+    struct sigaction oldsa;
+    sigjmp_buf *env = NULL;
+    int idx = JIT26TrapWindowPush(&oldsa, &env);
+    if (idx < 0) {
+        JIT26LogWindowOverflow("JIT26SetDetachAfterFirstBrSafe");
+        return NO;
+    }
+    BOOL serviced = YES;
+    if (sigsetjmp(*env, 1) == 0) {
+        JIT26SetDetachAfterFirstBr(value);
+        NSDebugLog(@"[JIT26] [JIT-NOCRASH] SetDetachAfterFirstBr(%d) serviced", (int)value);
+    } else {
+        NSLog(@"[JIT26] [JIT-NOCRASH] brk #0xf00d(cmd=3 SetDetachAfterFirstBr) NOT serviced -- degraded");
+        serviced = NO;
+    }
+    JIT26TrapWindowPop(idx, &oldsa);
+    return serviced;
+}
+
+// ============================================================================
+// ★ [POCKETJ-JIT] PocketJ 内置 JIT 前置门禁
+//   (EricoEC/PocketJLauncher · Vendor/StikJIT/INTEGRATION.md
+//    「Built-in StikJIT: Gate every entry point」)
+//
+//   内置 StikJIT 需要同时满足:iOS ≥ 17.4 · 宿主进程 get-task-allow ·
+//   可读配对文件。注意 get-task-allow 属于宿主进程,必须在宿主侧检查。
+//
+//   ⚠ 本仓库暂未接入 Helper 扩展(进程不能自附加调试器 —— 见 PocketJ
+//     Natives/stikdebug/StikDebugEngine.m 顶部同款注释),因此这里【只检测、
+//     只记日志/供 UI 展示】,不做任何 vAttach 动作。等 Helper 扩展落地后,
+//     这三个门禁就是启动 Helper 前的 guard。
+// ============================================================================
+
+BOOL AMEJITDeviceSupportsBuiltInStikJIT(void) {
+    if (@available(iOS 17.4, *)) {
+        return YES;
+    }
+    return NO;
+}
+
+// 宿主进程是否带 get-task-allow。使用 Security 框架 SPI(SecTask*),
+// 原型见本文件顶部的 extern 声明;与 INTEGRATION.md 的 ObjC 示例同构,
+// 但按文档写法释放正确(不复用本文件既有 getEntitlementValue —— 它有一处
+// 释放后使用)。
+BOOL AMEJITHasGetTaskAllow(void) {
+    void *task = SecTaskCreateFromSelf(NULL);
+    if (task == NULL) {
+        return NO;
+    }
+    CFTypeRef value = SecTaskCopyValueForEntitlement(task, @"get-task-allow", NULL);
+    BOOL result = (value == kCFBooleanTrue);
+    if (value != NULL) {
+        CFRelease(value);
+    }
+    CFRelease(task);
+    return result;
+}
+
+// 配对文件推荐位置(INTEGRATION.md「Store and import the pairing file」):
+//   Documents/StikJIT/pairingFile.plist
+// Info.plist 已置 UIFileSharingEnabled=true,用户可经 Finder/AFC 拷入。
+// ★ [JIT-PAIRING] 配对文件在实战里会放在不同位置(用户按不同教程导入的):
+//   以前只认 Documents/StikJIT/pairingFile.plist 一条 ⇒ 明明装了也报 pairing=NO
+//   (用户实测:日志说"没装",但他确实装了)。故改为【多候选】逐个查,并记住命中的那条。
+static NSString *gAmeJITPairingFoundPath = nil;
+
+NSArray<NSString *> *AMEJITPairingFileCandidates(void) {
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    NSURL *documents = [NSFileManager.defaultManager
+        URLForDirectory:NSDocumentDirectory inDomain:NSUserDomainMask
+       appropriateForURL:nil create:YES error:nil];
+    NSURL *support = [NSFileManager.defaultManager
+        URLForDirectory:NSApplicationSupportDirectory inDomain:NSUserDomainMask
+       appropriateForURL:nil create:YES error:nil];
+    if (documents) {
+        NSArray<NSString *> *subs = @[@"StikJIT", @"StikDebug", @"pairing", @""];
+        NSArray<NSString *> *names = @[@"pairingFile.plist", @"pairingFile",
+                                       @"mobiledevicepairing.plist", @"pairing_record.plist"];
+        for (NSString *sub in subs) {
+            NSURL *dir = sub.length ? [documents URLByAppendingPathComponent:sub isDirectory:YES] : documents;
+            for (NSString *n in names) {
+                [out addObject:[[dir URLByAppendingPathComponent:n] path]];
+            }
+        }
+    }
+    if (support) {
+        for (NSString *sub in @[@"StikJIT", @"StikDebug", @""]) {
+            NSURL *dir = sub.length ? [support URLByAppendingPathComponent:sub isDirectory:YES] : support;
+            [out addObject:[[dir URLByAppendingPathComponent:@"pairingFile.plist"] path]];
+        }
+    }
+    return out;
+}
+
+/// 返回【实际存在】的配对文件路径;都没有则返回推荐路径(供日志展示“应该放哪”)。
+NSString *AMEJITPairingFilePath(void) {
+    if (gAmeJITPairingFoundPath && [NSFileManager.defaultManager fileExistsAtPath:gAmeJITPairingFoundPath]) {
+        return gAmeJITPairingFoundPath;
+    }
+    for (NSString *p in AMEJITPairingFileCandidates()) {
+        if ([NSFileManager.defaultManager fileExistsAtPath:p]) {
+            gAmeJITPairingFoundPath = p;
+            return p;
+        }
+    }
+    return AMEJITPairingFileCandidates().firstObject;
+}
+
+BOOL AMEJITHasPairingFile(void) {
+    for (NSString *p in AMEJITPairingFileCandidates()) {
+        if ([NSFileManager.defaultManager fileExistsAtPath:p]) {
+            gAmeJITPairingFoundPath = p;
+            return YES;
+        }
+    }
+    return NO;
+}
+
+/// ★ [JIT-PAIRING] 单独探测“使能工具是否已装”——用 URL scheme 探,与配对文件无关。
+///   避免把“没找到配对文件”误读成“工具没装”。
+BOOL AMEJITEnablerAppInstalled(void) {
+    NSArray<NSString *> *schemes = @[@"stikdebug", @"stikjit", @"sidestore", @"stosdebug"];
+    for (NSString *sc in schemes) {
+        NSURL *u = [NSURL URLWithString:[sc stringByAppendingString:@"://"]];
+        if (u && [[UIApplication sharedApplication] canOpenURL:u]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+// 在一次 JIT 获取动作前把门禁状态打到日志(只读,无副作用)。
+void AMEJITLogPocketJReadiness(NSString *context) {
+    BOOL hasPairing = AMEJITHasPairingFile();
+    NSLog(@"[JIT] [POCKETJ-JIT] readiness(%@): ios17_4=%@ get-task-allow=%@ "
+          @"enabler-app-installed=%@ pairing-file=%@ found=%@ (推荐位置=%@)",
+          context ?: @"?",
+          AMEJITDeviceSupportsBuiltInStikJIT() ? @"YES" : @"NO",
+          AMEJITHasGetTaskAllow() ? @"YES" : @"NO",
+          AMEJITEnablerAppInstalled() ? @"YES" : @"NO",
+          hasPairing ? @"YES" : @"NO",
+          hasPairing ? (AMEJITPairingFilePath() ?: @"(?)") : @"(未找到,已试多路径)",
+          AMEJITPairingFileCandidates().firstObject ?: @"(nil)");
 }
 
 #ifndef P_TRACED

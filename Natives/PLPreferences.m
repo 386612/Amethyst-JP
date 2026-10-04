@@ -4,6 +4,17 @@
 #import "config.h"
 #import "utils.h"
 
+// ★ [UI-LAYOUT-MIGRATE] 物理机型判定（不受 UIKit+hook 对 idiom 的改写影响）。
+//   与 SceneDelegate.AmeSceneIsPhysicalPad / LauncherRootIsPhysicalPhone 同口径：
+//   UIKit+hook.m 的 init_hookUIKitConstructor 会把 active idiom 强制改成 Pad/Phone，
+//   故这里必须用 UIDevice.model 判断真机；未识别机型（模拟器）用 idiom 兜底。
+static BOOL AmePrefsIsPhysicalPhone(void) {
+    NSString *model = [[UIDevice currentDevice].model lowercaseString];
+    if ([model containsString:@"ipad"]) return NO;
+    if ([model containsString:@"iphone"] || [model containsString:@"ipod"]) return YES;
+    return (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone);
+}
+
 NSString *const PREF_DOWNLOAD_SOURCE_MOD = @"general.download_source_mod";
 NSString *const PREF_DOWNLOAD_SOURCE_SHADER = @"general.download_source_shader";
 NSString *const PREF_DOWNLOAD_SOURCE_RESOURCEPACK = @"general.download_source_resourcepack";
@@ -84,17 +95,7 @@ NSString *const PREF_MOD_MIRROR = @"general.mod_mirror";
             // 键必须在此注册：否则 PLPreferences 的 getter/setter 因键不存在而静默
             // 失败（日志刷 "could not find preference video.sfpew_overlay"），
             // 设置页开关既读不出也存不下。
-            @"sfpew_overlay": @NO,
-            // 启动器侧 FSR1（EASU 边缘自适应上采样 + RCAS 锐化）开关。
-            // 与 sfpew_overlay 完全同款的要求：键必须在此注册。否则
-            //   * getPrefBool(@"video.fsr1") 恒返回 NO（getObject 取到 nil）
-            //   * setPrefObject(@"video.fsr1") 静默失败并打日志
-            //     "[PLPreferences] Setter could not find preference video.fsr1"
-            // 后果是设置页开关存不下来、重开即回退为关，ameFsr1Wanted() 永远为假，
-            // FSR1 一次都不介入且日志里一个 [FSR1] 字样都没有 —— 用户看到的就是
-            // "开了没效果、开关自己关了"。
-            // 默认关闭（opt-in）。且它只在 video.resolution < 100% 时才介入。
-            @"fsr1": @NO
+            @"sfpew_overlay": @NO
         }.mutableCopy,
         @"control": @{
             @"default_ctrl": @"default.json",
@@ -104,10 +105,43 @@ NSString *const PREF_MOD_MIRROR = @"general.mod_mirror";
             @"hardware_hide": @YES,
             @"recording_hide": @YES,
             @"gesture_mouse": @YES,
+            // ★ [BT-MOUSE] 蓝牙鼠标/触控板（iOS 间接指针）支持总开关，默认开。
+            //   iOS 上部分蓝牙鼠标/触控板（尤其 iPhone「辅助触控 → 指点设备」、
+            //   以及 GameController 的 GCMouse 未报告鼠标的机型）不走 GCMouse，
+            //   而以「间接指针」(UITouch.type == UITouchTypeIndirectPointer) 的
+            //   hover/touch 形式送到 UIKit。开启后由 UIKit 层接住并复用既有合成
+            //   路径送进游戏；仅当 GCMouse 未报告任何鼠标时接管，故与硬件鼠标、
+            //   触控模拟鼠标零冲突。关掉即回到现状（触控/键盘不受影响）。
+            //   键必须在此注册：否则 PLPreferences getter/setter 因键不存在而静默
+            //   失败，设置页既读不出也存不下。
+            @"bt_pointer_enable": @YES,
             @"gesture_hotbar": @YES,
             @"disable_haptics": @NO,
             @"slideable_hotbar": @NO,
             @"press_duration": @(400),
+            // ★ [TAP-CLICK] 轻触即左键（可调 + 开关）
+            //   tap_click_enable       : 总开关，默认开；关掉即回到旧行为
+            //                            （游戏内轻触=右键放置、菜单轻触=左键，长按=左键破坏）
+            //   tap_click_duration     : 时长阈值(ms)，轻触时长须 < 该值
+            //   tap_click_move         : 位移阈值(pt)，按下点与抬起点距离须 < 该值
+            //   tap_click_button_right : 【兼容旧键】合成按键，YES=右键(旧"轻触=放置")。
+            //                            见下方 tap_click_mode；本键为 YES 时强制 right。
+            // ★ [TAP-UNIVERSAL] 轻触按键模式（单键通用）：
+            //   tap_click_mode ∈ { "auto"(默认), "left", "right" }
+            //     auto  : 启动器只发"轻触 marker"，由游戏侧(agent)按 Minecraft.hitResult 决定
+            //             真键 —— 实体→左键攻击；方块可交互→右键打开；手持可放置→右键放置；
+            //             普通方块/打空→左键挖掘。启动器看不到世界，判定只能在游戏侧。
+            //     注意: auto 依赖游戏侧 agent(MouseHandler.onButton 补丁)。若 agent 缺失，
+            //           marker 在游戏里是空操作 ⇒ 请把模式改为 left。
+            //     left  : 恒左键(等价旧默认)。
+            //     right : 恒右键(等价旧 tap_click_button_right=开)。
+            // 键必须在此注册：否则 PLPreferences getter/setter 因键不存在而静默失败，
+            // 设置页既读不出也存不下。
+            @"tap_click_enable": @YES,
+            @"tap_click_duration": @(300),
+            @"tap_click_move": @(10),
+            @"tap_click_button_right": @NO,
+            @"tap_click_mode": @"auto",
             @"button_scale": @(100),
             @"mouse_scale": @(100),
             @"mouse_speed": @(100),
@@ -119,7 +153,7 @@ NSString *const PREF_MOD_MIRROR = @"general.mod_mirror";
             @"mod_touch_mode": @0,
             @"mod_touch_vibrate_enable": @YES,
             @"mod_touch_vibrate_intensity": @2,
-            @"mod_touch_moveview_enable": @YES,
+            @"mod_touch_moveview_enable": @NO,   // ★ [HOST-BUG-B] 强制关闭(「视角摇晃/移动视角」功能已移除,不再暴露开关)
             // UI 子面板占位 key（LauncherPreferencesViewController 的 getPreference 回调
             // 会对每个设置项按 "section.key" 查询，包括 button/childPane 类型）。
             // 提供空串默认值避免触发 "Getter could not find preference control.custom_controls" 日志。
@@ -193,6 +227,8 @@ NSString *const PREF_MOD_MIRROR = @"general.mod_mirror";
             @"game_directory": @"default",
             @"hidden_sidebar": @(realUIIdiom == UIUserInterfaceIdiomPhone),
             @"appicon": @"AppIcon-Light",
+            // ★ [UI-LAYOUT] 遗留键：布局已改为按设备自动判定（iPhone⇒标准 / iPad⇒卡片），SceneDelegate 不再读它。
+            //   保留键避免旧读取方拿到 nil；值 "vs" 仅为历史默认。
             @"ui_layout": @"vs",
             @"ui_theme": @"dark",
             @"multi_threaded": @NO,
@@ -207,6 +243,9 @@ NSString *const PREF_MOD_MIRROR = @"general.mod_mirror";
 
         defaults[@"java"][@"manage_runtime"] = @""; // stub
         defaults[@"debug"] = @{
+            // ★ [UI-LAYOUT] 内部布局回退开关（不暴露给设置 UI）：仅 iPad 生效，值 "vs"
+            //   ⇒ 临时强制标准布局（Root）；"card"/空 ⇒ 按设备自动（iPad 卡片）。见 SceneDelegate。
+            @"debug_ui_layout_force": @"",
             @"debug_universal_script_jit": @NO,
             @"debug_always_attached_jit": @NO,
             @"debug_skip_wait_jit": @NO,
@@ -338,6 +377,53 @@ NSString *const PREF_MOD_MIRROR = @"general.mod_mirror";
                 }
             }
             internal[@"task129d_mg_cache_default_migrated"] = @YES;
+        }
+    }
+
+    // ★ [UI-LAYOUT-MIGRATE] 启动最早期一次性迁移：旧版设置页允许把 iPhone 的
+    //   general.ui_layout 设成 "card"（iPad 卡片布局）。升级后切换入口已删除，用户
+    //   自己换不回来，主页长期错乱。这里【启动时主动写回】（不是仅被动忽略）：
+    //     iPhone + ui_layout == "card"  ⇒  强制改写为 "vs"（并打迁移日志）；
+    //     iPad 上保留 "card"（那是设计）；空 / "vs" / 未设置一律不动。
+    //   写回发生在 global 偏好上；initWithAutomaticMigrator 末尾的 saveGlobalPref 会
+    //   持久化 ⇒ 幂等：迁移后值即非 card，下次启动不再触发、不再刷日志。
+    //   所有后续读取方（SceneDelegate 只按机型判定；若有旧/新读取方读该键，请走
+    //   ameResolveUILayout 或直接读本迁移后的值）看到的都是纠正后的值。
+    if (global) {
+        NSMutableDictionary *general = pref[@"general"];
+        if (![general isKindOfClass:[NSMutableDictionary class]]) {
+            general = general ? [general mutableCopy] : [NSMutableDictionary dictionary];
+            pref[@"general"] = general;
+        }
+        NSString *uiLayout = general[@"ui_layout"];
+        if (AmePrefsIsPhysicalPhone() && [uiLayout isKindOfClass:[NSString class]] &&
+            [uiLayout isEqualToString:@"card"]) {
+            NSLog(@"[UI-LAYOUT] migrated legacy ui_layout=card -> vs (iPhone)");
+            general[@"ui_layout"] = @"vs";
+        }
+    }
+
+    // ★ [TC-MOVEVIEW-MIGRATE] 启动最早期一次性迁移：强制关闭「视角摇晃/移动视角」
+    //   (control.mod_touch_moveview_enable)。该开关已从 TouchController 管理界面移除，
+    //   存量用户若曾设为 @YES，这里【启动时主动写回 @NO】（不是仅忽略），
+    //   保证所有读取方（SurfaceViewController 手势闸门 / 统一解析函数
+    //   ameResolveTouchMoveViewEnabled）看到的都是迁移后的值。
+    //   哨兵 internal.hostbugb_moveview_forced_off 保证只执行一次；不触碰用户其它设置。
+    if (global) {
+        NSMutableDictionary *internal2 = pref[@"internal"];
+        if (![internal2 isKindOfClass:[NSMutableDictionary class]]) {
+            internal2 = [NSMutableDictionary dictionary];
+            pref[@"internal"] = internal2;
+        }
+        if (![internal2[@"hostbugb_moveview_forced_off"] boolValue]) {
+            NSMutableDictionary *ctl = pref[@"control"];
+            if ([ctl isKindOfClass:[NSMutableDictionary class]]) {
+                if ([ctl[@"mod_touch_moveview_enable"] boolValue]) {
+                    NSLog(@"[TC-MOVEVIEW] migrated legacy control.mod_touch_moveview_enable=enable -> disable (feature removed)");
+                }
+                ctl[@"mod_touch_moveview_enable"] = @NO;
+            }
+            internal2[@"hostbugb_moveview_forced_off"] = @YES;
         }
     }
     return pref;

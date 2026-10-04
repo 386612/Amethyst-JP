@@ -1,4 +1,6 @@
 #import "CustomControlsViewController.h"
+// ★ [GLASS-LIQUID] 材质统一走风格层(AmeGlassEffect):iOS≥26 ⇒ 系统 UIGlassEffect
+#import "UIKit+GlassSurface.h"
 #import "DBNumberedSlider.h"
 #import "FileListViewController.h"
 #import "LauncherPreferences.h"
@@ -72,6 +74,7 @@
     self.resizeView = [[ControlHandleView alloc] initWithFrame:CGRectMake(0, 0, 30, 30)];
     self.resizeView.backgroundColor = self.view.tintColor;
     self.resizeView.layer.cornerRadius = self.resizeView.frame.size.width / 2;
+    self.resizeView.layer.cornerCurve = kCACornerCurveContinuous;   // ★ [CORNER-FIX] 连续圆角(与系统卡片一致)
     self.resizeView.clipsToBounds = YES;
     self.resizeView.hidden = YES;
     [self.resizeView addGestureRecognizer:[[UIPanGestureRecognizer alloc]
@@ -644,13 +647,15 @@ CGFloat currentY;
 
     UIBlurEffectStyle blurStyle = UIBlurEffectStyleSystemMaterial;
     UIVisualEffectView *blurView;
-    blurView = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:blurStyle]];
+    // ★ [GLASS-LIQUID] 走风格层:iOS≥26 ⇒ 系统 UIGlassEffect(不再直接 UIBlurEffect)
+    blurView = [[UIVisualEffectView alloc] initWithEffect:AmeGlassEffect(blurStyle)];
     blurView.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleBottomMargin;
     blurView.frame = CGRectMake(
         (self.view.frame.size.width - MAX(tempW, tempH))/2,
         (self.view.frame.size.height - MIN(tempW, tempH))/2,
         MAX(tempW, tempH), MIN(tempW, tempH));
     blurView.layer.cornerRadius = 10.0;
+    blurView.layer.cornerCurve = kCACornerCurveContinuous;   // ★ [CORNER-FIX] 连续圆角(与系统卡片一致)
     blurView.clipsToBounds = YES;
     [self.view addSubview:blurView];
 

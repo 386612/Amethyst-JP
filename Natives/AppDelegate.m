@@ -18,6 +18,8 @@ extern dispatch_group_t fatalExitGroup;
 #pragma mark - UISceneSession lifecycle
 
 - (UISceneConfiguration *)application:(UIApplication *)application configurationForConnectingSceneSession:(UISceneSession *)connectingSceneSession options:(UISceneConnectionOptions *)options {
+    // ★ [I18N-ORDER] 全 App 最早入口:在任何 UI 构建之前解析并缓存"生效语言"（幂等）。
+    AmeLauncherPrimeLanguage();
     // 一次性迁移旧版全局下载源偏好到分类镜像策略键（幂等，早于任何 UI 读取偏好）
     migrateDownloadSourcePreferences();
     // Called when a new scene session is being created.
@@ -61,7 +63,7 @@ extern dispatch_group_t fatalExitGroup;
 
 - (UIInterfaceOrientationMask)application:(UIApplication *)application supportedInterfaceOrientationsForWindow:(UIWindow *)window {
     // Force landscape only
-    return UIInterfaceOrientationMaskLandscape;
+    return UIInterfaceOrientationMaskAllButUpsideDown;   // ★ [PORTRAIT] 窗口层放开(游戏页单独锁横屏)
 }
 
 @end
