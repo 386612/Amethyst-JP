@@ -63,10 +63,18 @@ jobs:
           echo "DEVELOPER_DIR=$(xcode-select -p)" >> "$GITHUB_ENV"
           echo "★ 已写入 GITHUB_ENV:SDKPATH / DEVELOPER_DIR"
 
-      - name: Install GNU Make
+      - name: Fix Homebrew openssl link (openssl@1.1 vs openssl@3)
         run: |
-          brew update
-          brew install make
+          brew unlink openssl@1.1 || true
+          brew link --overwrite openssl@3 || true
+
+      - name: Install GNU Make
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_NO_INSTALL_CLEANUP: 1
+        run: |
+          brew update || true
+          brew install make || true
 
       - name: Install Java 8 (Temurin) via Homebrew
         run: |
