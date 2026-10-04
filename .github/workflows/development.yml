@@ -65,8 +65,14 @@ jobs:
 
       - name: Fix Homebrew openssl link (openssl@1.1 vs openssl@3)
         run: |
+          # runner 镜像 /opt/homebrew/bin/openssl 的元数据仍记在 openssl@1.1 名下,
+          # 导致后续 brew install(如 ldid)顺带升级 openssl@3 到 3.6.5 时 link 失败
+          # (Could not symlink bin/openssl / Target is a symlink belonging to openssl@1.1)。
+          sudo rm -f /opt/homebrew/bin/openssl || true
           brew unlink openssl@1.1 || true
+          brew uninstall --ignore-dependencies openssl@1.1 || true
           brew link --overwrite openssl@3 || true
+          ls -l /opt/homebrew/bin/openssl || true
 
       - name: Install GNU Make
         env:
