@@ -17,10 +17,13 @@
 #import "ImageCropperViewController.h"
 #import "CustomIconManager.h"
 #import "BackgroundSettingsViewController.h"
+// ★ [SETTINGS-VISIBLE] 界面风格(玻璃)单一真相源:主设置页直接读写 background_glass_* 键
+#import "AMEGlassStyle.h"
 #import "BackgroundManager.h"
 #import "UpdateChecker.h"
 #import "CurseForgeAPIKeyViewController.h"
 #import "CustomControlsViewController.h"
+#import "LauncherLanguageViewController.h"   // ★ [LANG-SWITCH] 语言选择子页
 #import "AI/AIProviderConfigViewController.h"
 #import "AI/AISessionListViewController.h"
 #import "AI/AISystemPromptEditorViewController.h"
@@ -263,6 +266,19 @@
     self.searchEnabled = YES;
 
     self.getPreference = ^id(NSString *section, NSString *key){
+        // ★ [LANG-SWITCH] 语言项：显示名用 NSLocale 现取；实际值存 NSUserDefaults
+        // 自定义键 (ame_launcher_language)，与通用偏好存储解耦。跟随系统时展示当前系统语言名。
+        if ([section isEqualToString:@"general"] && [key isEqualToString:@"launcher_language"]) {
+            // ★ [I18N] 显示"实际生效的语言"（用户选择 ?? 系统最佳匹配 ?? en），与界面
+            // 实际渲染同一事实源；选择"跟随系统"时再标注，杜绝"系统英文却说中文"。
+            NSString *override = AmeLauncherPreferredLanguageOverride();
+            NSString *name = AmeLauncherDisplayNameForLanguageCode(AmeLauncherEffectiveLanguageCode());
+            if (override.length == 0) {
+                return [NSString stringWithFormat:@"%@（%@）", name,
+                        localize(@"preference.lang.follow_system", @"跟随系统")];
+            }
+            return name;
+        }
         // AI 助手分区：直接与 AiSettings 打通（AiSettings 读写 NSUserDefaults，不走通用偏好存储）
         if ([section isEqualToString:@"ai"]) {
             if ([key isEqualToString:@"safety_mode"]) {
@@ -277,10 +293,22 @@
             }
             return nil;
         }
+        // ★ [SETTINGS-VISIBLE] 界面风格(玻璃):读 NSUserDefaults 的 background_glass_* 键(与背景设置子页同源)
+        if ([section isEqualToString:@"general"] && [key isEqualToString:@"glass_style"]) {
+            return localize([NSString stringWithFormat:@"preference.style.%@", AMEGlassStyleStringFromEnum(AMEGlassStyleConfigured())], nil);
+        }
+        if ([section isEqualToString:@"general"] && [key isEqualToString:@"glass_handdrawn"]) {
+            return @(AMEGlassStyleHandDrawnOverlayEnabled());
+        }
         NSString *keyFull = [NSString stringWithFormat:@"%@.%@", section, key];
         return getPrefObject(keyFull);
     };
     self.setPreference = ^(NSString *section, NSString *key, id value){
+        // ★ [LANG-SWITCH] 语言项由子页 LauncherLanguageViewController 直接写 NSUserDefaults，
+        // 这里拦截，避免误写入通用偏好存储（保持单一数据源）。
+        if ([section isEqualToString:@"general"] && [key isEqualToString:@"launcher_language"]) {
+            return;
+        }
         // AI 助手分区：回写到 AiSettings
         if ([section isEqualToString:@"ai"]) {
             if ([key isEqualToString:@"safety_mode"]) {
@@ -299,6 +327,22 @@
             } else if ([key isEqualToString:@"markdown_enabled"]) {
                 [[AiSettings sharedSettings] setMarkdownEnabled:[value boolValue]];
             }
+            return;
+        }
+        // ★ [SETTINGS-VISIBLE] 界面风格(玻璃):写 NSUserDefaults 的 background_glass_* 键 + 广播即时生效
+        if ([section isEqualToString:@"general"] && [key isEqualToString:@"glass_style"]) {
+            AMEGlassStyle s = AMEGlassStyleEnumFromString([value isKindOfClass:[NSString class]] ? value : nil);
+            if (s == AMEGlassStyleLiquid && !AMEGlassStyleSystemSupportsLiquid()) {
+                s = AMEGlassStyleNative;   // ★ iOS<26 强制原生
+            }
+            AMEGlassStyleSetConfigured(s);
+            return;
+        }
+        if ([section isEqualToString:@"general"] && [key isEqualToString:@"glass_handdrawn"]) {
+            BOOL on = [value boolValue];
+            if (on && !AMEGlassStyleSystemSupportsLiquid()) { on = NO; }
+            [BackgroundManager sharedManager].glassRimEnabled = on;   // 兼容既有全局强度收敛
+            AMEGlassStyleSetHandDrawnOverlayEnabled(on);
             return;
         }
         NSString *keyFull = [NSString stringWithFormat:@"%@.%@", section, key];
@@ -367,21 +411,10 @@
                   localize(@"preference.title.mod_mirror-mcim", nil)
               ]
             },
-            @{@"key": @"ui_layout",
-              @"title": localize(@"i18n_str_376", nil),
-              @"hasDetail": @YES,
-              @"icon": @"rectangle.split.3x3",
-              @"type": self.typePickField,
-              @"enableCondition": whenNotInGame,
-              @"pickKeys": @[
-                  @"vs",
-                  @"card"
-              ],
-              @"pickList": @[
-                  localize(@"i18n_str_377", nil),
-                  localize(@"i18n_str_378", nil)
-              ]
-            },
+            // ★ [UI-LAYOUT] 「UI 布局」切换入口已移除（群主建议）：布局改为按设备自动判定
+            //   （iPhone ⇒ 标准, iPad ⇒ 卡片, 见 SceneDelegate ameMakeLauncherHomeViewController）。
+            //   原 ui_layout pick 字段（vs/card）在这里 —— 删掉后用户无法再把 iPhone 设成 card
+            //   而卡进主页错乱态。旧 general.ui_layout 值仍被忽略（兼容读取见 SceneDelegate）。
             @{@"key": @"ui_theme",
               @"title": localize(@"i18n_str_379", nil),
               @"hasDetail": @YES,
@@ -404,6 +437,43 @@
                   // 仅设置 window.overrideUserInterfaceStyle，账号数据不受影响。
                   [[NSNotificationCenter defaultCenter] postNotificationName:@"UIThemeChanged" object:value];
               }
+            },
+            // ★ [SETTINGS-VISIBLE] 界面风格(玻璃):主设置页可见的一级入口 —— 用户抱怨「设置里看不到开关」,
+            //   原先只在「启动器背景」子页里 ⇒ 这里补一行,直接可改、即时生效(写入 NSUserDefaults 的
+            //   background_glass_style / background_glass_handdrawn,与子页同源)。iOS<26 时液态玻璃段不可选。
+            @{@"key": @"glass_style",
+              @"hasDetail": @NO,
+              @"icon": @"circle.lefthalf.filled",
+              @"type": self.typePickField,
+              @"enableCondition": whenNotInGame,
+              @"pickKeys": @[
+                  @"auto",
+                  @"native",
+                  @"liquid"
+              ],
+              @"pickList": @[
+                  localize(@"preference.style.auto", nil),
+                  localize(@"preference.style.native", nil),
+                  localize(@"preference.style.liquid", nil)
+              ]
+            },
+            @{@"key": @"glass_handdrawn",
+              @"hasDetail": @NO,
+              @"icon": @"sparkles",
+              @"type": self.typeSwitch,
+              @"enableCondition": ^BOOL(){ return whenNotInGame() && AMEGlassStyleSystemSupportsLiquid(); }
+            },
+            // ★ [I18N] 启动器界面语言：跟随系统 + 白名单语言（AmeLauncherSupportedLanguageCodes）。
+            // 不写 title（让父类在生成 cell 时按 preference.title.<key> 现取 localize，
+            // 切换语言后 reloadData 即可即时刷新文案）；实际值由子页直接写
+            // NSUserDefaults 自定义键 (ame_launcher_language)，不走通用偏好存储。
+            @{@"key": @"launcher_language",
+              @"hasDetail": @NO,
+              @"icon": @"globe",
+              @"type": self.typeChildPane,
+              @"enableCondition": whenNotInGame,
+              @"canDismissWithSwipe": @YES,
+              @"class": LauncherLanguageViewController.class
             },
             @{@"key": @"custom_accent_color",
               @"title": localize(@"i18n_str_383", nil),
@@ -735,18 +805,6 @@
               @"min": @(25),
               @"max": @(150)
             },
-            // 启动器侧 FSR1（EASU 边缘自适应上采样 + RCAS 锐化）。
-            // 它接管 video.resolution 的缩放：把原本由 CoreAnimation 做的双线性
-            // 拉伸换成 FSR1，低分辨率渲染 + 高质量还原，换帧率。
-            // 位置在 EGL 之上、渲染器之外，只依赖当前上下文能解析到的 GL 入口点，
-            // 因此不挑后端（MG / MobileGlues / ANGLE / LTW / SFPEW 通用）。
-            // 只有 video.resolution < 100% 时才真正介入；100% 时无东西可上采样。
-            @{@"key": @"fsr1",
-              @"hasDetail": @YES,
-              @"icon": @"arrow.up.left.and.arrow.up.right",
-              @"type": self.typeSwitch,
-              @"enableCondition": whenNotInGame
-            },
             // 帧率限制选项已移除：CADisplayLink 始终采用 30-120Hz 自适应范围，
             // 由屏幕硬件能力决定实际帧率（60Hz 设备仍为 60，120Hz ProMotion 设备可达 120）。
             // 不再提供"最大帧率限制 60FPS"开关，避免用户误关闭导致帧率被人为锁死。
@@ -1013,6 +1071,12 @@
                 @"hasDetail": @YES,
                 @"type": self.typeSwitch,
             },
+            // ★ [BT-MOUSE] 蓝牙鼠标/触控板（间接指针）支持开关，默认开。
+            @{@"key": @"bt_pointer_enable",
+                @"icon": @"computermouse",
+                @"hasDetail": @YES,
+                @"type": self.typeSwitch,
+            },
             @{@"key": @"gesture_hotbar",
                 @"icon": @"hand.tap",
                 @"hasDetail": @YES,
@@ -1039,6 +1103,54 @@
                 @"type": self.typeSlider,
                 @"min": @(100),
                 @"max": @(1000),
+            },
+            // ★ [TAP-CLICK] 轻触即左键（默认开）：轻触一下 = 一次完整左键单击。
+            // 关闭后回到旧行为（游戏内轻触=右键放置、菜单轻触=左键，长按=左键破坏）。
+            @{@"key": @"tap_click_enable",
+                @"hasDetail": @YES,
+                @"icon": @"hand.tap",
+                @"type": self.typeSwitch,
+            },
+            // ★ [TAP-UNIVERSAL] 单键通用：轻触发哪个键。
+            //   auto  = 按准星目标自动判（方块可交互→右键打开；手持方块→右键放置；其余→左键）
+            //   left  = 恒左键；right = 恒右键。
+            @{@"key": @"tap_click_mode",
+                @"hasDetail": @YES,
+                @"icon": @"cursorarrow.click.badge.clock",
+                @"type": self.typePickField,
+                @"pickKeys": @[
+                    @"auto",
+                    @"left",
+                    @"right"
+                ],
+                @"pickList": @[
+                    localize(@"preference.title.tap_click_mode-auto", nil),
+                    localize(@"preference.title.tap_click_mode-left", nil),
+                    localize(@"preference.title.tap_click_mode-right", nil)
+                ]
+            },
+            // 时长阈值(ms)：轻触按住时长小于它才判定为“轻触”
+            @{@"key": @"tap_click_duration",
+                @"hasDetail": @YES,
+                @"icon": @"timer",
+                @"type": self.typeSlider,
+                @"min": @(100),
+                @"max": @(1000),
+            },
+            // 位移阈值(pt)：按下→抬起的移动距离小于它才判定为“轻触”，避免误伤拖动视角
+            @{@"key": @"tap_click_move",
+                @"hasDetail": @YES,
+                @"icon": @"arrow.up.and.down.and.arrow.left.and.right",
+                @"type": self.typeSlider,
+                @"min": @(2),
+                @"max": @(40),
+            },
+            // 【兼容旧键】合成按键：YES 时强制"轻触=右键"（等同 tap_click_mode=right）。
+            // 已由上方「轻触发键方式」取代；保留仅为不破坏老用户的既有设置。
+            @{@"key": @"tap_click_button_right",
+                @"hasDetail": @YES,
+                @"icon": @"cursorarrow.click.2",
+                @"type": self.typeSwitch,
             },
             @{@"key": @"button_scale",
                 @"hasDetail": @YES,
@@ -1180,6 +1292,10 @@
                 @"pickKeys": @[
                     @"auto",
                     @"stikjit",
+                    // ★ [POCKETJ-JIT] 新增:只注册 stikdebug:// 的 StikDebug 版本
+                    //   (PocketJ INTEGRATION.md 的 StikDebug 形式,带 script-name)。
+                    //   pickKeys / pickList 必须一一对应,勿只改一边。
+                    @"stikdebug",
                     @"sidestore",
                     @"stosdebug",
                     @"jitstreamer",
@@ -1189,6 +1305,7 @@
                 @"pickList": @[
                     localize(@"preference.debug.jit_enabler.auto", nil),
                     localize(@"preference.debug.jit_enabler.stikjit", nil),
+                    localize(@"preference.debug.jit_enabler.stikdebug", nil),
                     localize(@"preference.debug.jit_enabler.sidestore", nil),
                     localize(@"preference.debug.jit_enabler.stosdebug", nil),
                     localize(@"preference.debug.jit_enabler.jitstreamer", nil),
@@ -1334,6 +1451,20 @@
                                              selector:@selector(openCurseForgeAPIKeySettings)
                                                  name:@"OpenCurseForgeAPIKeySettings"
                                                object:nil];
+
+    // ★ [LANG-SWITCH] 语言切换后刷新本页文案（标题/详情都经 localize 现取 ⇒ 即时生效）。
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(handleLauncherLanguageChanged:)
+                                                 name:@"AmeLauncherLanguageChanged"
+                                               object:nil];
+}
+
+#pragma mark - ★ [LANG-SWITCH] 语言切换
+
+- (void)handleLauncherLanguageChanged:(NSNotification *)notification {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.tableView reloadData];
+    });
 }
 
 #pragma mark - Hero Header（顶部 App 信息卡片）
@@ -1383,9 +1514,22 @@
 
     // Hero 图标（56x56，14pt 圆角，accentColor 纯色背景，白色 SF Symbol）
     UIImageView *iconView = [[UIImageView alloc] init];
-    iconView.image = [UIImage systemImageNamed:@"cube.fill"];
+    // ★ [ABOUT-ICON] 「关于」栏 = 当前启动器图标(与主屏一致),不回落占位/老版。
+    //   主屏图标由 Natives/Assets.xcassets/AppIcon-Light.appiconset 决定
+    //   (Makefile `actool --app-icon AppIcon-Light` + Info.plist CFBundleIconName=AppIcon-Light),
+    //   即构建产物里那颗浅蓝六边形。上一版用的是 AppLogo-Vector(老版彩色方块) ⇒ 用户报「变回老版」。
+    //   取值链:AppLogo-Current(新建 imageset,与 AppIcon-Light 同一张 1024 图) →
+    //          AppIcon-Light60x60(actool 生成的包内 loose 真图标,与主屏逐字节同源) →
+    //          AppLogo-Vector(老版兜底) → 系统 app 符号兜底。★ 绝不再回落 cube.fill 占位。
+    UIImage *appLogoImage = [UIImage imageNamed:@"AppLogo-Current"]
+                         ?: [UIImage imageNamed:@"AppIcon-Light60x60"]
+                         ?: [UIImage imageNamed:@"AppLogo-Vector"];
+    iconView.image = appLogoImage;
+    if (appLogoImage == nil) {
+        iconView.image = [UIImage systemImageNamed:@"app.fill"] ?: [UIImage systemImageNamed:@"square.grid.2x2.fill"];
+    }
     iconView.tintColor = [UIColor whiteColor];
-    iconView.contentMode = UIViewContentModeCenter;
+    iconView.contentMode = UIViewContentModeScaleAspectFit;   // ★ [HOST-BUG-A] 图标按比例铺满(原 Center 只画原尺寸)
     iconView.backgroundColor = accentColor();
     iconView.layer.cornerRadius = 14;
     iconView.layer.cornerCurve = kCACornerCurveContinuous;
@@ -1490,6 +1634,8 @@
 - (void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"BackgroundUIEffectChanged" object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"OpenCurseForgeAPIKeySettings" object:nil];
+    // ★ [LANG-SWITCH]
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:@"AmeLauncherLanguageChanged" object:nil];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -1724,6 +1870,7 @@
                 textField.textColor = [UIColor whiteColor];
                 textField.backgroundColor = [UIColor colorWithWhite:0.2 alpha:0.6];
                 textField.layer.cornerRadius = 8;
+                textField.layer.cornerCurve = kCACornerCurveContinuous;   // ★ [CORNER-FIX] 连续圆角(与系统卡片一致)
             }
 
             // Style labels
@@ -1884,7 +2031,10 @@
         return versionString;
     }
 
-    NSString *footer = NSLocalizedStringWithDefaultValue(([NSString stringWithFormat:@"preference.section.footer.%@", self.prefSections[section]]), @"Localizable", NSBundle.mainBundle, @" ", nil);
+    // ★ [I18N-ORDER] 走统一入口 localize():有译文用译文,无译文保留原默认(" ")。
+    NSString *footerKey = [NSString stringWithFormat:@"preference.section.footer.%@", self.prefSections[section]];
+    NSString *footer = localize(footerKey, nil);
+    if ([footer isEqualToString:footerKey]) footer = @" ";
     if ([footer isEqualToString:@" "]) {
         return nil;
     }

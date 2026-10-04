@@ -16,7 +16,6 @@
 #import "MinecraftResourceUtils.h"
 #import "PLProfiles.h"
 #import "SurfaceViewController.h"
-#import "fsr1/ame_fsr1.h"
 #import "utils.h"
 #import "GameMenuOverlayView.h"
 #import "TrackedTextField.h"
@@ -25,6 +24,8 @@
 #import "ios_uikit_bridge.h"
 #import "LanPortDetector.h"
 #import "BackgroundManager.h"
+// ★ [LAUNCH-PROGRESS] 启动阶段上报 API(遮罩订阅 AmeLaunchProgressChangedNotification)
+#import "AmeLaunchProgress.h"
 
 // 由 Natives/ctxbridges/gl_bridge.m 提供：SDL3（MC 26.3+）路径下 GL 拥有呈现层
 // 且 MC 以「点」回报窗口尺寸，需要把 CAMetalLayer 对齐 1x。GLFW 与 Vulkan 路径恒 NO。
@@ -32,8 +33,11 @@ extern BOOL Amethyst_SDL3SurfaceWantsPoints(void);
 // gl_bridge.m（Task 53/55）：GL 是否拥有呈现层 / 当前是否处于几何失配未治愈期。
 extern bool ame_gl_surface_owns_layer(void);
 extern bool ame_gl_surface_transposed(void);
-// ZeroTier/Terracotta 联机暂时移除（排查启动崩溃）
-// #import "MultiplayerManager.h"
+// ★ [BT-MOUSE-DIAG] input_bridge_v3.m 暴露的 SDL 窗口指针（原 g_sdlWindow 为 static），
+//   供取证日志判断“下游通道是否就绪”。
+extern void *CallbackBridge_sdlWindowPtr(void);
+// ★ [MP-RESTORE] 联机恢复
+#import "MultiplayerManager.h"
 
 #include "glfw_keycodes.h"
 #include "utils.h"
@@ -41,6 +45,14 @@ extern bool ame_gl_surface_transposed(void);
 #include <dlfcn.h>
 #include <mach/mach.h>
 #include <mach/task_info.h>
+
+// ★ [TAP-UNIVERSAL] 单键通用的"轻触"合成键号。
+// 启动器看不到世界，无法判断准星指着什么，因此只把"这是一次轻触"编成一个【游戏中不会出现】的
+// 合成鼠标键交给游戏侧(agent)去按 Minecraft.hitResult 决定真键。
+// 取值约定: 这里用 GLFW 键 199；native 侧 glfwButtonToSDLButton 的 default 分支会 +1 得
+// SDL 键 200，agent 侧看到的 marker 即 200（见 agent/src/TapUniversal.java TAP_MARKER_SDL）。
+// 只要不是 0/1/2(GLFW 左/右/中) 也不与手柄辅助键(GFW 3..6)冲突即可。
+#define TAP_UNIVERSAL_MARKER_GLFW 199
 
 // --- [START] TouchController Mod Support ---
 #include <arpa/inet.h>
@@ -195,14 +207,8 @@ extern bool ame_gl_surface_transposed(void);
         pojavIncrementFpsCounter();
     }
     _tickCount++;
-    // 诊断日志：前 5 次回调 + 状态切换时输出，便于追踪 clientAPI 变化
-    static BOOL s_lastActualVulkanPath = NO;
-    BOOL stateChanged = (s_lastActualVulkanPath != actualVulkanPath);
-    if (_tickCount <= 5 || stateChanged) {
-        NSLog(@"[PLDisplayLinkTarget] displayLinkTick #%lu (configuredVulkan=%d, actualVulkanPath=%d, stateChanged=%d)",
-              (unsigned long)_tickCount, _isVulkanMode, actualVulkanPath, stateChanged);
-        s_lastActualVulkanPath = actualVulkanPath;
-    }
+    // ★ [LOG-CLEAN] 原每帧/前 5 帧打 "[PLDisplayLinkTarget] displayLinkTick #N" ⇒ 已删除
+    //   (CADisplayLink 高频回调; clientAPI 变化由实际路径行为自证, 无需逐帧日志)。
 }
 
 @end
@@ -249,6 +255,54 @@ static GameSurfaceView* pojavWindow;
 @property(nonatomic) UITapGestureRecognizer *tapGesture, *doubleTapGesture;
 // TouchController 移动视角手势：右半区单指滑动
 @property(nonatomic) UIPanGestureRecognizer *moveViewPanGesture;
+
+// ★ [TAP-CLICK] 轻触即左键：记录每次轻触的落点与按下时刻。
+// 写入点：gestureRecognizer:shouldReceiveTouch:（触摸落下时即调用，不受
+// “游戏内 + TouchController” 路径下 touchesBegan 提前 return 的影响）；
+// 读取点：surfaceOnClick: 里判定位移/时长是否在阈值内，从而合成一次左键单击。
+@property(nonatomic) CGPoint tapClickDownPoint;
+@property(nonatomic) CFTimeInterval tapClickDownTime;
+@property(nonatomic) BOOL tapClickDownValid;
+
+// ★ [TAP-UNIVERSAL] 单键通用：轻触按键模式解析（auto/left/right，兼容旧 tap_click_button_right）。
+- (NSString *)tapClickEffectiveMode;
+- (BOOL)handleTapClickIfQualified:(UITapGestureRecognizer *)sender;
+
+// ★ [BT-MOUSE] 蓝牙鼠标/触控板（iOS「间接指针」）→ 鼠标事件合成。
+//   iOS 上蓝牙鼠标/触控板在部分设备（尤其 iPhone「辅助触控 → 指点设备」，
+//   以及 GameController 的 GCMouse 未报告鼠标的机型）不以 GCMouse 上报，
+//   而是以「间接指针」(UITouch.type == UITouchTypeIndirectPointer) 的
+//   hover/touch 形式送到 UIKit。本组状态复用它，经既有合成路径
+//   (sendTouchPoint: / CallbackBridge_nativeSendMouseButton) 送进游戏，
+//   与「触控模拟鼠标」、「GCMouse 硬件鼠标」路径互不打架。
+@property(nonatomic) CGPoint btPointerLastPoint;    // 上一帧指针位置（算相对位移用）
+@property(nonatomic) BOOL btPointerDown;            // 间接指针当前是否有键按住
+@property(nonatomic) NSUInteger btPointerDownMask;  // 按住的键位掩码（UIEventButtonMask）
+@property(nonatomic) BOOL btPointerTouchLogged;     // 间接指针 touches 一次性诊断日志
+@property(nonatomic) BOOL btPointerHoverLogged;     // 间接指针 hover 一次性诊断日志
+
+// ★ [BT-MOUSE-DIAG] 原始取证节流计数（在一切过滤之前打印，用来判定
+//   “系统没送 / 送了被我们滤掉 / 送了没发出去”三态）。带 *_Count 的均为节流计数。
+@property(nonatomic) NSUInteger btRawHoverCount;    // surfaceOnHover 原始到达计数
+@property(nonatomic) NSUInteger btRawTouchCount;    // 间接指针 touches 原始到达计数
+@property(nonatomic) NSUInteger btRawSendCount;     // 合成事件发送前计数
+@property(nonatomic) BOOL btRawPlatformLogged;      // 平台/辅助触控一次性提示已打
+
+// ★ [BT-MOUSE] 是否由 UIKit 间接指针路径接管（开关开 且 GCMouse 未报告任何鼠标）。
+- (BOOL)btPointerShouldHandle;
+// ★ [BT-MOUSE] 间接指针移动：游戏内→相对位移(转视角)；世界外→绝对位置(移动光标)。
+- (void)btPointerMoveToPoint:(CGPoint)point grabbing:(BOOL)grabbing;
+// ★ [BT-MOUSE] 按 UIEventButtonMask 合成鼠标按键；mask 为空且 fallbackLeft 时回退左键。
+- (void)btPointerApplyButtonMask:(NSUInteger)mask pressed:(BOOL)pressed fallbackLeft:(BOOL)fallbackLeft;
+// ★ [BT-MOUSE] 间接指针一次按键结束（抬起）：释放已按下的键 + 世界外补一次 ACTION_UP。
+- (void)btPointerHandleEndedTouch:(UITouch *)touch;
+
+// ★ [BT-MOUSE-DIAG] 发送前原始取证：判断合成事件到底有没有真的发出去。
+- (void)btRawLogSend:(NSString *)kind dx:(CGFloat)dx dy:(CGFloat)dy btn:(int)btn;
+// ★ [BT-MOUSE-DIAG] GCMouse 通道原始取证（连接/断开/初始各打一次）。
+- (void)btRawLogGCMouse:(NSString *)evt mouse:(GCMouse *)mouse;
+// ★ [BT-MOUSE-DIAG] 平台与前提一次性提示（iPhone 需辅助触控“指针设备”）。
+- (void)btRawLogPlatformIfNeeded:(NSString *)reason;
 
 @property(nonatomic) id mouseConnectCallback, mouseDisconnectCallback;
 @property(nonatomic) id controllerConnectCallback, controllerDisconnectCallback;
@@ -304,6 +358,17 @@ static GameSurfaceView* pojavWindow;
 @property(nonatomic, assign) NSTimeInterval launchStartTime;
 @property(nonatomic, assign) BOOL launchOverlayDismissed;
 @property(nonatomic, strong) UIButton *launchCancelButton;     // 取消启动按钮
+
+// ★ [LAUNCH-PROGRESS] 确定型进度条 + 当前阶段文字 + 步骤骨架(见 AmeLaunchProgress.h)
+@property(nonatomic, strong) UIProgressView *launchProgressView;
+@property(nonatomic, strong) UILabel *launchStageLabel;
+@property(nonatomic, strong) NSMutableArray<UIView *> *launchStepDots;
+@property(nonatomic, strong) NSMutableArray<UILabel *> *launchStepLabels;
+
+// ★ [LAUNCH-PROGRESS] 方法前置声明：两者定义在文件后部，而 setupLaunchOverlay
+//   里用 @selector 引用 onLaunchProgressChanged —— 先声明避免 undeclared selector 告警。
+- (void)onLaunchProgressChanged;
+- (void)updateLaunchProgressUI;
 
 @end
 
@@ -805,19 +870,22 @@ static UIView *findSDL_uikitview(UIView *root);
 // 仅 moveViewPanGesture 需要特殊判定；其他手势保持默认行为
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
     if (gestureRecognizer == self.moveViewPanGesture) {
-        // 条件 1: TouchController 必须启用
-        if (!getPrefBool(@"control.mod_touch_enable")) return NO;
-        // 条件 2: 必须是静态库模式（mode == 2）
-        NSInteger mode = [getPrefObject(@"control.mod_touch_mode") integerValue];
-        if (mode != 2) return NO;
-        // 条件 3: 移动视角开关必须打开
-        if (!getPrefBool(@"control.mod_touch_moveview_enable")) return NO;
-        // 条件 4: 必须在游戏内（isGrabbing 为 true）
-        if (isGrabbing != JNI_TRUE) return NO;
-        // 条件 5: 触摸起点必须在 touchView 右半区
-        CGPoint location = [gestureRecognizer locationInView:self.touchView];
-        if (location.x < self.touchView.bounds.size.width / 2.0) return NO;
-        return YES;
+        // ★ [HOST-BUG-B] 「视角摇晃/移动视角」(mod_touch_moveview_enable)选项已按群主要求从
+        //   TouchController 管理界面移除,并【强制关闭】⇒ 该手势一律不启动,
+        //   无论存量偏好 control.mod_touch_moveview_enable 的值如何都忽略(迁移见 PLPreferences)。
+        return NO;
+    }
+    return YES;
+}
+
+// ★ [TAP-CLICK] 轻触即左键：在触摸落入 tapGesture 时记录落点/按下时刻。
+// 这是唯一在“所有路径”（含游戏内 + TouchController 模组，那条路径下
+// touchesBegan 会提前 return）都会被调用、且能拿到按下点的时机。
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
+    if (gestureRecognizer == self.tapGesture) {
+        self.tapClickDownPoint = [touch locationInView:self.rootView];
+        self.tapClickDownTime = CACurrentMediaTime();
+        self.tapClickDownValid = YES;
     }
     return YES;
 }
@@ -826,9 +894,14 @@ static UIView *findSDL_uikitview(UIView *root);
 
 // 处理右半区滑动手势，发送 MoveViewMessage 给 TouchController
 - (void)handleMoveViewPanGesture:(UIPanGestureRecognizer *)gesture {
+    // ★ [HOST-BUG-B][TC-MOVEVIEW-MIGRATE] 「视角摇晃/移动视角」已从 TouchController 管理界面
+    //   移除并【强制关闭】(启动迁移见 PLPreferences;统一解析函数 ameResolveTouchMoveViewEnabled):
+    //   无条件忽略存量偏好、直接返回(手势本就不会启动,这里是第二道兜底)。
+    BOOL hostbugbMoveViewDisabled = YES;
+    if (hostbugbMoveViewDisabled) return;
     // 双重检查（防御性编程，即使 gestureRecognizerShouldBegin 返回 YES 也再次验证）
     if (!getPrefBool(@"control.mod_touch_enable")) return;
-    if (!getPrefBool(@"control.mod_touch_moveview_enable")) return;
+    if (!ameResolveTouchMoveViewEnabled()) return;   // ★ [TC-MOVEVIEW-MIGRATE] 统一解析(恒 NO)
     if (isGrabbing != JNI_TRUE) return;
 
     UIPanGestureRecognizer *panGesture = (UIPanGestureRecognizer *)gesture;
@@ -1026,6 +1099,10 @@ static UIView *findSDL_uikitview(UIView *root);
 
     UIHoverGestureRecognizer *hoverGesture = [[NSClassFromString(@"UIHoverGestureRecognizer") alloc] initWithTarget:self action:@selector(surfaceOnHover:)];
     [self.touchView addGestureRecognizer:hoverGesture];
+    // ★ [BT-MOUSE-DIAG] 确认 hover 手势确实挂上（不挂 = 间接指针通道根本没建）。
+    NSLog(@"[BT-MOUSE][raw] hover 手势挂载: gesture=%@ host=%@ userInteraction=%d phone=%d",
+          NSStringFromClass([hoverGesture class]), NSStringFromClass([self.touchView class]),
+          self.touchView.userInteractionEnabled, btRawIsPhysicalPhone());
 
     self.tapGesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(surfaceOnClick:)];
     self.tapGesture.allowedTouchTypes = @[@(UITouchTypeDirect)];
@@ -1119,17 +1196,25 @@ static UIView *findSDL_uikitview(UIView *root);
     self.mouseConnectCallback = [[NSNotificationCenter defaultCenter] addObserverForName:GCMouseDidConnectNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
         GCMouse* mouse = note.object;
         [self registerMouseCallbacks:mouse];
+        // ★ [BT-MOUSE-DIAG] 连接原始取证。
+        [self btRawLogGCMouse:@"connect" mouse:mouse];
         self.mousePointerView.hidden = isGrabbing || !virtualMouseEnabled;
         [self setNeedsUpdateOfPrefersPointerLocked];
     }];
     self.mouseDisconnectCallback = [[NSNotificationCenter defaultCenter] addObserverForName:GCMouseDidDisconnectNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
         GCMouse* mouse = note.object;
         mouse.mouseInput.mouseMovedHandler = nil;
+        // ★ [BT-MOUSE-DIAG] 断开原始取证。
+        [self btRawLogGCMouse:@"disconnect" mouse:mouse];
         [mouse.mouseInput.auxiliaryButtons makeObjectsPerformSelector:@selector(setPressedChangedHandler:) withObject:nil];
         [self setNeedsUpdateOfPrefersPointerLocked];
         if (getPrefBool(@"controll.hardware_hide")) { self.ctrlView.hidden = NO; }
     }];
+    // ★ [BT-MOUSE-DIAG] 初始摸底 + 平台前提提示：不仅 .current，遍历所有已连接鼠标。
+    [self btRawLogPlatformIfNeeded:@"viewDidLoad"];
+    [self btRawLogGCMouse:@"init" mouse:GCMouse.current];
     if (GCMouse.current != nil) { [self registerMouseCallbacks:GCMouse.current]; }
+    for (GCMouse *m in GCMouse.mice) { if (m != GCMouse.current) { [self registerMouseCallbacks:m]; } }
 
     self.controllerConnectCallback = [[NSNotificationCenter defaultCenter] addObserverForName:GCControllerDidConnectNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
         GCController* controller = note.object;
@@ -1327,20 +1412,7 @@ static UIView *findSDL_uikitview(UIView *root);
         NSLog(@"[SurfaceVC] video.resolution invalid (%.4f) -> falling back to 100%%", resolutionScale);
         resolutionScale = 1.0f;
     }
-    // —— FSR1（启动器侧上采样）——
-    // FSR1 接管缩放时，几何分工与常规缩放相反：
-    //   * surface / drawable 必须是全分辨率 —— 它是 framebuffer 0，FSR1 要在这个
-    //     分辨率上输出，也是最终 present 的面
-    //   * 交给 MC 的 windowWidth/Height 仍是缩放后的值 —— MC 因此按低分辨率设
-    //     viewport，画面落在 surface 左下角，由 fsr1 在 swap 前上采样铺满
-    // 若此处仍按常规把 surface 也缩掉，FSR1 就没有全分辨率的目标可写，且
-    // CoreAnimation 会先做一次双线性拉伸，等于把 EASU 的边缘自适应丢掉。
-    const BOOL fsr1FullResSurface = ameFsr1NeedsFullResSurface();
-    const CGFloat fsrSurfaceContentsScale = fsr1FullResSurface
-        ? self.screenScale
-        : (self.screenScale * resolutionScale);
-
-    self.surfaceView.layer.contentsScale = fsrSurfaceContentsScale;
+    self.surfaceView.layer.contentsScale = self.screenScale * resolutionScale;
 
     physicalWidth = roundf(self.surfaceView.frame.size.width * self.screenScale);
     physicalHeight = roundf(self.surfaceView.frame.size.height * self.screenScale);
@@ -1377,28 +1449,15 @@ static UIView *findSDL_uikitview(UIView *root);
         // drawableSize —— 此期由 gl_bridge 的几何重对齐独占写权保持 present
         // 自洽；本函数若继续写会与之每帧拉锯 = 画面分裂（Air Task53 同款 gate）。
         // 重对齐成功后 surface==drawable==bounds 像素，本写入变为同值 no-op。
-        // FSR1 接管时写全分辨率（physical），否则维持原语义（windowWidth/Height）
-        const CGFloat drawW = fsr1FullResSurface ? MAX(physicalWidth, 1)  : MAX(windowWidth, 1);
-        const CGFloat drawH = fsr1FullResSurface ? MAX(physicalHeight, 1) : MAX(windowHeight, 1);
-        // FSR1 接管时**必须**写 drawableSize，不能被下面的失配 gate 拦掉：
-        // 此时 surface 是全分辨率、MC 按低分辨率绘制，二者「失配」正是 FSR1
-        // 上采样的输入前提，于是 Task53 的 ame_gl_surface_transposed() 恒为
-        // 真。若沿用该 gate，drawableSize 会被整段跳过、停留在上一次的低分
-        // 辨率值，而 ANGLE 已按新的 contentsScale(=screenScale) 把 EGL
-        // surface 建成全分辨率 —— present 的全分辨率 backbuffer 被塞进低分
-        // 辨率 drawable，CoreAnimation 再把它拉伸上屏，表现就是「画面跑到
-        // 左下角、被放大且超出屏幕」。FSR1 场景下 surface == drawable ==
-        // bounds x contentsScale == physical 恒成立，此处写入是治愈而非与
-        // 重对齐链拉锯。
         if (ame_gl_surface_owns_layer()) {
-            if (fsr1FullResSurface || !ame_gl_surface_transposed()) {
-                metalLayer.drawableSize = CGSizeMake(drawW, drawH);
-                NSLog(@"[SurfaceVC] drawableSize=%dx%d (contentsScale %.2f, resolution %.0f%%, fsr1FullResSurface=%d)",
+            if (!ame_gl_surface_transposed()) {
+                metalLayer.drawableSize = CGSizeMake(MAX(windowWidth, 1), MAX(windowHeight, 1));
+                NSLog(@"[SurfaceVC] drawableSize=%dx%d (contentsScale %.2f, resolution %.0f%%)",
                       (int)metalLayer.drawableSize.width, (int)metalLayer.drawableSize.height,
-                      metalLayer.contentsScale, resolutionScale * 100.0f, (int)fsr1FullResSurface);
+                      metalLayer.contentsScale, resolutionScale * 100.0f);
             }
         } else {
-            metalLayer.drawableSize = CGSizeMake(drawW, drawH);
+            metalLayer.drawableSize = CGSizeMake(MAX(windowWidth, 1), MAX(windowHeight, 1));
             NSLog(@"[SurfaceVC] drawableSize=%dx%d (contentsScale %.2f, resolution %.0f%%)",
                   (int)metalLayer.drawableSize.width, (int)metalLayer.drawableSize.height,
                   metalLayer.contentsScale, resolutionScale * 100.0f);
@@ -1496,7 +1555,7 @@ static BOOL ame87_mcVersionRequiresTextureBuffer(NSString *mcVersionId) {
             NSLog(@"[SurfaceViewController] Error: metadata is nil");
             dispatch_async(dispatch_get_main_queue(), ^{
                 [self dismissLaunchOverlayOnError];
-                showDialog(localize(@"Error", nil), @"æ¸¸æçæ®å è½½å¤±è´¥ï¼è¯·éæ°éæ©çæ¬");
+                showDialog(localize(@"Error", nil), @"游戏资源加载失败，请重新选择版本");  // ★ [ACCT-AUDIT]
             });
             return;
         }
@@ -1537,7 +1596,7 @@ static BOOL ame87_mcVersionRequiresTextureBuffer(NSString *mcVersionId) {
             NSLog(@"[SurfaceViewController] Error: no authenticator available");
             dispatch_async(dispatch_get_main_queue(), ^{
                 [self dismissLaunchOverlayOnError];
-                showDialog(localize(@"Error", nil), @"è¯·åç»å½è´¦æ·");
+                showDialog(localize(@"Error", nil), @"请先登录账户");  // ★ [ACCT-AUDIT]
             });
             return;
         }
@@ -1601,14 +1660,20 @@ static BOOL ame87_mcVersionRequiresTextureBuffer(NSString *mcVersionId) {
     //   - 背景显示启动器的自定义壁纸（如果有）
     //   - 屏幕正中央显示一个大的旋转加载指示器
     //   - 指示器下方显示简短的标题文字（如"正在启动 Minecraft"）
-    //   - 不显示进度条、百分比、阶段文案、信息卡片等多余元素
     //   - 底部保留一个小的"取消启动"按钮
     //
-    // 之前的实现包含了图标、进度条、百分比、已耗时、信息卡片、
-    // 阶段轮转文案等大量元素，过于复杂。FCL 的设计理念是简洁：
-    // 用户只需要知道"正在加载"即可，不需要知道详细的阶段和进度。
+    // ★ [LAUNCH-PROGRESS] 变更(2026-10)：用户要求「不然走到哪都不知道」，
+    //   在标题下方补回【确定型进度条 + 当前阶段文案 + 步骤骨架】(8 个阶段小圆点)。
+    //   数据源是 Natives/AmeLaunchProgress.h 的阶段上报 API，由 JavaLauncher.m /
+    //   本文件的启动节点喂入；不再用「按时间轮转」的假进度(FCL 式简洁保留在
+    //   转圈+标题，其余为本次新增的确定性信息)。
+    //   注意：容器 userInteractionEnabled 仍为 NO，触摸穿透行为不变。
     self.launchStartTime = [NSDate timeIntervalSinceReferenceDate];
     self.launchOverlayDismissed = NO;
+
+    // ★ [LAUNCH-PROGRESS] 每次启动都把阶段重置到「准备环境」，避免上一局残留
+    //   （Completed）导致进度条一上来就是满格。
+    AmeLaunchProgressReset();
 
     // ========================================================================
     // 全屏遮罩容器
@@ -1674,6 +1739,71 @@ static BOOL ame87_mcVersionRequiresTextureBuffer(NSString *mcVersionId) {
     [centerContainer addSubview:self.launchTitleLabel];
 
     // ========================================================================
+    // ★ [LAUNCH-PROGRESS] 确定型进度条 + 当前阶段文字 + 步骤骨架
+    // ========================================================================
+    // 目的：用户明确要求「不然走到哪都不知道」—— 用确定型进度条(非转圈)+
+    //   当前阶段文案 + 每阶段一个小圆点的步骤骨架，一眼看出进度与卡点。
+    // 全部是展示型控件；遮罩 userInteractionEnabled = NO 不变，触摸照旧穿透。
+    self.launchStageLabel = [[UILabel alloc] init];
+    self.launchStageLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.launchStageLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightRegular];
+    self.launchStageLabel.textColor = [UIColor colorWithWhite:0.80 alpha:1.0];
+    self.launchStageLabel.textAlignment = NSTextAlignmentCenter;
+    self.launchStageLabel.numberOfLines = 2;
+    self.launchStageLabel.text = localize(AmeLaunchStageLocalizationKey(AmeLaunchProgressCurrentStage()), nil);
+    [centerContainer addSubview:self.launchStageLabel];
+
+    self.launchProgressView = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
+    self.launchProgressView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.launchProgressView.progressTintColor = [UIColor systemBlueColor];
+    self.launchProgressView.trackTintColor = [UIColor colorWithWhite:1.0 alpha:0.18];
+    self.launchProgressView.layer.cornerRadius = 3.0;
+    self.launchProgressView.clipsToBounds = YES;
+    [self.launchProgressView setProgress:(float)AmeLaunchProgressCurrentFraction() animated:NO];
+    [centerContainer addSubview:self.launchProgressView];
+
+    // 步骤骨架：每个阶段一行(小圆点 + 阶段名)，已过/进行中/未过 三态。
+    self.launchStepDots = [NSMutableArray array];
+    self.launchStepLabels = [NSMutableArray array];
+    UIStackView *stepsStack = [[UIStackView alloc] init];
+    stepsStack.translatesAutoresizingMaskIntoConstraints = NO;
+    stepsStack.axis = UILayoutConstraintAxisVertical;
+    stepsStack.alignment = UIStackViewAlignmentLeading;
+    stepsStack.spacing = 6.0;
+    [centerContainer addSubview:stepsStack];
+
+    NSInteger stageCount = AmeLaunchProgressStageCount();
+    for (NSInteger i = 0; i < stageCount; i++) {
+        UIView *dot = [[UIView alloc] init];
+        dot.translatesAutoresizingMaskIntoConstraints = NO;
+        dot.layer.cornerRadius = 4.0;
+        dot.userInteractionEnabled = NO;
+        [dot.widthAnchor constraintEqualToConstant:8.0].active = YES;
+        [dot.heightAnchor constraintEqualToConstant:8.0].active = YES;
+
+        UILabel *rowLabel = [[UILabel alloc] init];
+        rowLabel.translatesAutoresizingMaskIntoConstraints = NO;
+        rowLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightRegular];
+        rowLabel.text = localize(AmeLaunchStageLocalizationKey((AmeLaunchStage)i), nil);
+
+        UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[dot, rowLabel]];
+        row.axis = UILayoutConstraintAxisHorizontal;
+        row.alignment = UIStackViewAlignmentCenter;
+        row.spacing = 8.0;
+
+        [stepsStack addArrangedSubview:row];
+        [self.launchStepDots addObject:dot];
+        [self.launchStepLabels addObject:rowLabel];
+    }
+
+    // 订阅阶段广播(AmeLaunchProgress.m 统一在主队列投递)。
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(onLaunchProgressChanged)
+                                                 name:AmeLaunchProgressChangedNotification
+                                               object:nil];
+    [self updateLaunchProgressUI];
+
+    // ========================================================================
     // 取消启动按钮（底部，独立添加到 self.view 不受遮罩穿透影响）
     // ========================================================================
     self.launchCancelButton = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -1694,6 +1824,8 @@ static BOOL ame87_mcVersionRequiresTextureBuffer(NSString *mcVersionId) {
         // 中央容器：水平居中，垂直居中
         [centerContainer.centerXAnchor constraintEqualToAnchor:self.launchOverlayView.centerXAnchor],
         [centerContainer.centerYAnchor constraintEqualToAnchor:self.launchOverlayView.centerYAnchor],
+        // ★ [LAUNCH-PROGRESS] 固定卡片宽度：给进度条/步骤骨架一个稳定的版心(容器尺寸由它撑出)
+        [centerContainer.widthAnchor constraintEqualToConstant:280],
 
         // 旋转指示器：容器顶部居中
         [self.launchSpinner.topAnchor constraintEqualToAnchor:centerContainer.topAnchor],
@@ -1703,7 +1835,21 @@ static BOOL ame87_mcVersionRequiresTextureBuffer(NSString *mcVersionId) {
         [self.launchTitleLabel.topAnchor constraintEqualToAnchor:self.launchSpinner.bottomAnchor constant:16],
         [self.launchTitleLabel.leadingAnchor constraintEqualToAnchor:centerContainer.leadingAnchor],
         [self.launchTitleLabel.trailingAnchor constraintEqualToAnchor:centerContainer.trailingAnchor],
-        [self.launchTitleLabel.bottomAnchor constraintEqualToAnchor:centerContainer.bottomAnchor],
+
+        // ★ [LAUNCH-PROGRESS] 阶段文字 → 进度条 → 步骤骨架(自上而下串起来，撑出容器底部)
+        [self.launchStageLabel.topAnchor constraintEqualToAnchor:self.launchTitleLabel.bottomAnchor constant:6],
+        [self.launchStageLabel.leadingAnchor constraintEqualToAnchor:centerContainer.leadingAnchor],
+        [self.launchStageLabel.trailingAnchor constraintEqualToAnchor:centerContainer.trailingAnchor],
+
+        [self.launchProgressView.topAnchor constraintEqualToAnchor:self.launchStageLabel.bottomAnchor constant:14],
+        [self.launchProgressView.leadingAnchor constraintEqualToAnchor:centerContainer.leadingAnchor],
+        [self.launchProgressView.trailingAnchor constraintEqualToAnchor:centerContainer.trailingAnchor],
+        [self.launchProgressView.heightAnchor constraintEqualToConstant:6],
+
+        [stepsStack.topAnchor constraintEqualToAnchor:self.launchProgressView.bottomAnchor constant:16],
+        [stepsStack.leadingAnchor constraintEqualToAnchor:centerContainer.leadingAnchor],
+        [stepsStack.trailingAnchor constraintEqualToAnchor:centerContainer.trailingAnchor],
+        [stepsStack.bottomAnchor constraintEqualToAnchor:centerContainer.bottomAnchor],
 
         // 取消按钮：底部安全区域上方
         [self.launchCancelButton.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-24],
@@ -1765,10 +1911,61 @@ static BOOL ame87_mcVersionRequiresTextureBuffer(NSString *mcVersionId) {
     // 已不再创建 launchStageTimer，此方法不会被调用）。
 }
 
+// ★ [LAUNCH-PROGRESS] 阶段/进度广播回调（AmeLaunchProgress.m 保证在主队列投递）。
+- (void)onLaunchProgressChanged {
+    [self updateLaunchProgressUI];
+}
+
+// ★ [LAUNCH-PROGRESS] 依据上报的当前阶段，刷新进度条 / 阶段文字 / 步骤骨架三态。
+- (void)updateLaunchProgressUI {
+    if (self.launchOverlayDismissed) return;
+    if (!self.launchProgressView || !self.launchStageLabel) return;
+
+    AmeLaunchStage stage = AmeLaunchProgressCurrentStage();
+    double fraction = AmeLaunchProgressCurrentFraction();
+    NSString *key = AmeLaunchProgressCurrentKey();
+
+    NSString *stageText = (key.length > 0)
+        ? localize(key, nil)
+        : localize(AmeLaunchStageLocalizationKey(stage), nil);
+    self.launchStageLabel.text = stageText;
+
+    [self.launchProgressView setProgress:(float)fraction animated:YES];
+
+    for (NSUInteger i = 0; i < self.launchStepDots.count; i++) {
+        UIView *dot = self.launchStepDots[i];
+        UILabel *rowLabel = self.launchStepLabels[i];
+        BOOL done = (NSInteger)i < (NSInteger)stage;
+        BOOL current = (NSInteger)i == (NSInteger)stage;
+        if (done) {
+            dot.backgroundColor = [UIColor systemGreenColor];
+            dot.layer.borderWidth = 0.0;
+            rowLabel.textColor = [UIColor colorWithWhite:0.85 alpha:1.0];
+            rowLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightRegular];
+        } else if (current) {
+            dot.backgroundColor = [UIColor systemBlueColor];
+            dot.layer.borderWidth = 0.0;
+            rowLabel.textColor = [UIColor whiteColor];
+            rowLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
+        } else {
+            dot.backgroundColor = [UIColor clearColor];
+            dot.layer.borderWidth = 1.0;
+            dot.layer.borderColor = [UIColor colorWithWhite:0.45 alpha:1.0].CGColor;
+            rowLabel.textColor = [UIColor colorWithWhite:0.45 alpha:1.0];
+            rowLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightRegular];
+        }
+    }
+}
+
 /// 首帧渲染通知回调：淡出并移除启动遮罩层
 - (void)onFirstFrameRendered {
+    // ★ [LAUNCH-PROGRESS] 首帧渲染 = 启动完成，先把阶段推到 Completed。
+    AmeLaunchProgressSetStage(AmeLaunchStageCompleted);
     dispatch_async(dispatch_get_main_queue(), ^{
         if (self.launchOverlayDismissed) return;
+        // ★ [LAUNCH-PROGRESS] 撤遮罩前把进度条刷到满格 —— updateLaunchProgressUI 会
+        //   被 launchOverlayDismissed 早退挡住，所以必须在置位之前调用。
+        [self updateLaunchProgressUI];
         self.launchOverlayDismissed = YES;
 
         [self.launchSpinner stopAnimating];
@@ -1793,6 +1990,7 @@ static BOOL ame87_mcVersionRequiresTextureBuffer(NSString *mcVersionId) {
             [self.launchCancelButton removeFromSuperview];
             self.launchCancelButton = nil;
             [[NSNotificationCenter defaultCenter] removeObserver:self name:@"PojavFirstFrameRendered" object:nil];
+            [[NSNotificationCenter defaultCenter] removeObserver:self name:AmeLaunchProgressChangedNotification object:nil];
             NSLog(@"[SurfaceViewController] Launch overlay dismissed after %.1f seconds", elapsed);
         }];
     });
@@ -1806,6 +2004,7 @@ static BOOL ame87_mcVersionRequiresTextureBuffer(NSString *mcVersionId) {
 
         [self.launchSpinner stopAnimating];
         [[NSNotificationCenter defaultCenter] removeObserver:self name:@"PojavFirstFrameRendered" object:nil];
+        [[NSNotificationCenter defaultCenter] removeObserver:self name:AmeLaunchProgressChangedNotification object:nil];
 
         [self.launchOverlayView removeFromSuperview];
         self.launchOverlayView = nil;
@@ -1997,6 +2196,10 @@ static BOOL ame87_mcVersionRequiresTextureBuffer(NSString *mcVersionId) {
     if (sdlView) [sdlView pressesBegan:presses withEvent:event];
     // Always call super so that inputTextField (UITextInput) can receive
     // key events for text input (e.g., Minecraft chat).
+    // ★ [KB-SPACE] 别在这里改回「已处理就跳过 super」:#106 键盘崩溃正是跳过 super
+    //   打断响应链造成的。空格误开设置浮球的问题改由「UI 侧不可聚焦」从源头解决
+    //   (GameMenuOverlayView.menuButton / ControlButton 的 canBecomeFocused=NO,
+    //    外加下面 shouldUpdateFocusInContext: 的浮层级护栏),与本处 super 解耦。
     [super pressesBegan:presses withEvent:event];
 }
 
@@ -2014,6 +2217,154 @@ static BOOL ame87_mcVersionRequiresTextureBuffer(NSString *mcVersionId) {
     [super pressesEnded:presses withEvent:event];
 }
 
+#pragma mark - ★ [KB-SPACE] 键盘焦点护栏（游戏 VC 级）
+
+// ★ [KB-SPACE] 第二道闸(不碰响应链):游戏运行期间,拒绝键盘焦点落到「游戏内启动器浮层」
+//   —— 设置浮球(GameMenuOverlayView)与屏幕自定义控件(ControlLayout)上。
+//   第一道闸在控件侧(两者的 canBecomeFocused=NO);这里再兜一层,防止将来新增
+//   可聚焦控件时无人接管,并顺手覆盖「回车/方向键/Tab」等其它激活/导航键。
+//   注意:这里【完全不动】pressesBegan/Ended 的 super 调用,#106 的键盘崩溃修复
+//   (响应链不断)原样保留 —— 本护栏只保证 UI 侧无焦点可被键盘激活。
+- (BOOL)shouldUpdateFocusInContext:(UIFocusUpdateContext *)context {
+    id<UIFocusItem> next = context.nextFocusedItem;
+    if (next && [next isKindOfClass:[UIView class]]) {
+        UIView *v = (UIView *)next;
+        BOOL inOverlay = (self.gameMenuOverlay && (v == self.gameMenuOverlay || [v isDescendantOfView:self.gameMenuOverlay]));
+        BOOL inControls = (self.ctrlView && (v == self.ctrlView || [v isDescendantOfView:self.ctrlView]));
+        if (inOverlay || inControls) {
+            NSLog(@"[KB-SPACE] 拒绝键盘焦点落入游戏内启动器控件: %@", NSStringFromClass([v class]));
+            return NO;
+        }
+    }
+    return [super shouldUpdateFocusInContext:context];
+}
+
+#pragma mark - ★ [BT-MOUSE] Bluetooth mouse / trackpad (iOS indirect pointer)
+
+// ★ [BT-MOUSE-DIAG] 物理设备判定：UIDevice.model（绕开 UIKit+hook.m 把 idiom 强制成 Pad）。
+static BOOL btRawIsPhysicalPhone(void) {
+    NSString *model = [[UIDevice currentDevice].model lowercaseString];
+    return [model containsString:@"iphone"] || [model containsString:@"ipod"];
+}
+
+// ★ [BT-MOUSE-DIAG] 取 UIAccessibilityIsAssistiveTouchRunning（dlsym，缺失则 unknown）。
+//   注意：该 API 只反映“辅助触控总开关”；“指针设备”是否已连接无公开 API。
+typedef BOOL (*btRawAXFunc)(void);
+static btRawAXFunc btRawAXGet(void) {
+    static btRawAXFunc f = NULL; static BOOL looked = NO;
+    if (!looked) { looked = YES; f = (btRawAXFunc)dlsym(RTLD_DEFAULT, "UIAccessibilityIsAssistiveTouchRunning"); }
+    return f;
+}
+
+// ★ [BT-MOUSE-DIAG] 发送前原始取证：一行判定“合成事件到底有没有发出去”。
+//   同时给出下游闸门：glfwBtn=0 且 sdlWin=0 ⇒ 两条下游通道都关着，事件必然被丢弃。
+- (void)btRawLogSend:(NSString *)kind dx:(CGFloat)dx dy:(CGFloat)dy btn:(int)btn {
+    self.btRawSendCount++;
+    if (self.btRawSendCount > 30 && self.btRawSendCount % 20 != 0) return;   // 节流
+    NSLog(@"[BT-MOUSE][raw] send #%lu: kind=%@ dx=%.1f dy=%.1f btn=%d grabbed=%d inputReady=%d sdlWin=%p glfwBtn=%p glfwCursor=%p",
+          (unsigned long)self.btRawSendCount, kind, dx, dy, btn,
+          isGrabbing, isInputReady, CallbackBridge_sdlWindowPtr(),
+          (void *)GLFW_invoke_MouseButton, (void *)GLFW_invoke_CursorPos);
+}
+
+// ★ [BT-MOUSE-DIAG] GCMouse 通道原始取证（连接/断开/初始各打一次）。
+- (void)btRawLogGCMouse:(NSString *)evt mouse:(GCMouse *)mouse {
+    NSLog(@"[BT-MOUSE][raw] GCMouse: evt=%@ count=%lu cur=%d mouseInput=%d pref=%d prefLocked=%d phone=%d",
+          evt, (unsigned long)GCMouse.mice.count, GCMouse.current != nil,
+          (mouse != nil && mouse.mouseInput != nil),
+          getPrefBool(@"control.bt_pointer_enable"), [self prefersPointerLocked],
+          btRawIsPhysicalPhone());
+}
+
+// ★ [BT-MOUSE-DIAG] 平台与前提一次性提示（进游戏时打一次）。
+//   iPhone 上蓝牙鼠标不是系统级指点设备：必须开【设置→辅助功能→触控→辅助触控→指针设备】，
+//   否则系统根本不产生指针事件（GCMouse 也不上报），App 侧看不到任何东西。
+- (void)btRawLogPlatformIfNeeded:(NSString *)reason {
+    if (self.btRawPlatformLogged) return;
+    self.btRawPlatformLogged = YES;
+    BOOL phone = btRawIsPhysicalPhone();
+    btRawAXFunc axf = btRawAXGet();
+    BOOL axKnown = (axf != NULL);
+    BOOL axOn = axKnown ? axf() : NO;
+    NSLog(@"[BT-MOUSE][raw] platform: device=%@ reason=%@ GCMouse.count=%lu assistiveTouch=%@",
+          phone ? @"iPhone" : @"iPad/other", reason, (unsigned long)GCMouse.mice.count,
+          axKnown ? (axOn ? @"on" : @"off") : @"unknown");
+    if (phone && GCMouse.mice.count == 0 && (!axKnown || !axOn)) {
+        NSLog(@"[BT-MOUSE] iPhone 未开启辅助触控“指针设备” ⇒ 系统不会派发指针事件；"
+              @"请到 设置→辅助功能→触控→辅助触控 打开(并在其内把蓝牙鼠标连接为“指针设备”)，"
+              @"或在 iPad 上使用。");
+    }
+}
+
+// ★ [BT-MOUSE] 开关默认开；仅当 GameController 未报告任何鼠标时才接管，
+//   以免与 GCMouse 路径（iPad 硬件鼠标，见 registerMouseCallbacks:）双重位移/双重点击。
+- (BOOL)btPointerShouldHandle {
+    if (!getPrefBool(@"control.bt_pointer_enable")) return NO;
+    if (GCMouse.mice.count > 0) return NO;
+    return YES;
+}
+
+// ★ [BT-MOUSE] 间接指针移动。游戏内(isGrabbing)：指针未被系统锁定(如 iPhone 辅助指针)，
+//   用相邻两帧绝对位置差分合成相对位移，走 ACTION_MOVE_MOTION → 转视角；
+//   世界外：绝对位置 ACTION_MOVE → 驱动菜单光标。两条路径都复用 sendTouchPoint:，
+//   与触控模拟鼠标共用同一套 SDL/GLFW 合成逻辑。
+- (void)btPointerMoveToPoint:(CGPoint)point grabbing:(BOOL)grabbing {
+    if (grabbing) {
+        CGPoint d = CGPointMake(point.x - self.btPointerLastPoint.x,
+                                point.y - self.btPointerLastPoint.y);
+        if (d.x != 0.0 || d.y != 0.0) {
+            // ★ [BT-MOUSE-DIAG] 通道2 发送前取证。
+            [self btRawLogSend:@"moveMotion" dx:d.x dy:d.y btn:-1];
+            [self sendTouchPoint:CGPointMake(d.x, d.y) withEvent:ACTION_MOVE_MOTION];
+        }
+    } else {
+        // ★ [BT-MOUSE-DIAG] 通道2 发送前取证。
+        [self btRawLogSend:@"moveAbs" dx:point.x dy:point.y btn:-1];
+        [self sendTouchPoint:point withEvent:ACTION_MOVE];
+    }
+    self.btPointerLastPoint = point;
+}
+
+// ★ [BT-MOUSE] 把 UIEventButtonMask 映射成 GLFW 鼠标按键（与既有硬件鼠标路径同一出口）。
+//   主键→左键、副键→右键；iOS 间接指针不提供中键，故中键不做（见报告「未做」一节）。
+- (void)btPointerApplyButtonMask:(NSUInteger)mask pressed:(BOOL)pressed fallbackLeft:(BOOL)fallbackLeft {
+    BOOL any = NO;
+    if (mask & UIEventButtonMaskPrimary) {
+        // ★ [BT-MOUSE-DIAG] 通道2 发送前取证。
+        [self btRawLogSend:(pressed ? @"btnDown" : @"btnUp") dx:0 dy:0 btn:GLFW_MOUSE_BUTTON_LEFT];
+        CallbackBridge_nativeSendMouseButton(GLFW_MOUSE_BUTTON_LEFT, pressed, 0);
+        any = YES;
+    }
+    if (mask & UIEventButtonMaskSecondary) {
+        // ★ [BT-MOUSE-DIAG] 通道2 发送前取证。
+        [self btRawLogSend:(pressed ? @"btnDown" : @"btnUp") dx:0 dy:0 btn:GLFW_MOUSE_BUTTON_RIGHT];
+        CallbackBridge_nativeSendMouseButton(GLFW_MOUSE_BUTTON_RIGHT, pressed, 0);
+        any = YES;
+    }
+    if (!any && fallbackLeft) {
+        // 拿不到位掩码时兜底：按下=左键（与既有「轻触=左键」语义一致）。
+        // ★ [BT-MOUSE-DIAG] 通道2 发送前取证。
+        [self btRawLogSend:(pressed ? @"btnDown" : @"btnUp") dx:0 dy:0 btn:GLFW_MOUSE_BUTTON_LEFT];
+        CallbackBridge_nativeSendMouseButton(GLFW_MOUSE_BUTTON_LEFT, pressed, 0);
+    }
+}
+
+// ★ [BT-MOUSE] 间接指针一次按键结束：释放按下的键，世界外再补一次 ACTION_UP。
+- (void)btPointerHandleEndedTouch:(UITouch *)touch {
+    if (![self btPointerShouldHandle]) return;
+    if (self.btPointerDown) {
+        [self btPointerApplyButtonMask:self.btPointerDownMask pressed:NO fallbackLeft:NO];
+        self.btPointerDown = NO;
+        self.btPointerDownMask = 0;
+    }
+    if (isGrabbing != JNI_TRUE) {
+        CGPoint p = [touch locationInView:self.rootView];
+        // ★ [BT-MOUSE-DIAG] 通道2 发送前取证。
+        [self btRawLogSend:@"upAbs" dx:p.x dy:p.y btn:-1];
+        [self sendTouchPoint:p withEvent:ACTION_UP];
+    }
+}
+
 - (BOOL)prefersPointerLocked {
     return GCMouse.mice.count > 0 && (isGrabbing || virtualMouseEnabled);
 }
@@ -2025,16 +2376,24 @@ static BOOL ame87_mcVersionRequiresTextureBuffer(NSString *mcVersionId) {
         // When pointer is locked (in-game grabbing), deltaX/deltaY are true deltas.
         // When pointer is NOT locked (menu, or Bluetooth mouse before lock activates),
         // we still send the delta so the virtual mouse or cursor can move.
+        // ★ [BT-MOUSE-DIAG] 通道1 发送前取证。
+        [self btRawLogSend:@"gcMouseMove" dx:deltaX dy:-deltaY btn:-1];
         [self sendTouchPoint:CGPointMake(deltaX, -deltaY) withEvent:ACTION_MOVE_MOTION];
     };
 
     mouse.mouseInput.leftButton.pressedChangedHandler = ^(GCControllerButtonInput * _Nonnull button, float value, BOOL pressed) {
+        // ★ [BT-MOUSE-DIAG] 通道1 发送前取证。
+        [self btRawLogSend:(pressed ? @"gcMouseDown" : @"gcMouseUp") dx:0 dy:0 btn:GLFW_MOUSE_BUTTON_LEFT];
         CallbackBridge_nativeSendMouseButton(GLFW_MOUSE_BUTTON_LEFT, pressed, 0);
     };
     mouse.mouseInput.middleButton.pressedChangedHandler = ^(GCControllerButtonInput * _Nonnull button, float value, BOOL pressed) {
+        // ★ [BT-MOUSE-DIAG] 通道1 发送前取证。
+        [self btRawLogSend:(pressed ? @"gcMouseDown" : @"gcMouseUp") dx:0 dy:0 btn:GLFW_MOUSE_BUTTON_MIDDLE];
         CallbackBridge_nativeSendMouseButton(GLFW_MOUSE_BUTTON_MIDDLE, pressed, 0);
     };
     mouse.mouseInput.rightButton.pressedChangedHandler = ^(GCControllerButtonInput * _Nonnull button, float value, BOOL pressed) {
+        // ★ [BT-MOUSE-DIAG] 通道1 发送前取证。
+        [self btRawLogSend:(pressed ? @"gcMouseDown" : @"gcMouseUp") dx:0 dy:0 btn:GLFW_MOUSE_BUTTON_RIGHT];
         CallbackBridge_nativeSendMouseButton(GLFW_MOUSE_BUTTON_RIGHT, pressed, 0);
     };
     for (int i = 0; i < MIN(mouse.mouseInput.auxiliaryButtons.count, 5); i++) {
@@ -2055,12 +2414,102 @@ static BOOL ame87_mcVersionRequiresTextureBuffer(NSString *mcVersionId) {
     }
 }
 
+// ★ [TAP-CLICK] 轻触即左键：判定本次轻触是否满足“位移 < 阈值 且 时长 < 阈值”，
+// 满足则合成“一次完整的左键单击”(press + 33ms 后 release，位置取按下点)。
+// 返回 YES 表示已按新逻辑处理，调用方不再走旧的“点按”分支。
+- (BOOL)handleTapClickIfQualified:(UITapGestureRecognizer *)sender {
+    if (!getPrefBool(@"control.tap_click_enable")) return NO;   // 开关（默认开）
+    if (!self.enableMouseGestures) return NO;                   // 与鼠标手势开关保持一致
+    if (!self.tapClickDownValid) return NO;                     // 没记录到按下点（兜底）
+
+    CGPoint upPoint = [sender locationInView:self.rootView];
+    CGFloat dx = upPoint.x - self.tapClickDownPoint.x;
+    CGFloat dy = upPoint.y - self.tapClickDownPoint.y;
+    CGFloat moved = sqrt(dx * dx + dy * dy);                    // 抬起点与按下点的位移(pt)
+
+    CGFloat maxMove = getPrefFloat(@"control.tap_click_move");        // 位移阈值(pt)
+    if (maxMove <= 0.0) maxMove = 10.0;                               // 兜底默认 10pt
+    CGFloat maxDuration = getPrefFloat(@"control.tap_click_duration") / 1000.0; // 时长阈值(ms→s)
+    if (maxDuration <= 0.0) maxDuration = 0.3;                        // 兜底默认 300ms
+
+    CFTimeInterval elapsed = CACurrentMediaTime() - self.tapClickDownTime;
+    self.tapClickDownValid = NO;    // 每次触摸只判定一次，避免重复合成
+
+    if (moved > maxMove || elapsed > maxDuration) return NO;    // 超阈值 → 交给旧逻辑(拖动/长按)
+    if (currentHotbarSlot != -1) return NO;                     // 落在快捷栏 → 交给旧逻辑选槽
+
+    // ★ [TAP-UNIVERSAL] 单键通用：轻触发哪个键由模式决定。
+    //   auto (默认) ⇒ 发"合成 marker 键" TAP_UNIVERSAL_MARKER_GLFW，由游戏侧 agent 按准星
+    //                 目标路由(实体/打空→左键；方块可交互→右键打开；手持可放置→右键放置；
+    //                 普通方块空手→左键挖掘)。启动器看不到世界，所以判定必须在游戏侧。
+    //   left        ⇒ 直接发左键(等价旧默认行为)。
+    //   right       ⇒ 直接发右键(等价旧 tap_click_button_right=开)。
+    // ★ [TAP-SCOPE] 作用域门控：合成 marker(单键通用)【只在游戏世界里】有效。
+    //   判据用本文件既有的 “在世界里” 信号 isGrabbing —— MC 只在与世界交互、且
+    //   没有任何 GUI 界面(screen)打开时才抓取鼠标：主菜单/选项/暂停菜单/资源加载
+    //   等一切“有界面”场景 isGrabbing == JNI_FALSE。同款判据见
+    //   moveViewPanGesture(gestureRecognizerShouldBegin: 条件4)、surfaceOnHover、
+    //   callback_SurfaceViewController_touchHotbar(首行 isGrabbing 检查)。
+    //   为什么必须门控：marker 是给游戏侧 agent 按 hitResult 路由用的【合成键】(199)，
+    //   而主菜单里 hitResult 为空、点击由 Gui screen 消费 ⇒ 菜单里发 marker 等于
+    //   空操作，用户看到的就是“轻触没反应、只有长按(真左键)有反应”。
+    //   修法：世界里(被抓取)保持 marker 交 agent 路由；世界外(菜单/选项/暂停菜单)
+    //   一律直接发真左键 —— 即改动前 surfaceOnClick 旧分支在菜单里的行为
+    //   (isGrabbing ? RIGHT : LEFT)。
+    NSString *mode = [self tapClickEffectiveMode];
+    BOOL inGameWorld = (isGrabbing == JNI_TRUE);   // ★ [TAP-SCOPE]
+    int button;
+    if ([mode isEqualToString:@"left"]) {
+        button = GLFW_MOUSE_BUTTON_LEFT;
+    } else if ([mode isEqualToString:@"right"]) {
+        button = GLFW_MOUSE_BUTTON_RIGHT;
+    } else if (inGameWorld) {
+        // ★ [TAP-SCOPE] auto + 世界里：合成 marker，交游戏侧按 hitResult 路由
+        button = TAP_UNIVERSAL_MARKER_GLFW;
+    } else {
+        // ★ [TAP-SCOPE] auto + 世界外(主菜单/选项/暂停菜单)：直接真左键
+        button = GLFW_MOUSE_BUTTON_LEFT;
+    }
+    // 光标先落到“按下点”(符合直觉)，再发一次完整的 press + release。
+    [self sendTouchPoint:self.tapClickDownPoint withEvent:ACTION_DOWN];
+    CallbackBridge_nativeSendMouseButton(button, 1, 0);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 33 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+        CallbackBridge_nativeSendMouseButton(button, 0, 0);
+    });
+    return YES;
+}
+
+// ★ [TAP-UNIVERSAL] 轻触按键模式解析（单键通用的"模式"来源）。
+//   优先新键 control.tap_click_mode ∈ {auto,left,right}；
+//   向后兼容旧键 control.tap_click_button_right(=YES ⇒ 强制 right，即旧"轻触=右键放置")。
+//   非法/缺失一律回退 auto。两端都是 NSString 比较，无需新增 getPrefString。
+- (NSString *)tapClickEffectiveMode {
+    if (getPrefBool(@"control.tap_click_button_right")) return @"right";  // 旧开关优先(兼容)
+    id v = getPrefObject(@"control.tap_click_mode");
+    if ([v isKindOfClass:[NSString class]]) {
+        NSString *s = [(NSString *)v lowercaseString];
+        if ([s isEqualToString:@"left"] || [s isEqualToString:@"right"] || [s isEqualToString:@"auto"]) {
+            return s;
+        }
+    }
+    return @"auto";
+}
+
 - (void)surfaceOnClick:(UITapGestureRecognizer *)sender {
     if (sender.state == UIGestureRecognizerStateBegan || sender.state == UIGestureRecognizerStateEnded){
         if(self.shouldTriggerHaptic) {
             [self.lightHaptic impactOccurred];
         }
     }
+
+    // ★ [TAP-CLICK] 轻触即左键。这条判断独立于 shouldTriggerClick —— 后者在
+    // “游戏内 + TouchController 模组”路径下不会被置位（touchesBegan 提前 return），
+    // 导致轻触不生效、只有长按才发左键。新逻辑命中即 return，避免与旧分支重复发键。
+    if (sender.state == UIGestureRecognizerStateRecognized &&
+        [self handleTapClickIfQualified:sender]) {
+        return;
+    }
+
     if (!self.shouldTriggerClick) return;
 
     if (sender.state == UIGestureRecognizerStateRecognized) {
@@ -2098,8 +2547,46 @@ static BOOL ame87_mcVersionRequiresTextureBuffer(NSString *mcVersionId) {
 }
 
 - (void)surfaceOnHover:(UIGestureRecognizer *)sender {
-    if (isGrabbing) return;
     CGPoint point = [sender locationInView:self.rootView];
+
+    // ★ [BT-MOUSE-DIAG] 过滤前原始取证（节流）：判定系统到底有没有派发 hover。
+    self.btRawHoverCount++;
+    if (self.btRawHoverCount <= 20 || self.btRawHoverCount % 30 == 0) {
+        NSLog(@"[BT-MOUSE][raw] hover #%lu: state=%ld loc=(%.0f,%.0f) gcMouse=%lu handle=%d grabbed=%d enable=%d",
+              (unsigned long)self.btRawHoverCount, (long)sender.state, point.x, point.y,
+              (unsigned long)GCMouse.mice.count, [self btPointerShouldHandle],
+              isGrabbing, getPrefBool(@"control.bt_pointer_enable"));
+    }
+
+    // ★ [BT-MOUSE] GCMouse 缺席时（如 iPhone 辅助触控「指点设备」）由 hover 驱动指针运动：
+    //   游戏内→相邻帧差分合成相对位移（转视角）；世界外→绝对位置（移动光标）。
+    //   GCMouse 存在时维持原逻辑（硬件鼠标走 registerMouseCallbacks:）。
+    //   注意：按键按住期间(mouseDown)位移交给 touchesMoved，避免与之双重位移。
+    if ([self btPointerShouldHandle]) {
+        if (!self.btPointerHoverLogged) {
+            self.btPointerHoverLogged = YES;
+            NSLog(@"[BT-MOUSE] hover 指针接管: state=%ld GCMouse=%lu grabbing=%d", 
+                  (long)sender.state, (unsigned long)GCMouse.mice.count, isGrabbing);
+        }
+        switch (sender.state) {
+            case UIGestureRecognizerStateBegan:
+                self.btPointerLastPoint = point;
+                if (isGrabbing != JNI_TRUE) [self sendTouchPoint:point withEvent:ACTION_DOWN];
+                break;
+            case UIGestureRecognizerStateChanged:
+                if (!self.btPointerDown) [self btPointerMoveToPoint:point grabbing:(isGrabbing == JNI_TRUE)];
+                break;
+            case UIGestureRecognizerStateEnded:
+            case UIGestureRecognizerStateCancelled:
+                if (isGrabbing != JNI_TRUE) [self sendTouchPoint:point withEvent:ACTION_UP];
+                break;
+            default:
+                break;
+        }
+        return;
+    }
+
+    if (isGrabbing) return;
     switch (sender.state) {
         case UIGestureRecognizerStateBegan:
             [self sendTouchPoint:point withEvent:ACTION_DOWN];
@@ -2788,7 +3275,41 @@ CALayer *Amethyst_SDL3RenderLayer(void) {
 
 
     for (UITouch *touch in touches) {
-        if (touch.type == UITouchTypeIndirectPointer) continue;
+        // ★ [BT-MOUSE] 间接指针(蓝牙鼠标/触控板)：接住并按 UIEventButtonMask 合成鼠标按键。
+        if (touch.type == UITouchTypeIndirectPointer) {
+            // ★ [BT-MOUSE-DIAG] 过滤前原始取证（节流）。
+            {
+                CGPoint rawP = [touch locationInView:self.rootView];
+                self.btRawTouchCount++;
+                if (self.btRawTouchCount <= 20 || self.btRawTouchCount % 20 == 0) {
+                    NSLog(@"[BT-MOUSE][raw] indirectPointer #%lu: phase=began buttonMask=0x%lx loc=(%.0f,%.0f) gcMouse=%lu handle=%d grabbed=%d enable=%d",
+                          (unsigned long)self.btRawTouchCount, (unsigned long)event.buttonMask,
+                          rawP.x, rawP.y, (unsigned long)GCMouse.mice.count, [self btPointerShouldHandle],
+                          isGrabbing, getPrefBool(@"control.bt_pointer_enable"));
+                }
+            }
+            if (!self.btPointerTouchLogged) {
+                self.btPointerTouchLogged = YES;
+                NSLog(@"[BT-MOUSE] 检测到间接指针 touches: buttonMask=0x%lx GCMouse=%lu grabbing=%d enable=%d handle=%d",
+                      (unsigned long)event.buttonMask, (unsigned long)GCMouse.mice.count,
+                      isGrabbing, getPrefBool(@"control.bt_pointer_enable"), [self btPointerShouldHandle]);
+            }
+            if ([self btPointerShouldHandle]) {
+                CGPoint p = [touch locationInView:self.rootView];
+                self.btPointerLastPoint = p;
+                if (isGrabbing != JNI_TRUE) {
+                    // ★ [BT-MOUSE-DIAG] 通道2 发送前取证。
+                    [self btRawLogSend:@"downAbs" dx:p.x dy:p.y btn:-1];
+                    [self sendTouchPoint:p withEvent:ACTION_DOWN];
+                }
+                NSUInteger mask = (NSUInteger)event.buttonMask;
+                if (mask == 0) mask = UIEventButtonMaskPrimary;   // 无掩码时兜底左键
+                self.btPointerDownMask = mask;
+                self.btPointerDown = YES;
+                [self btPointerApplyButtonMask:mask pressed:YES fallbackLeft:NO];
+            }
+            continue;
+        }
         CGPoint locationInView = [touch locationInView:self.rootView];
         CGFloat screenScale = [[UIScreen mainScreen] scale];
         currentHotbarSlot = self.enableHotbarGestures ?
@@ -2841,7 +3362,30 @@ CALayer *Amethyst_SDL3RenderLayer(void) {
 
     for (UITouch *touch in touches) {
         if (touch.type == UITouchTypeIndirectPointer) {
-            if (!isGrabbing && !virtualMouseEnabled) {
+            // ★ [BT-MOUSE-DIAG] 过滤前原始取证（节流）。
+            {
+                CGPoint rawP = [touch locationInView:self.rootView];
+                self.btRawTouchCount++;
+                if (self.btRawTouchCount <= 20 || self.btRawTouchCount % 20 == 0) {
+                    NSLog(@"[BT-MOUSE][raw] indirectPointer #%lu: phase=moved buttonMask=0x%lx loc=(%.0f,%.0f) gcMouse=%lu handle=%d down=%d grabbed=%d",
+                          (unsigned long)self.btRawTouchCount, (unsigned long)event.buttonMask,
+                          rawP.x, rawP.y, (unsigned long)GCMouse.mice.count, [self btPointerShouldHandle],
+                          self.btPointerDown, isGrabbing);
+                }
+            }
+            // ★ [BT-MOUSE] 间接指针移动：按键按住时转相对位移(游戏内转视角)，
+            //   否则维持旧行为(未抓取且未开虚拟鼠标时用绝对位置移动光标)。
+            if ([self btPointerShouldHandle]) {
+                CGPoint p = [touch locationInView:self.rootView];
+                if (self.btPointerDown) {
+                    [self btPointerMoveToPoint:p grabbing:(isGrabbing == JNI_TRUE)];
+                } else if (!isGrabbing && !virtualMouseEnabled) {
+                    // ★ [BT-MOUSE-DIAG] 通道2 发送前取证。
+                    [self btRawLogSend:@"moveAbs" dx:p.x dy:p.y btn:-1];
+                    [self sendTouchPoint:p withEvent:ACTION_MOVE];
+                }
+                self.btPointerLastPoint = p;
+            } else if (!isGrabbing && !virtualMouseEnabled) {
                 CGPoint point = [touch locationInView:self.rootView];
                 [self sendTouchPoint:point withEvent:ACTION_MOVE];
             }
@@ -2857,6 +3401,24 @@ CALayer *Amethyst_SDL3RenderLayer(void) {
 
 - (void)touchesEnded:(NSSet *)touches withEvent:(UIEvent *)event
 {
+    // ★ [BT-MOUSE] 间接指针按键抬起：必须在任何 early-return 之前处理，
+    //   否则游戏内(mod_touch 开启 + 抓取时提前 return)会漏掉 mouse-up → 按键卡住。
+    for (UITouch *touch in touches) {
+        if (touch.type == UITouchTypeIndirectPointer) {
+            // ★ [BT-MOUSE-DIAG] 过滤前原始取证（节流）。
+            {
+                CGPoint rawP = [touch locationInView:self.rootView];
+                self.btRawTouchCount++;
+                if (self.btRawTouchCount <= 20 || self.btRawTouchCount % 20 == 0) {
+                    NSLog(@"[BT-MOUSE][raw] indirectPointer #%lu: phase=ended buttonMask=0x%lx loc=(%.0f,%.0f) down=%d grabbed=%d",
+                          (unsigned long)self.btRawTouchCount, (unsigned long)event.buttonMask,
+                          rawP.x, rawP.y, self.btPointerDown, isGrabbing);
+                }
+            }
+            [self btPointerHandleEndedTouch:touch];
+        }
+    }
+
     if (getPrefBool(@"control.mod_touch_enable")) {
         NSInteger mode = [getPrefObject(@"control.mod_touch_mode") integerValue];
 
@@ -2886,6 +3448,23 @@ CALayer *Amethyst_SDL3RenderLayer(void) {
 
 - (void)touchesCancelled:(NSSet *)touches withEvent:(UIEvent *)event
 {
+    // ★ [BT-MOUSE] 间接指针被取消：同样在任何 early-return 之前释放按键，避免卡住。
+    for (UITouch *touch in touches) {
+        if (touch.type == UITouchTypeIndirectPointer) {
+            // ★ [BT-MOUSE-DIAG] 过滤前原始取证（节流）。
+            {
+                CGPoint rawP = [touch locationInView:self.rootView];
+                self.btRawTouchCount++;
+                if (self.btRawTouchCount <= 20 || self.btRawTouchCount % 20 == 0) {
+                    NSLog(@"[BT-MOUSE][raw] indirectPointer #%lu: phase=cancelled buttonMask=0x%lx loc=(%.0f,%.0f) down=%d grabbed=%d",
+                          (unsigned long)self.btRawTouchCount, (unsigned long)event.buttonMask,
+                          rawP.x, rawP.y, self.btPointerDown, isGrabbing);
+                }
+            }
+            [self btPointerHandleEndedTouch:touch];
+        }
+    }
+
     if (getPrefBool(@"control.mod_touch_enable")) {
         NSInteger mode = [getPrefObject(@"control.mod_touch_mode") integerValue];
 
@@ -2991,6 +3570,8 @@ CALayer *Amethyst_SDL3RenderLayer(void) {
 
     // 清理启动遮罩层资源
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"PojavFirstFrameRendered" object:nil];
+    // ★ [LAUNCH-PROGRESS] 一并移除阶段广播观察者(与上面同一处清理)
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:AmeLaunchProgressChangedNotification object:nil];
     self.launchOverlayView = nil;
     self.launchGradientLayer = nil;
 
@@ -3022,8 +3603,17 @@ CALayer *Amethyst_SDL3RenderLayer(void) {
     }
 
     // LAN 端口检测器已改为手动输入模式，stopDetecting 已移除，无需调用。
-    // ZeroTier/Terracotta 联机暂时移除：原 stopAllMultiplayerServices 调用注释掉
-    // [[MultiplayerManager sharedManager] stopAllMultiplayerServices];
+
+    // ★ [MP-RESTORE] 联机恢复：游戏退出（存档关闭/JVM 结束）时清理联机资源
+    // 原代码仅停止 LanPortDetector，不清理 SOCKS5 代理 / PortForwarder / ZeroTier 网络 /
+    // AMETHYST_SOCKS5_PROXY 环境变量 / PLProfiles.serverIp ⇒ "存档关闭后端口仍在""下次进游戏仍显示连接服务器"。
+    // dealloc 可能在异常路径触发，用 @try/@catch 防二次崩溃。
+    @try {
+        [[MultiplayerManager sharedManager] stopAllMultiplayerServices];
+        NSLog(@"[SurfaceViewController] dealloc: Multiplayer resources cleaned up");
+    } @catch (NSException *e) {
+        NSLog(@"[SurfaceViewController] dealloc: Exception while cleaning up multiplayer resources: %@", e);
+    }
 
     //æ¸ç TouchController èµæº
     if (self.touchControllerTransportHandle >= 0) {

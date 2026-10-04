@@ -136,6 +136,10 @@ static SDL_GetWindowID_func   *pSDL_GetWindowID   = NULL;
 static SDL_GetModState_func   *pSDL_GetModState   = NULL;   // Task83
 static void *g_sdlWindow = NULL;  // The real SDL3 window pointer
 
+// ★ [BT-MOUSE-DIAG] 暴露 SDL 窗口指针（原 g_sdlWindow 为 static），供 SurfaceViewController
+//   的取证日志判断“下游 SDL 通道是否就绪”。只读、无副作用。
+void *CallbackBridge_sdlWindowPtr(void) { return g_sdlWindow; }
+
 static void initSDLEventFuncs(void) {
     static BOOL inited = NO;
     if (inited) return;

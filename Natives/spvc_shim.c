@@ -146,19 +146,93 @@ typedef int (*ame_spvc_shim_compile_fn_t)(void *compiler, const char **source);
 
 // ---- 重活入口（原有，补取证日志） ----
 
+// ★ [26.4-SPVC] 与 main_hook.m 的 ame_spvc_audit_input 同一目的：把真正交给
+// SPIRV-Cross 的字节与自洽性打出来，失败时把 parser 的 last_error 打出，并把
+// 唯一可安全修复的破损形态（尾部零填充 → count==0 指令字）收敛掉。
+// 真机 26.4 日志里 **[spvc-shim] 一行都没有**（LWJGL 被 MetalNativeBridge 引去
+// 加载 jar 内 natives/ios/libspvc.dylib），所以本垫片当前不在热路径上；这段是
+// 为了"垫片被重新纳回"或"独立构建"时不再需要猜。
+static const char *ame_spvc_shim_last_error(void *impl, void *context) {
+    static void *fn = NULL;
+    static int tried = 0;
+    if (!tried) {
+        tried = 1;
+        if (impl != NULL && ame_spvc_shim_real_dlsym != NULL) {
+            fn = ame_spvc_shim_real_dlsym(impl, "spvc_context_get_last_error_string");
+            if (fn == NULL)
+                fn = ame_spvc_shim_real_dlsym(impl, "spvc_context_get_last_error");
+        }
+    }
+    if (fn == NULL || context == NULL) return NULL;
+    return ((const char *(*)(void *))fn)(context);
+}
+
+static void ame_spvc_shim_audit(const unsigned *spirv, size_t *word_count) {
+    if (spirv == NULL || word_count == NULL || *word_count == 0) {
+        fprintf(stderr, "[spvc-shim][26.4-SPVC] parse_spirv input NULL/empty (words=%zu)\n",
+                word_count ? *word_count : (size_t)0);
+        return;
+    }
+    const uint32_t *w = (const uint32_t *)spirv;
+    size_t words = *word_count;
+    size_t off = (words >= 5) ? 5 : words;
+    int overrun = 0;
+    while (off < words) {
+        size_t cnt = (size_t)((w[off] >> 16) & 0xffffu);
+        if (cnt == 0) break;
+        off += cnt;
+        if (off > words) { overrun = 1; break; }
+    }
+    size_t effective = words, trimmed = 0;
+    if (!overrun && off < words) {
+        int all_zero = 1;               // 只有"off 之后全 0"才是纯尾部零填充
+        for (size_t i = off; i < words; ++i) {
+            if (w[i] != 0) { all_zero = 0; break; }
+        }
+        if (all_zero) {
+            effective = (off < 5) ? 5 : off;
+            if (effective > words) effective = words;
+            trimmed = words - effective;
+        }
+    }
+    fprintf(stderr,
+            "[spvc-shim][26.4-SPVC] parse_spirv input: words=%zu magic=%08x ver=%08x "
+            "bound=%08x stream_end=%zu overrun=%d effective_words=%zu "
+            "trimmed_zero_tail=%zu\n",
+            words, w[0], (words > 1) ? w[1] : 0, (words > 3) ? w[3] : 0,
+            off, overrun, effective, trimmed);
+    if (trimmed > 0) {
+        fprintf(stderr,
+                "[spvc-shim][26.4-SPVC] WARN trimmed %zu trailing zero word(s) "
+                "%zu -> %zu (count==0 instruction word is fatal to SPIRV-Cross)\n",
+                trimmed, words, effective);
+    }
+    *word_count = effective;
+}
+
 int spvc_context_parse_spirv(void *context, const unsigned *spirv, size_t word_count,
                              void **parsed_ir) {
     void *real = ame_spvc_shim_resolve("spvc_context_parse_spirv");
     if (real == NULL) {
-        fprintf(stderr, "[spvc-shim] spvc_context_parse_spirv unresolved -- returning "
-                        "error\n");
+        // ★ [26.4-SPVC] 这里返回的 -1 与 SPIRV-Cross 真正的 SPVC_ERROR_INVALID_SPIRV
+        // 在调用方眼里完全同形（Java checkSpvc 只看到整数）。加一个不可能混淆的
+        // 标记，避免"impl 没加载"被误诊成"SPIR-V 非法"。
+        fprintf(stderr, "[spvc-shim][26.4-SPVC] FATAL: spvc_context_parse_spirv "
+                        "unresolved (impl=%p) -- returning -1; NOTE this -1 is NOT "
+                        "SPVC_ERROR_INVALID_SPIRV\n", ame_spvc_shim_impl);
         return -1;
     }
+    ame_spvc_shim_audit(spirv, &word_count);
     pthread_mutex_lock(ame_spvc_master_or_local());
     fprintf(stderr, "[spvc-shim] parse_spirv words=%zu ctx=%p (t=%.0fms tid=%lx)\n",
             word_count, context, ame_spvc_shim_ms(), ame_spvc_shim_tid());
     int rc = ((ame_spvc_shim_parse_fn_t)real)(context, spirv, word_count, parsed_ir);
     pthread_mutex_unlock(ame_spvc_master_or_local());
+    if (rc != 0) {
+        const char *err = ame_spvc_shim_last_error(ame_spvc_shim_impl_handle(), context);
+        fprintf(stderr, "[spvc-shim][26.4-SPVC] parse_spirv rc=%d (-1=INVALID_SPIRV) "
+                        "last_error='%s'\n", rc, (err != NULL) ? err : "(unavailable)");
+    }
     return rc;
 }
 
