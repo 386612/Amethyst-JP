@@ -858,14 +858,8 @@
             // 当渲染器选择为 MobileGlues 或 Vulkan 时，init_loadMobileGluesConfig()
             // 写入的 <POJAV_HOME>/MG/config.json 会被 MobileGlues 读取并生效。
             // Vulkan 渲染器的 OpenGL 回退使用 MobileGlues（对齐 Ynnyny 仓库）。
-            // Auto 渲染器会被解析为 ANGLE，不会加载 MobileGlues。
+            // ★ [DROP-ANGLE] 原 enable_angle 开关已随 Angle 渲染器一并移除。
             @{@"icon": @"cpu"},
-            @{@"key": @"enable_angle",
-              @"hasDetail": @YES,
-              @"icon": @"triangle",
-              @"type": self.typeSwitch,
-              @"enableCondition": whenNotInGame
-            },
             @{@"key": @"enable_no_error",
               @"hasDetail": @YES,
               @"icon": @"exclamationmark.triangle",

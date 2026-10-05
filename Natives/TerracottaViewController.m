@@ -25,7 +25,6 @@
 #import "LauncherPreferences.h"
 #import "utils.h"
 #import "BackgroundManager.h"
-#import "MultiplayerViewController.h"
 
 typedef NS_ENUM(NSInteger, TCUIState) {
     TCUIStateMenu      = 0,  /* 两张大卡片：创建 / 加入 */
@@ -96,7 +95,6 @@ typedef NS_ENUM(NSInteger, TCUIState) {
     self.uiState = TCUIStateMenu;
 
     [self setupDismissHandling];
-    [self setupZeroTierButton];
 
     [[BackgroundManager sharedManager] makeViewControllerTransparent:self];
 
@@ -174,28 +172,6 @@ typedef NS_ENUM(NSInteger, TCUIState) {
         self.navigationController.viewControllers.firstObject != self) {
         self.navigationController.navigationBarHidden = YES;
     }
-}
-
-/// ZeroTier 旧方案入口（浮动按钮，两种方案并存）
-- (void)setupZeroTierButton {
-    UIButton *ztFab = [UIButton buttonWithType:UIButtonTypeSystem];
-    UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold];
-    [ztFab setImage:[UIImage systemImageNamed:@"network" withConfiguration:cfg] forState:UIControlStateNormal];
-    ztFab.tintColor = [UIColor whiteColor];
-    ztFab.backgroundColor = [UIColor systemBlueColor];
-    ztFab.layer.cornerRadius = 18;
-    ztFab.layer.masksToBounds = YES;
-    ztFab.translatesAutoresizingMaskIntoConstraints = NO;
-    ztFab.accessibilityLabel = localize(@"i18n_str_1007", nil);
-    [ztFab addTarget:self action:@selector(switchToZeroTier:) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:ztFab];
-    [self.view bringSubviewToFront:ztFab];
-    [NSLayoutConstraint activateConstraints:@[
-        [ztFab.widthAnchor constraintEqualToConstant:36],
-        [ztFab.heightAnchor constraintEqualToConstant:36],
-        [ztFab.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:8],
-        [ztFab.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-16],
-    ]];
 }
 
 #pragma mark - Root layout
@@ -299,8 +275,14 @@ typedef NS_ENUM(NSInteger, TCUIState) {
                                               title:localize(@"i18n_str_1009", nil)
                                            subtitle:localize(@"i18n_str_2069", nil)
                                              action:@selector(joinRoomTapped:)];
+    // ★ [MP-GUIDE] 联机教程入口（对标 FCL：新用户不知道「开放局域网 → 端口 → 邀请码」全流程）
+    UIView *guideCard = [self makeActionCardWithIcon:@"questionmark.circle.fill"
+                                              title:localize(@"i18n_str_2091", nil)
+                                           subtitle:localize(@"i18n_str_2092", nil)
+                                             action:@selector(showMultiplayerGuide:)];
     [stack addArrangedSubview:hostCard];
     [stack addArrangedSubview:guestCard];
+    [stack addArrangedSubview:guideCard];
 
     [NSLayoutConstraint activateConstraints:@[
         [stack.topAnchor constraintEqualToAnchor:container.topAnchor],
@@ -408,6 +390,12 @@ typedef NS_ENUM(NSInteger, TCUIState) {
     self.detectingHintLabel.text = localize(@"i18n_str_2073", nil);
     [stack addArrangedSubview:self.detectingHintLabel];
 
+    // ★ [MP-MANUAL] 自动检测迟迟无结果时的出口：直接切到手动输入端口，
+    //   不让用户卡在"正在检测…"里干等（对标 FCL 的自动检测失败回退手动输入）。
+    UIButton *manual = [self makeSecondaryButtonWithTitle:localize(@"i18n_str_2093", nil)
+                                                  action:@selector(switchToManualInputTapped:)];
+    [stack addArrangedSubview:manual];
+
     UIButton *cancel = [self makeSecondaryButtonWithTitle:localize(@"i18n_str_2080", nil)
                                                    action:@selector(cancelDetectingTapped:)];
     [stack addArrangedSubview:cancel];
@@ -417,6 +405,8 @@ typedef NS_ENUM(NSInteger, TCUIState) {
         [stack.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:18],
         [stack.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-18],
         [stack.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-24],
+        [manual.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
+        [manual.heightAnchor constraintEqualToConstant:44],
         [cancel.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
         [cancel.heightAnchor constraintEqualToConstant:44],
     ]];
@@ -987,6 +977,27 @@ typedef NS_ENUM(NSInteger, TCUIState) {
     [self updateForCurrentState];
 }
 
+#pragma mark - Guide
+
+/// ★ [MP-GUIDE] 联机教程（对标 FCL 的联机引导）。
+/// 陶瓦（Terracotta）联机链路与 ZeroTier 完全不同，必须让用户知道
+/// 「先在游戏里对局域网开放 → 端口 → 邀请码 → 好友多人游戏直连」这条主线。
+- (void)showMultiplayerGuide:(id)sender {
+    NSString *title = localize(@"i18n_str_2091", nil);
+    NSString *body = [NSString stringWithFormat:@"%@\n\n%@\n\n%@\n\n%@",
+                      localize(@"i18n_str_2094", nil),   // 联机原理
+                      localize(@"i18n_str_2095", nil),   // 房主步骤
+                      localize(@"i18n_str_2096", nil),   // 访客步骤
+                      localize(@"i18n_str_2097", nil)];  // 常见问题/提示
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title
+                                                                  message:body
+                                                           preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:localize(@"resman.common.close", nil)
+                                              style:UIAlertActionStyleDefault
+                                            handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
 - (void)autoSwitchChanged:(UISwitch *)sender {
     BOOL autoOn = sender.on;
     self.portField.enabled = !autoOn;
@@ -1065,6 +1076,20 @@ typedef NS_ENUM(NSInteger, TCUIState) {
     [self updateForCurrentState];
 }
 
+/// ★ [MP-MANUAL] 自动检测失败/超时的兜底出口：关掉自动检测、放开端口输入框，
+///   让用户按 FCL 的方式手动填端口（回退到手动模式，而不是把用户困在检测页）。
+- (void)switchToManualInputTapped:(id)sender {
+    [[LanPortDetector sharedInstance] stopAutoDetection];
+    self.autoSwitch.on = NO;
+    [self autoSwitchChanged:self.autoSwitch];
+    if (self.portField.text.length == 0) {
+        self.portField.text = @"25565";
+    }
+    self.uiState = TCUIStateHostForm;
+    [self updateForCurrentState];
+    [self.portField becomeFirstResponder];
+}
+
 - (void)codeFieldChanged:(UITextField *)field {
     NSString *code = [field.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     if (code.length == 0) {
@@ -1127,33 +1152,6 @@ typedef NS_ENUM(NSInteger, TCUIState) {
     } else {
         [self dismissViewControllerAnimated:YES completion:nil];
     }
-}
-
-- (void)switchToZeroTier:(id)sender {
-    TerracottaStatus status = [TerracottaManager shared].status;
-    if (status != TerracottaStatusDisconnected) {
-        UIAlertController *alert = [UIAlertController
-            alertControllerWithTitle:localize(@"i18n_str_1020", nil)
-                             message:localize(@"i18n_str_1021", nil)
-                      preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction actionWithTitle:localize(@"resman.common.cancel", nil)
-                                                  style:UIAlertActionStyleCancel handler:nil]];
-        [alert addAction:[UIAlertAction actionWithTitle:localize(@"i18n_str_1022", nil)
-                                                  style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
-            [[TerracottaManager shared] stopSession];
-            [self presentZeroTierVC];
-        }]];
-        [self presentViewController:alert animated:YES completion:nil];
-        return;
-    }
-    [self presentZeroTierVC];
-}
-
-- (void)presentZeroTierVC {
-    MultiplayerViewController *vc = [[MultiplayerViewController alloc] init];
-    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
-    nav.modalPresentationStyle = UIModalPresentationPageSheet;
-    [self presentViewController:nav animated:YES completion:nil];
 }
 
 #pragma mark - Misc

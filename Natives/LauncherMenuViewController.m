@@ -135,7 +135,10 @@
         @{@"icon": @"arrow.down.circle.fill", @"tab": @"下载", @"portrait": @"下载", @"landscape": @"下载中心", @"index": @1},
         @{@"icon": @"sparkles",               @"tab": @"AI",   @"portrait": @"AI",   @"landscape": @"AI",       @"index": @2},
         @{@"icon": @"square.stack.3d.up.fill",@"tab": @"实例", @"portrait": @"实例", @"landscape": @"实例",     @"index": @3},
-        @{@"icon": @"gearshape.fill",         @"tab": @"设置", @"portrait": @"设置", @"landscape": @"设置",     @"index": @4}
+        @{@"icon": @"gearshape.fill",         @"tab": @"设置", @"portrait": @"设置", @"landscape": @"设置",     @"index": @4},
+        // ★ [MP-RESTORE] 联机入口恢复：陶瓦（Terracotta）联机，与 HMCL/FCL 互通。
+        //   追加在末尾，既有 index 0-4 的语义与位置完全不变（追加不引起下标错位）。
+        @{@"icon": @"person.2.wave.2.fill",   @"tab": @"联机", @"portrait": @"联机", @"landscape": @"联机",     @"index": @5}
     ];
 
     self.selectedIndex = 0;
@@ -282,7 +285,9 @@
             [self showSettings];
             break;
 
-        // ★ [SWIFT-BAR] 原 case 4(多人游戏)已删除:该入口不再出现在标签栏上
+        case 5: // ★ [MP-RESTORE] 联机（陶瓦 Terracotta）
+            [self showMultiplayer];
+            break;
     }
 }
 
@@ -303,17 +308,11 @@
     [[NSNotificationCenter defaultCenter] postNotificationName:@"ShowVersionManager" object:nil];
 }
 
-/// ★ [TABC] 入口已下线(用户:多人游戏"还在维护、没有实际入口"),方法保留备查 ——
-/// 若哪天要回归:在 menuItems 末尾补一项 + 在 handleMenuSelection: 补一个 case 即可。
+/// ★ [MP-RESTORE] 联机入口（陶瓦 Terracotta）：恢复为标签栏的一项（index 5），
+/// 点按发 ShowMultiplayer 通知 ⇒ 由主页控制器在内容区 push 陶瓦联机页。
 - (void)showMultiplayer {
     // 发送通知让 LauncherRootViewController 显示陶瓦联机界面
     [[NSNotificationCenter defaultCenter] postNotificationName:@"ShowMultiplayer" object:nil];
-}
-
-- (void)showZeroTier {
-    // 发送通知让 LauncherRootViewController 显示 ZeroTier 联机界面
-    // ZeroTier 与陶瓦联机为并列的两套联机方案，独立菜单入口避免用户先进入陶瓦再切换。
-    [[NSNotificationCenter defaultCenter] postNotificationName:@"ShowZeroTier" object:nil];
 }
 
 - (void)showSettings {

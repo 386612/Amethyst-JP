@@ -19,7 +19,6 @@
 #import "LauncherPrefGameDirViewController.h"
 #import "CustomControlsViewController.h"
 // ★ [MP-RESTORE] 联机恢复
-#import "MultiplayerViewController.h"
 #import "TerracottaViewController.h"
 #import "TerracottaManager.h"
 #import "TerracottaBridge.h"
@@ -844,10 +843,6 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
                                              selector:@selector(showMultiplayer)
                                                  name:@"ShowMultiplayer"
                                                object:nil];
-    [[NSNotificationCenter defaultCenter] addObserver:self
-                                             selector:@selector(showZeroTier)
-                                                 name:@"ShowZeroTier"
-                                               object:nil];
     // 账户管理：右侧面板点击头像会发 ShowAccountManager 通知。
     // 原实现遗漏此监听，导致卡片布局下点头像无反应、无法登录账号。
     [[NSNotificationCenter defaultCenter] addObserver:self
@@ -1040,7 +1035,7 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
     [self setContentViewController:navVC animated:YES];
 }
 
-// ★ [MP-RESTORE] 联机恢复：陶瓦联机 / ZeroTier 两个入口。
+// ★ [MP-RESTORE] 联机恢复：陶瓦联机入口。
 //   ★ [MP-BACK] 改为 push 进【本页所在标签的导航栈】(本页即该标签的根)：系统自带返回键、返回即回主页；
 //   不再用 setContentViewController: 把根内容整体换掉(那会让新页成为全新 nav 的根、presentingViewController==nil，
 //   页面自己隐藏导航栏 ⇒ 用户实测「进得去、没有返回键、出不来」)。与主页磁贴的 fix2PushTab 落点完全一致。
@@ -1056,16 +1051,6 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
         return;
     }
     TerracottaViewController *vc = [[TerracottaViewController alloc] init];
-    [self mpbackPushPageOrFallback:vc];
-}
-
-- (void)showZeroTier {
-    // ZeroTier 联机界面（独立入口）；若陶瓦会话进行中，先停以免端口冲突。
-    if ([TerracottaBridge isAvailable] &&
-        [TerracottaManager shared].status != TerracottaStatusDisconnected) {
-        [[TerracottaManager shared] stopSession];
-    }
-    MultiplayerViewController *vc = [[MultiplayerViewController alloc] initWithMode:MultiplayerVCModeLauncher];
     [self mpbackPushPageOrFallback:vc];
 }
 
