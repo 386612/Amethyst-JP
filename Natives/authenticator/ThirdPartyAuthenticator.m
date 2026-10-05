@@ -531,6 +531,18 @@ static NSError* createError(NSString *message, NSInteger code) {
             // 第三方账户用 profileId（角色 UUID）作为 accountId，使同名账户可共存
             weakSelf.authData[@"accountId"] = weakSelf.authData[@"profileId"];
 
+            // ★ [AUTH-128] 多角色路径补齐 expiresAt（移植 Prisma 0877ca68 根因修复）
+            // 根因链：本函数 -> fetchProfileTextureWithCallback 的保存分支此前不设
+            // expiresAt，而 BaseAuthenticator loadSavedName 的判别顺序是
+            //   ① expiresAt == 0 -> LocalAuthenticator
+            //   ② clientToken != nil -> ThirdPartyAuthenticator
+            // ①在②之前，故缺 expiresAt 的第三方账户重载即被误判为 Local，
+            // JavaLauncher:1881 的 isKindOfClass(ThirdPartyAuthenticator) 检查失败 ->
+            // authlib-injector 参数不注入 -> 原版 authlib 拿第三方令牌请求 Mojang ->
+            // 401 InvalidCredentialsException（用户可见症状："第三方登录完全用不了"）。
+            // 此处先于头像异步流程设置，下游所有 saveChanges 一并继承。
+            weakSelf.authData[@"expiresAt"] = @((long)[NSDate.date timeIntervalSince1970] + 86400);
+
             // 异步获取头像（与单角色路径一致）
             [weakSelf fetchProfileTextureWithCallback:callback];
         } @catch (NSException *exception) {
