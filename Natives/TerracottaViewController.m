@@ -915,6 +915,13 @@ typedef NS_ENUM(NSInteger, TCUIState) {
         self.codeHintLabel.textColor = secondary;
     }
     if (self.sessionView != nil) {
+        if (hasBg) {
+            [self.leaveButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+            self.leaveButton.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.6].CGColor;
+        } else {
+            [self.leaveButton setTitleColor:[UIColor systemRedColor] forState:UIControlStateNormal];
+            self.leaveButton.layer.borderColor = [UIColor systemRedColor].CGColor;
+        }
         self.infoTitleLabel.textColor = secondary;
         self.infoValueLabel.textColor = primary;
         self.infoDescLabel.textColor = secondary;
@@ -988,6 +995,18 @@ typedef NS_ENUM(NSInteger, TCUIState) {
     self.portHintLabel.text = autoOn ? localize(@"i18n_str_2073", nil) : localize(@"i18n_str_1010", nil);
 }
 
+/// 等待 30 秒仍没有端口时，提示用户改用手动输入（不至于一直干等）。
+- (void)scheduleDetectionHint {
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(30 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (strongSelf == nil) return;
+        if (strongSelf.uiState != TCUIStateDetecting) return;
+        strongSelf.detectingHintLabel.text = localize(@"i18n_str_2079", nil);
+    });
+}
+
 - (void)startHostTapped:(id)sender {
     if (self.autoSwitch.on) {
         uint16_t known = [LanPortDetector sharedInstance].detectedPort;
@@ -998,6 +1017,7 @@ typedef NS_ENUM(NSInteger, TCUIState) {
         self.uiState = TCUIStateDetecting;
         [self updateForCurrentState];
         [[LanPortDetector sharedInstance] startAutoDetection];
+        [self scheduleDetectionHint];
         return;
     }
     int port = [self.portField.text intValue];
