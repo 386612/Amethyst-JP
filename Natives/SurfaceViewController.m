@@ -405,7 +405,17 @@ static UIView *findSDL_uikitview(UIView *root);
 
 // æ£æ¥è§å¾æ¯å¦å·²å³é­
 - (BOOL)isViewDismissed {
-    return !self.view.window || self.isBeingDismissed;
+    // 修复：self.view.window 和 self.isBeingDismissed 是 UIKit 属性，
+    // 必须在主线程访问。从后台线程 TouchController 循环调用时需 dispatch 到主线程。
+    __block BOOL dismissed = NO;
+    if ([NSThread isMainThread]) {
+        dismissed = !self.view.window || self.isBeingDismissed;
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            dismissed = !self.view.window || self.isBeingDismissed;
+        });
+    }
+    return dismissed;
 }
 
 // ç¼ç  ProxyMessage: AddPointerMessage (type=1, index=int32, x=float, y=float)
@@ -1515,7 +1525,10 @@ static UIView *findSDL_uikitview(UIView *root);
 
 - (void)updateGrabState {
     if (isGrabbing == JNI_TRUE) {
-        CGFloat screenScale = self.surfaceView.layer.contentsScale;
+        // Task59：contentsScale 已被 Task52 呈现对齐钉成 1.0，作输入乘数会缺 ×2
+        // （lastVirtualMousePoint 是点，乘 1 后落入 MC 2360 像素空间的 1/4 处）。
+        // 与 sendTouchPoint 同口径：用 screenScale（scene.screen.scale，即 2.0）。
+        CGFloat screenScale = self.screenScale > 0 ? self.screenScale : UIScreen.mainScreen.scale;
         CallbackBridge_nativeSendCursorPos(ACTION_DOWN, lastVirtualMousePoint.x * screenScale, lastVirtualMousePoint.y * screenScale);
         virtualMouseFrame.origin.x = self.view.frame.size.width / 2;
         virtualMouseFrame.origin.y = self.view.frame.size.height / 2;
@@ -2144,7 +2157,12 @@ static BOOL ame87_mcVersionRequiresTextureBuffer(NSString *mcVersionId) {
 
 - (void)sendTouchEvent:(UITouch *)touchEvent withUIEvent:(UIEvent *)uievent withEvent:(int)event
 {
-    CGPoint locationInView = [touchEvent locationInView:self.rootView];
+    // Task59：rootView 比 surfaceView 宽 30pt（菜单溢出，层级转储 1210x820 层），
+    // 游戏画面在 rootView 内两侧各缩进 15pt——用 rootView 坐标会给启动器直发
+    // 路径引入 +15pt 恒定水平偏移，且与 TouchController mod 的 surfaceView
+    // 归一化口径不一致。改用 surfaceView 参考系（mod 路径同款，下游
+    // touchHotbar 的 phys=2360x1640 数学也以游戏表面为基准）。
+    CGPoint locationInView = [touchEvent locationInView:self.surfaceView];
     switch (event) {
         case ACTION_DOWN:
             self.clickRange = CGRectMake(locationInView.x - 2, locationInView.y - 2, 5, 5);
