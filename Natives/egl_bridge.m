@@ -863,7 +863,9 @@ void pojavSwapBuffers() {
         s_firstFrameRendered = YES;
         dispatch_async(dispatch_get_main_queue(), ^{
             [[NSNotificationCenter defaultCenter] postNotificationName:@"PojavFirstFrameRendered" object:nil];
-            NSLog(@"[egl_bridge] First frame rendered, game is ready");
+    // Task 32 澄清：此处在 eglSwapBuffers 之前触发，只能证明"首次 swap 尝试"，
+    // 真实上屏确认看 gl_bridge.m 的 "[RenderDiag] first eglSwapBuffers OK"。
+            NSLog(@"[egl_bridge] First swap attempted, removing launch overlay (present confirmation: [RenderDiag] first eglSwapBuffers OK)");
         });
     }
 
