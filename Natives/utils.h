@@ -367,6 +367,8 @@ void CallbackBridge_nativeSendScreenSize(int width, int height);
 void CallbackBridge_nativeSendScroll(CGFloat xoffset, CGFloat yoffset);
 void CallbackBridge_sendKeycode(int keycode, jchar keychar, int scancode, int modifiers, BOOL isDown);
 void CallbackBridge_pauseGameIfNeed();
+// ★ [FG] 与上面成对：回前台时重申窗口尺寸，让 MC 重新同步 framebuffer。
+void CallbackBridge_resumeGameIfNeed(void);
 // issue #27 修复（参照 FCL commit 08c0716）：物理键盘 modifier 同步
 // 显式同步 MC 1.21.9+ 内部的 InputConstants modifier 缓存。
 // 由 KeyboardInput.m 在物理键盘按下/释放事件中调用。

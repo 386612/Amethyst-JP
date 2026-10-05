@@ -1747,9 +1747,46 @@ JNIEXPORT void JNICALL Java_org_lwjgl_glfw_GLFW_nglfwSetShowingWindow(JNIEnv* en
 }
 
 void CallbackBridge_pauseGameIfNeed() {
-    if (isGrabbing) {
-        CallbackBridge_nativeSendKey(GLFW_KEY_ESCAPE, 0, 1, 0);
-        CallbackBridge_nativeSendKey(GLFW_KEY_ESCAPE, 0, 0, 0);
+    // ★ [FG] 切后台暂停在 26.3(SDL3) 上是空操作 —— 根因与修复：
+    //   原判据只有 isGrabbing。SDL3 路径下 isGrabbing 由 SDL 的相对鼠标模式
+    //   同步而来，实测恒为 0（本文件 [HotbarDiag] / pojavPumpEvents 注释原话：
+    //   “isGrabbing 全程为 0，正是这条链路断了”）。于是 SceneDelegate 的
+    //   sceneDidEnterBackground → 这里什么都不做。
+    //   与此同时 sdl3_hook 的 Task56 又掐掉了 SDL_EVENT_WINDOW_MINIMIZED，
+    //   并把 SDL_GetWindowFlags 的 INPUT_FOCUS(0x200) 恒置 1 —— MC 因此永远
+    //   以为自己在前台、有焦点、未最小化，切后台后仍按前台全速渲染，回前台时
+    //   呈现链路停在半截状态（表现为卡死/黑屏）。
+    //   修复：判据从“只有 isGrabbing”放宽为“输入链路已就绪”——GLFW 路径看
+    //   isInputReady，SDL3 路径看 g_sdlWindow 是否已建立。isGrabbing 仍保留为
+    //   充分条件（抓取中必然在游戏中）。
+    BOOL liveSession = (isGrabbing || isInputReady || (g_sdlWindow != NULL));
+    if (!liveSession) {
+        NSLog(@"[InputDiag] pauseGameIfNeed: skipped (no live session: "
+              @"isGrabbing=%d isInputReady=%d sdlWindow=%p)",
+              isGrabbing, isInputReady, g_sdlWindow);
+        return;
+    }
+    NSLog(@"[InputDiag] pauseGameIfNeed: ESC -> MC (isGrabbing=%d isInputReady=%d sdlWindow=%p)",
+          isGrabbing, isInputReady, g_sdlWindow);
+    CallbackBridge_nativeSendKey(GLFW_KEY_ESCAPE, 0, 1, 0);
+    CallbackBridge_nativeSendKey(GLFW_KEY_ESCAPE, 0, 0, 0);
+}
+
+// ★ [FG] 回前台：补发一组“焦点/恢复”信号，让 MC 知道自己重新可见。
+//   与上面的暂停成对：只暂停不恢复同样会让 MC 停在暂停态。
+void CallbackBridge_resumeGameIfNeed(void) {
+    BOOL liveSession = (isGrabbing || isInputReady || (g_sdlWindow != NULL));
+    if (!liveSession) return;
+    NSLog(@"[InputDiag] resumeGameIfNeed: live session (isGrabbing=%d isInputReady=%d sdlWindow=%p)",
+          isGrabbing, isInputReady, g_sdlWindow);
+    // 只做无害的窗口尺寸重申：SDL3/MC 收到 WINDOW_RESIZED / PIXEL_SIZE_CHANGED
+    // 会重新同步 framebuffer 尺寸，是恢复呈现面最安全的一针。不合成 ESC，
+    // 避免误关暂停菜单。尺寸未定（0）时绝不发，避免把 framebuffer 打成 0x0。
+    if (windowWidth > 0 && windowHeight > 0) {
+        CallbackBridge_nativeSendScreenSize(windowWidth, windowHeight);
+    } else {
+        NSLog(@"[InputDiag] resumeGameIfNeed: skip resize re-announce (size %dx%d invalid)",
+              windowWidth, windowHeight);
     }
 }
 

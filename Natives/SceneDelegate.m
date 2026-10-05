@@ -14,6 +14,10 @@
 
 extern UIWindow *mainWindow;
 
+// ★ [FG] Air Task32 的呈现面执法入口（定义在 SurfaceViewController.m）。
+//   设计上可周期性重复调用且幂等：pojavWindow 为空时直接返回 NO，非游戏态零副作用。
+extern BOOL Amethyst_EnforceSDL3Presentation(void);
+
 @interface SceneDelegate ()
 @end
 
@@ -241,16 +245,48 @@ extern UIWindow *mainWindow;
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"UIThemeChanged" object:nil];
 }
 
+#pragma mark - ★ [FG] 前后台切换：暂停 / 恢复 / 呈现面自愈
+
+// 取证锚点：切后台与回前台各打一次 swap 计数。若回前台后 swapOK 不再增长，
+// 即证实渲染循环在后台被楔死（而不是 MC 单纯停在暂停菜单）。
+static void AmeFGLogSwapStats(NSString *phase) {
+    unsigned long ok = 0, fail = 0;
+    ame_egl_swap_stats(&ok, &fail);
+    NSLog(@"[FG-Lifecycle] %@: swapOK=%lu swapFail=%lu", phase, ok, fail);
+}
+
 - (void)sceneDidBecomeActive:(UIScene *)scene {
+    // ★ [FG] 回前台自愈：切后台/多任务切换期间，SDL 自建的空 UIWindow 与视图
+    //   z 序可能被系统重新抬到宿主窗口之上（Air Task32「空窗黑盖子」），
+    //   宿主 CAMetalLayer 被整块盖住即表现为回前台黑屏/卡住。这里补一次执法。
+    //   该函数内部全程 @try 且幂等，非游戏态（pojavWindow==nil）直接返回 NO。
+    @try {
+        BOOL did = Amethyst_EnforceSDL3Presentation();
+        NSLog(@"[FG-Lifecycle] didBecomeActive: presentation enforcement did=%d", (int)did);
+    } @catch (NSException *e) {
+        NSLog(@"[FG-Lifecycle] didBecomeActive: enforcement exception: %@", e);
+    }
+    // 重申窗口尺寸：让 MC 重新同步 framebuffer（内部已做 0 尺寸兜底）。
+    CallbackBridge_resumeGameIfNeed();
+    AmeFGLogSwapStats(@"didBecomeActive");
 }
 
 - (void)sceneWillResignActive:(UIScene *)scene {
+    // ★ [FG] 立刻暂停。原先只有 sceneDidEnterBackground 会暂停，但上滑回主屏 /
+    //   控制中心 / 通知中心 / 来电等场景里 didEnterBackground 要么晚到要么不到，
+    //   且 pauseGameIfNeed 原先被 isGrabbing 挡住（26.3+ 恒 0，实为空操作）——
+    //   MC 全程不知自己已进后台，仍按前台全速渲染，回前台即卡在半截状态。
+    AmeFGLogSwapStats(@"willResignActive");
+    CallbackBridge_pauseGameIfNeed();
 }
 
 - (void)sceneWillEnterForeground:(UIScene *)scene {
+    AmeFGLogSwapStats(@"willEnterForeground");
 }
 
 - (void)sceneDidEnterBackground:(UIScene *)scene {
+    // 幂等：已经停在暂停菜单时再发一次 ESC 无副作用。
+    AmeFGLogSwapStats(@"didEnterBackground");
     CallbackBridge_pauseGameIfNeed();
 }
 
