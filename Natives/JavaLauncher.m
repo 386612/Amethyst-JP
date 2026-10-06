@@ -1529,8 +1529,22 @@ int launchJVM(NSString *accountId, id launchTarget, int width, int height, int m
         if ([renderer isEqualToString:@ RENDERER_NAME_VIRGL]) {
             NSLog(@"[JavaLauncher] [RENDERER-GAP] VirGL renderer active: GALLIUM_DRIVER=virgl + in-process vtest server");
         }
-        // ★ [DROP-NGG4ES] 原 NG-GL4ES 专属处理（NGG_DIR_PATH 指向 POJAV_HOME/ngg）
-        //   已随该支移除；VirGL 等其余 gap 渲染器处理原样保留。
+        // NG-GL4ES（"Krypton Wrapper"，ZL2 同款 gl4es）。NGG_DIR_PATH 指向
+        // POJAV_HOME 下的 ngg/（上游默认 /sdcard/NGG 在 iOS 必然 fopen 失败——
+        // config_refresh 对缺失文件静默返回，无 config.json 时行为与默认完全
+        // 一致；指到可写目录只是让高级用户可以放 config.json 调参）。
+        // 其余零环境需求：EGL 由宿主 gl_bridge 提供（egl_bridge 的 gl4es 家族分支
+        // 零 EGL 动作），dylib 由 LWJGL 作为 opengl.libname 加载。
+        if ([renderer isEqualToString:@ RENDERER_NAME_NGGL4ES]) {
+            const char *ngg_home = getenv("POJAV_HOME");
+            if (ngg_home && *ngg_home) {
+                char ngg_path[1024];
+                snprintf(ngg_path, sizeof(ngg_path), "%s/ngg", ngg_home);
+                setenv("NGG_DIR_PATH", ngg_path, 1);
+            }
+            NSLog(@"[JavaLauncher] NG-GL4ES renderer active (NGG_DIR_PATH=%s)",
+                  getenv("NGG_DIR_PATH") ?: "<unset>");
+        }
 
         // Apply MobileGL-specific environment variables
         // MobileGL（MobileGL-Dev，LGPL-3.0）两个变体共用同一个 libMobileGL.dylib 二进制，

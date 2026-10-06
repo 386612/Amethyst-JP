@@ -44,12 +44,16 @@ else
 CMAKE_BUILD_TYPE := Debug
 endif
 
-# ★ [RENDERER-GAP] 新增渲染器（VGPU / GL4ESZL2 / VirGL）构建开关。
-# ★ [DROP-NGG4ES] 原第四支 NG-GL4ES 已整支移除（竞争对手源码，不取）。
-# 默认 0 = 完全不参与构建，默认 IPA 与既有渲染器行为【零变化】。
+# ★ [RENDERER-GAP] 新增渲染器（VGPU / GL4ESZL2 / NG-GL4ES / VirGL）。
+# 默认 0：VGPU 不参与构建、GL4ESZL2 / VirGL 不进 payload 依赖图
+#          （这几个是可选/实验性的，默认 IPA 与既有渲染器行为零变化）。
 # 置 1 后：native 透传 -DAME_RENDERER_GAP_VGPU=ON（构建 libvgpu.dylib），
 #          且 payload 追加 dep_gl4eszl2 dep_virgl 两个目标。
 # 用法：make RENDERER_GAP_EXTRAS=1 payload
+#
+# ⚠ NG-GL4ES（"Krypton Wrapper"）【不】受此开关控制：它是用户可见的一等渲染器
+#   （对应原 f907a3f180 的无条件 payload 依赖），dep_nggl4es 直接挂在 payload 上，
+#   CI 的 `gmake dsym package` 每次都会构建 libnggl4es.dylib。
 RENDERER_GAP_EXTRAS ?= 0
 # ★ [RENDERER-GAP] 由上面的开关派生：默认空 → payload 依赖图与既有完全一致。
 ifeq (1,$(RENDERER_GAP_EXTRAS))
@@ -1085,7 +1089,7 @@ assets:
 	fi
 	echo '[Amethyst v$(VERSION)] assets - end'
 
-payload: native dep_mg dep_shader_shims dep_openal_shim dep_angle_freeze dep_sdl3_guard java jre assets shader-glslang-pack $(RENDERER_GAP_PAYLOAD_DEPS)
+payload: native dep_mg dep_shader_shims dep_openal_shim dep_angle_freeze dep_sdl3_guard dep_nggl4es java jre assets shader-glslang-pack $(RENDERER_GAP_PAYLOAD_DEPS)
 	echo '[Amethyst v$(VERSION)] payload - start'
 	# ★ [26.4-SPVC] 打包前对账 jar 内 natives/ios|ir1 的 libspvc.dylib 与树内
 	#   canonical（设备上真正生效的是 jar 里那份，见 check_spvc_provenance.py）。
@@ -1237,16 +1241,65 @@ clean:
 
 # ============================================================================
 # ★ [RENDERER-GAP] 新增渲染器构建目标（来自 Gsjsjzhznsz/Air-Minecraft-iOS-Launcher）。
-#   默认不参与 `all`/`payload` 依赖图；只有 RENDERER_GAP_EXTRAS=1 时 payload 才
-#   追加这些目标（见文件顶部 RENDERER_GAP_PAYLOAD_DEPS）。亦可单独调用：
-#     make dep_gl4eszl2 dep_virgl
+#   dep_gl4eszl2 / dep_virgl 默认不参与 `all`/`payload` 依赖图；只有
+#   RENDERER_GAP_EXTRAS=1 时 payload 才追加它们（见文件顶部 RENDERER_GAP_PAYLOAD_DEPS）。
+#   dep_nggl4es（"Krypton Wrapper"）例外：无条件挂在 payload 上，每次都构建。
+#   亦可单独调用：
+#     make dep_nggl4es
+#     make RENDERER_GAP_EXTRAS=1 dep_gl4eszl2 dep_virgl
 #   产出的 *.dylib 落在 $(WORKINGDIR)/，由 payload 的 "cp $(WORKINGDIR)/*.dylib"
 #   自动带进 app 的 Frameworks；LauncherPreferences 的存在性过滤随后才会显示选项。
 # ============================================================================
 
-# ★ [DROP-NGG4ES] 此处原为 `dep_nggl4es: dep_mg` 目标（构建 ThirdParty/ZalithLauncher2/
-#   → libnggl4es.dylib，链 dep_mg 的 glslang 静态库 + SPIRV-Cross impl）。已整支移除
-#   （竞争对手源码，不取）；payload 依赖不再含 dep_nggl4es。
+# --- dep_nggl4es：NG-GL4ES（"Krypton Wrapper"，BZLZHH/NG-GL4ES，MIT）-----------
+# ZalithLauncher 2 用的 gl4es 分支：能处理更高级的着色器、几乎全 MC 版本可跑。
+# vendored 源码在 ThirdParty/NG-GL4ES（见其 CMakeLists 的 PROVENANCE 头）。
+# 作为独立 cmake 树构建，链接 dep_mg 出来的 glslang 静态库（pin f5f664d 15.0.0 +
+# lvalue-nullguard + pool-zero/size-guards 双崩溃补丁，继承崩溃家族修复；NG 自带的
+# 15.4 头已从树中移除，防头/库漂移）与预编译的 SPIRV-Cross C API impl dylib。
+# 产出 libnggl4es.dylib，由 payload 的 "cp $(WORKINGDIR)/*.dylib" 随包带走。
+# 依赖 dep_mg：glslang 静态库必须先就位（-j 并行下无序，需目标级先决条件）。
+# ★ 无条件挂在 payload 上（用户可见的一等渲染器，不受 RENDERER_GAP_EXTRAS 控制）。
+dep_nggl4es: dep_mg
+	echo '[Amethyst v$(VERSION)] dep_nggl4es - start'
+	mg_bindir=$(WORKINGDIR)/mobileglues/3rdparty/glslang; \
+	mg_spirv_a=$$mg_bindir/SPIRV/libSPIRV.a; \
+	[ -f "$$mg_spirv_a" ] || mg_spirv_a=$$(find $(WORKINGDIR)/mobileglues -type f -name libSPIRV.a -print -quit 2>/dev/null); \
+	mg_glslang_a=$$mg_bindir/glslang/libglslang.a; \
+	[ -f "$$mg_glslang_a" ] || mg_glslang_a=$$(find $(WORKINGDIR)/mobileglues -type f -name libglslang.a -print -quit 2>/dev/null); \
+	mg_rl_a=$$mg_bindir/glslang/libglslang-default-resource-limits.a; \
+	[ -f "$$mg_rl_a" ] || mg_rl_a=$$(find $(WORKINGDIR)/mobileglues -type f -name libglslang-default-resource-limits.a -print -quit 2>/dev/null); \
+	if [ -z "$$mg_spirv_a" ] || [ ! -f "$$mg_spirv_a" ] || [ -z "$$mg_glslang_a" ] || [ ! -f "$$mg_glslang_a" ] || [ -z "$$mg_rl_a" ] || [ ! -f "$$mg_rl_a" ]; then \
+		echo "ERROR: [nggl4es] glslang static libs unresolved (spirv=$$mg_spirv_a glslang=$$mg_glslang_a rl=$$mg_rl_a) - dep_mg must run first"; \
+		exit 1; \
+	fi; \
+	extra_glslang_libs=""; \
+	for l in libOGLCompiler.a libOSDependent.a; do \
+		if [ -f "$$mg_bindir/glslang/$$l" ]; then \
+			extra_glslang_libs="$$extra_glslang_libs;$$mg_bindir/glslang/$$l"; \
+		fi; \
+	done; \
+	ngg_libs="$$mg_spirv_a;$$mg_glslang_a;$$mg_rl_a$$extra_glslang_libs"; \
+	echo "[nggl4es] linking against glslang statics: $$ngg_libs"; \
+	mkdir -p $(WORKINGDIR)/nggl4es; \
+	cd $(WORKINGDIR)/nggl4es && cmake \
+		-DMACOS="1" \
+		-DCMAKE_CROSSCOMPILING=true \
+		-DCMAKE_SYSTEM_NAME=Darwin \
+		-DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+		-DCMAKE_OSX_SYSROOT="$(SDKPATH)" \
+		-DCMAKE_OSX_ARCHITECTURES=arm64 \
+		-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+		-DCMAKE_C_FLAGS="-arch arm64" \
+		-DCMAKE_BUILD_TYPE=RelWithDebInfo \
+		-DNGGL4ES_GLSLANG_INCLUDE="$(SOURCEDIR)/Natives/external/MobileGlues/MobileGlues-cpp/3rdparty;$(SOURCEDIR)/Natives/external/MobileGlues/MobileGlues-cpp/3rdparty/glslang" \
+		-DNGGL4ES_GLSLANG_LIBS="$$ngg_libs" \
+		-DNGGL4ES_SPVC_IMPL="$(SOURCEDIR)/Natives/resources/Frameworks/libspirv-cross-c-shared.0.impl.dylib" \
+		-DNGGL4ES_FRAMEWORK_DIR="$(SOURCEDIR)/Natives/resources/Frameworks" \
+		$(SOURCEDIR)/ThirdParty/NG-GL4ES/ || exit 1
+	cmake --build $(WORKINGDIR)/nggl4es --config RelWithDebInfo -j$(JOBS) --target nggl4es || exit 1
+	cp $(WORKINGDIR)/nggl4es/libnggl4es.dylib $(WORKINGDIR)/ || exit 1
+	echo '[Amethyst v$(VERSION)] dep_nggl4es - end'
 
 dep_gl4eszl2:
 	@echo '[Amethyst v$(VERSION)] [RENDERER-GAP] dep_gl4eszl2 - start'

@@ -49,13 +49,11 @@
 //   - Fragment shader 编译失败时忽略错误，让 BSL/Mellow 等光影包能运行
 #define RENDERER_NAME_LTW "libltw.dylib"
 
-// ★ [RENDERER-GAP] 以下三个渲染器常量来自队友仓库
-//   Gsjsjzhznsz/Air-Minecraft-iOS-Launcher（同一项目家族的更晚 fork，Task173/211/215）。
+// ★ [RENDERER-GAP] 以下渲染器常量来自队友仓库
+//   Gsjsjzhznsz/Air-Minecraft-iOS-Launcher（同一项目家族的更晚 fork，Task173/206/211/215）。
 //   本树原先没有这些常量/候选，故按"他们有我们没有"整批抄入。全部为【纯追加】：
-//   对应 dylib 未随包（由 Makefile dep_* / CMake 目标从 vendored 源码构建），
-//   LauncherPreferences 的存在性过滤会隐藏它们 —— 现有渲染器行为零变化。
+//   对应 dylib 由 Makefile dep_* / CMake 目标从 vendored 源码构建。
 //   dylib 与 lwjgl 装载名配对见报告 D:\CTF\_RENDERER_GAP_REPORT.md。
-// ★ [DROP-NGG4ES] 原第四支 NG-GL4ES（Task206）已整支移除（竞争对手源码，不取）。
 
 // VGPU（PojavLauncherTeam/VGPU，gl4es 分支 + 强化着色器语法转换；旧版 MC <1.13 生态）。
 // 源码 vendored 于 Natives/external/vgpu（Task173 iOS 移植补丁），由 CMake 目标 vgpu 构建。
@@ -66,8 +64,12 @@
 // 桥接源码 Natives/ctxbridges/virgl_server.m（引导 vtest 服务端）。
 #define RENDERER_NAME_VIRGL "libOSMesaVirgl.dylib"
 
-// ★ [DROP-NGG4ES] 此处原为 RENDERER_NAME_NGGL4ES "libnggl4es.dylib"（ThirdParty/ZalithLauncher2/
-//   Krypton Wrapper），已连同其构建目标/候选表项/引导分支一并移除。
+// NG-GL4ES（"Krypton Wrapper"，BZLZHH/NG-GL4ES）—— ZalithLauncher 2 用的 gl4es 分支：
+// 能处理更高级的着色器、几乎全 MC 版本可跑（glslang + SPIRV-Cross 着色器管线）。
+// 与 holy gl4es 不同，它自带 ARB 着色器转译管线；EGL 仍由宿主 ANGLE 提供
+// （dylib 只做 GL 转译，零 EGL 动作）。源码 vendored 于 ThirdParty/NG-GL4ES，
+// Makefile dep_nggl4es 构建；别名表脚本 scripts/task206_gen_nggl4es_aliases.py。
+#define RENDERER_NAME_NGGL4ES "libnggl4es.dylib"
 
 // GL4ESZL2（PojavLauncherTeam/gl4es_extra_extra）—— ZL2 经典版 "gl4es"：
 // 纯 C 字符串改写式 GLSL→ESSL 转换（shaderconv.c），无 glslang/SPIRV-Cross 依赖。
@@ -144,17 +146,22 @@ static inline bool isDesktopGLRenderer(const char *renderer) {
 
 // ★ [RENDERER-GAP] 新增渲染器的判定谓词（来自队友仓库，纯追加）。
 // gl4es 家族：导出全套桌面 GL API，运行时经 ANGLE/libGLESv2 解析后端。
-// 二者（VGPU / GL4ESZL2）与既有 GL4ES 同链路，共用同一套
+// 三者（VGPU / GL4ESZL2 / NG-GL4ES）与既有 GL4ES 同链路，共用同一套
 // proc_address 解析与 init 时机（见 Natives/ctxbridges/gl4es_family_boot.m）。
 static inline bool isVGPURenderer(const char *renderer) {
     return renderer && !strcmp(renderer, RENDERER_NAME_VGPU);
 }
-// ★ [DROP-NGG4ES] 原 isNGGL4ESRenderer() 谓词已随该支移除。
+// NG-GL4ES（"Krypton Wrapper"）—— gl4es 家族第三支，唯二需要宿主显式
+// initialize_gl4es() 的成员（另一支是 GL4ESZL2）。
+static inline bool isNGGL4ESRenderer(const char *renderer) {
+    return renderer && !strcmp(renderer, RENDERER_NAME_NGGL4ES);
+}
 static inline bool isGL4ESZL2Renderer(const char *renderer) {
     return renderer && !strcmp(renderer, RENDERER_NAME_GL4ESZL2);
 }
 static inline bool isGL4ESFamilyRenderer(const char *renderer) {
-    return isVGPURenderer(renderer) || isGL4ESZL2Renderer(renderer);
+    return isVGPURenderer(renderer) || isGL4ESZL2Renderer(renderer) ||
+           isNGGL4ESRenderer(renderer);
 }
 static inline bool isVirglRenderer(const char *renderer) {
     return renderer && !strcmp(renderer, RENDERER_NAME_VIRGL);

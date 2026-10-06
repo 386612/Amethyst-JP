@@ -256,7 +256,7 @@
 /* ★ [RENDERER-GAP] imported from Gsjsjzhznsz/Air-Minecraft-iOS-Launcher */
 "preference.title.renderer.debug.vgpu" = "VGPU（≤1.12）- gl4es 分支，強化著色器語法，實驗性";
 "preference.title.renderer.debug.virgl" = "VirGL（≤26.2）- Mesa virgl guest + vtest 服務端，實驗性";
-/* ★ [DROP-NGG4ES] 原 "preference.title.renderer.debug.nggl4es" 文案已隨該支移除。 */
+"preference.title.renderer.debug.nggl4es" = "Krypton Wrapper（≤26.2）- ZL2 同款 gl4es，舊版本首選（原 NG-GL4ES）";
 "preference.title.renderer.debug.gl4eszl2" = "GL4ES（ZL2 經典版）- 字串改寫 GLSL→ESSL，實驗性";
 
 "preference.detail.renderer" = "改變要使用的OpenGL渲染引擎";
