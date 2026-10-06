@@ -16,6 +16,12 @@ static NSString *const kPrefStatsLabelX = @"game.stats_label_x";
 static NSString *const kPrefStatsLabelY = @"game.stats_label_y";
 // FPS/内存显示开关的 pref key
 static NSString *const kPrefStatsLabelVisible = @"game.stats_label_visible";
+// ★ [ISSUE-152] 设置悬浮球（小齿轮）显示开关的 pref key。
+//   放在 control.* 段（与设置页「自定义控制键」分区一致；键由 PLPreferences control
+//   段的 defaults 注册，见 PLPreferences.m）。默认 YES = 不改变现状。
+static NSString *const kPrefMenuButtonVisible = @"control.menu_button_visible";
+// ★ [ISSUE-152] 设置页改动后即时生效用的通知名（设置页在本进程内 present，
+//   浮球所在的游戏层需要广播才能立刻刷新）。
 
 // 按钮尺寸
 static const CGFloat kMenuButtonSize = 44.0;
@@ -64,11 +70,18 @@ static const CGFloat kDragThreshold = 10.0;
         // 默认显示 FPS/内存标签（可通过菜单开关）
         _statsLabelVisible = YES;
         _overlayHidden = NO;
+        // ★ [ISSUE-152] 悬浮球默认显示 = 不改变现状；随后按偏好覆盖。
+        _menuButtonVisible = YES;
 
         // 从偏好加载 FPS/内存显示开关状态
         NSNumber *savedVisible = getPrefObject(kPrefStatsLabelVisible);
         if (savedVisible) {
             _statsLabelVisible = [savedVisible boolValue];
+        }
+        // ★ [ISSUE-152] 加载悬浮球显示开关（偏好缺失时保持 YES = 与改动前一致）。
+        NSNumber *savedMenuBtn = getPrefObject(kPrefMenuButtonVisible);
+        if (savedMenuBtn) {
+            _menuButtonVisible = [savedMenuBtn boolValue];
         }
 
         [self setupMenuButton];
@@ -77,6 +90,12 @@ static const CGFloat kDragThreshold = 10.0;
 
         [self restorePositions];
         [self applyStatsLabelVisibility];
+        [self applyMenuButtonVisibility];   // ★ [ISSUE-152]
+        // ★ [ISSUE-152] 设置页在游戏内被 present 时，改开关要即时反映到本浮球。
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(ame152_menuButtonVisibilityChanged:)
+                                                     name:@"AmeGameMenuButtonVisibilityChanged"
+                                                   object:nil];
     }
     return self;
 }
@@ -338,8 +357,39 @@ static const CGFloat kDragThreshold = 10.0;
 
 - (void)setOverlayHidden:(BOOL)overlayHidden {
     _overlayHidden = overlayHidden;
-    self.menuButton.hidden = overlayHidden;
+    // ★ [ISSUE-152] 悬浮球显隐 = overlay 隐藏 ∥ 用户关掉了开关（两条件都要满足才显示）。
+    [self applyMenuButtonVisibility];
     self.statsLabel.hidden = overlayHidden || !_statsLabelVisible;
+}
+
+#pragma mark - ★ [ISSUE-152] 设置悬浮球（小齿轮）显示开关
+
+/// 关掉后：menuButton.hidden = YES。hitTest 已经先判 `!self.menuButton.hidden`
+/// （见上方 hitTest:withEvent:）⇒ 隐藏后该区域触摸直接穿透到游戏画面，行为与
+/// 「没有这个按钮」一致，不会留下一个隐形触摸热点。
+- (void)applyMenuButtonVisibility {
+    self.menuButton.hidden = self.overlayHidden || !_menuButtonVisible;
+}
+
+- (void)setMenuButtonVisible:(BOOL)menuButtonVisible {
+    _menuButtonVisible = menuButtonVisible;
+    [self applyMenuButtonVisibility];
+    // 持久化（键：control.menu_button_visible）—— 与设置页同一真相源。
+    setPrefObject(kPrefMenuButtonVisible, @(menuButtonVisible));
+    NSLog(@"[ISSUE-152] game menu button(小齿轮) visible=%d", menuButtonVisible ? 1 : 0);
+}
+
+/// 设置页改动广播 ⇒ 重新按偏好应用（幂等）。
+- (void)ame152_menuButtonVisibilityChanged:(NSNotification *__unused)note {
+    NSNumber *v = getPrefObject(kPrefMenuButtonVisible);
+    _menuButtonVisible = v ? [v boolValue] : YES;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self applyMenuButtonVisibility];
+    });
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 - (void)setStatsLabelVisible:(BOOL)statsLabelVisible {

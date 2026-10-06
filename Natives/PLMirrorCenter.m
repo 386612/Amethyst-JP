@@ -24,6 +24,15 @@ static NSString *const kPrefLegacyDownloadSource = @"general.download_source";
 
 #pragma mark - 映射表
 
+/// ★ [MODSRC-LIST] 构造 API 候选基址链（官方 + 镜像，去重，按策略排序首选）。
+/// official / mirror 任一侧为空时只保留另一侧；两者相同则只留一条。
+static NSArray<NSString *> *PLMirrorOrderedAPICandidates(NSString *official, NSString *mirror, PLMirrorPolicy policy) {
+    if (official.length == 0) return mirror.length ? @[mirror] : @[];
+    if (mirror.length == 0) return @[official];
+    if ([official isEqualToString:mirror]) return @[official];
+    return (policy == PLMirrorPolicyMirrorFirst) ? @[mirror, official] : @[official, mirror];
+}
+
 /// BMCLAPI 官方前缀 → 镜像前缀映射表（顺序敏感：最长前缀优先）
 ///
 /// 参考 ZalithLauncher 2 BMCLAPI.kt 的 REPLACE_MIRROR_HOLDERS 与 Air 现有
@@ -188,6 +197,22 @@ BOOL PLMirrorIsChinaMainland(void) {
 //   对无 x-api-key 的请求恒 403，而镜像无 key 实测 200（字段实证见 CurseForgeAPI.m）。
 + (NSString *)mcimCurseForgeAPIBaseURL {
     return [NSString stringWithFormat:@"%@/curseforge/v1", PLMirrorMCIMRootURL];
+}
+
+// ★ [MODSRC-LIST] 列表/搜索 API 候选基址链（见 .h 说明）。恒含官方与镜像两个源，
+//   顺序由 AssetSearch 策略决定；调用方逐个尝试即可实现官方↔镜像交叉回退。
++ (NSArray<NSString *> *)modrinthAPIBaseURLCandidates {
+    NSString *official = @"https://api.modrinth.com/v2";
+    NSString *mirror = [NSString stringWithFormat:@"%@/modrinth/v2", PLMirrorMCIMRootURL];
+    return PLMirrorOrderedAPICandidates(official, mirror,
+                                        [self policyForType:PLMirrorResourceTypeAssetSearch]);
+}
+
++ (NSArray<NSString *> *)curseForgeAPIBaseURLCandidates {
+    NSString *official = @"https://api.curseforge.com/v1";
+    NSString *mirror = [NSString stringWithFormat:@"%@/curseforge/v1", PLMirrorMCIMRootURL];
+    return PLMirrorOrderedAPICandidates(official, mirror,
+                                        [self policyForType:PLMirrorResourceTypeAssetSearch]);
 }
 
 + (PLMirrorPolicy)policyForType:(PLMirrorResourceType)type {

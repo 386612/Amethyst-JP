@@ -78,6 +78,16 @@ FOUNDATION_EXPORT NSString *const PLMirrorMCIMRootURL;
 //   （无 x-api-key 恒 403）；本方法恒定返回镜像，供 CurseForgeAPI 在未配置 key 时兜底。
 + (NSString *)mcimCurseForgeAPIBaseURL;
 
+// ★ [MODSRC-LIST] 列表/搜索 API 的候选基址链（官方 ↔ MCIM 镜像交叉回退）。
+//   与上面的单值 baseURL 不同：这里恒返回「两个源」的有序数组，按 AssetSearch 策略
+//   决定首选（镜像优先时镜像在前），另一源作回退。列表/搜索请求应逐个尝试，
+//   任一源失败自动切到另一源 —— 修「单一 baseURL 不可达时整张列表直接空掉」。
+//   实测（2026-10-04）：官方 api.modrinth.com/v2/search 与镜像
+//   mod.mcimirror.top/modrinth/v2/search 均 200；官方 api.curseforge.com 无 key 恒 403，
+//   镜像 mod.mcimirror.top/curseforge/v1/mods/search 无 key 200。
++ (NSArray<NSString *> *)modrinthAPIBaseURLCandidates;
++ (NSArray<NSString *> *)curseForgeAPIBaseURLCandidates;
+
 /// 读取指定资源类型当前生效的镜像策略（含旧键回退逻辑）
 + (PLMirrorPolicy)policyForType:(PLMirrorResourceType)type;
 

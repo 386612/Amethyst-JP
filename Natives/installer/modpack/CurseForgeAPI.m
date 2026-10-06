@@ -54,6 +54,21 @@ static NSString *CFACompiledAPIKey(void) {
               jsonError:(NSError *)jsonError;
 // 将 NSData 转为可打印字符串（处理非 UTF-8 内容，最多 maxLen 字节）
 - (NSString *)printableStringFromData:(NSData *)data maxLen:(NSUInteger)maxLen;
+// ★ [MODSRC-FIX] 构造 ModVersion 前补出 null 的 downloadUrl（见实现处注释）
+- (NSDictionary *)cfFileByResolvingNullDownloadURL:(NSDictionary *)file;
+// ★ [MODSRC-LIST] 候选链列表请求（官方 ↔ MCIM 镜像交叉回退，适配 CF 的 headers）
+// ★ [MODSRC-403] 新增 state：omitKey=后续候选是否剥离 x-api-key；authRejected=链中曾收到 401/403；
+//   didKeylessPass=是否已做过「整轮去 key 重试」。401/403 视为该候选失败并继续下一个候选。
+- (void)cfaFetchListPathQuery:(NSString *)pathQuery
+                   candidates:(NSArray<NSString *> *)candidates
+                     arrayKey:(NSString *)arrayKey
+                    mapObject:(NSDictionary * _Nullable (^)(NSDictionary *item))mapObject
+                        index:(NSUInteger)index
+                        state:(NSMutableDictionary *)state
+                     failures:(NSMutableArray<NSString *> *)failures
+                   completion:(void (^)(NSArray * _Nullable results, NSError * _Nullable error))completion;
+// ★ [MODSRC-LIST] 无 key 时把镜像候选提到最前（官方无 key 恒 403，避免无谓的首跳 403）
+- (NSArray<NSString *> *)cfaKeylessOrderedCandidates:(NSArray<NSString *> *)candidates;
 @end
 
 /// 经 PLMirrorCenter 按资源下载（AssetDownload）策略应用镜像
@@ -64,6 +79,9 @@ static NSString *CFAMirrorResolvedURL(NSString *urlString) {
                                                     resourceType:PLMirrorResourceTypeAssetDownload];
     return resolved.absoluteString ?: urlString;
 }
+
+/// ★ [MODSRC-LIST] 全部候选源均失败时的错误码。
+static const NSInteger kCFAListAllSourcesFailedCode = 9002;
 
 @implementation CurseForgeAPI
 
@@ -384,6 +402,36 @@ static NSString *CFAMirrorResolvedURL(NSString *urlString) {
     return @(kCurseForgeClassIDMods);
 }
 
+#pragma mark - ★ [MODSRC-GAMEVER] gameVersion 归一化
+
+// ★ [MODSRC-GAMEVER] 把带加载器后缀的版本号归一成纯 MC 版本（1.21.1-Fabric → 1.21.1）。
+//   背景：CurseForge 的 gameVersion 参数只认精确的纯版本号；传「1.21.1-Fabric / 1.21.1-Forge /
+//   1.21.1-NeoForge / 1.21.1-Quilt」等带后缀的值，CF 会当作「未知版本」→ HTTP 200 + data:[]，
+//   界面就表现为「暂无」。profile 的 lastVersionId 若是自定义命名（如 1.21.1-Fabric），
+//   ModpackExportService.parseVersionId 会原样返回该串，导致光影/数据包等栏一次都拉不到内容
+//   （实测：纯 1.21.1 有 510 条，带 -Fabric 为 0 条）。
+//   处理：trim 空白；按 '-' 切分，若某后缀片段是已知加载器名，则只保留其之前的 MC 版本
+//   （兼容 1.21.1-pre1-Fabric 这类带预发布后缀的版本，不会误伤 1.20.5-rc1 这种非加载器后缀）。
+//   ★ 全工程唯一实现，所有走 CurseForge 的搜索共用（光影/数据包两栏同此）。
+- (NSString *)normalizeMinecraftVersionForQuery:(NSString *)version {
+    if (![version isKindOfClass:NSString.class]) return @"";
+    NSString *trimmed = [version stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (trimmed.length == 0) return @"";
+    static NSSet<NSString *> *loaderTokens = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        loaderTokens = [NSSet setWithArray:@[@"fabric", @"forge", @"neoforge", @"neo-forge",
+                                             @"quilt", @"liteloader", @"optifine", @"rift", @"risugami"]];
+    });
+    NSArray<NSString *> *parts = [trimmed componentsSeparatedByString:@"-"];
+    for (NSUInteger i = 1; i < parts.count; i++) {
+        if ([loaderTokens containsObject:[parts[i] lowercaseString]]) {
+            return [[parts subarrayWithRange:NSMakeRange(0, i)] componentsJoinedByString:@"-"];
+        }
+    }
+    return trimmed;
+}
+
 - (NSArray<NSString *> *)preferredFileExtensionsForProjectType:(NSString *)projectType {
     if ([projectType isEqualToString:@"shader"] ||
         [projectType isEqualToString:@"resourcepack"] ||
@@ -477,6 +525,32 @@ static NSString *CFAMirrorResolvedURL(NSString *urlString) {
     return CFAMirrorResolvedURL(cdnURL);
 }
 
+// ★ [MODSRC-FIX] CurseForge 对部分文件（作者关闭第三方 API 分发）返回 downloadUrl=null，
+//   且 mods/{id}/files/{fid}/download-url 端点亦返回空串（实测抽样 15/39 文件如此，
+//   且这些文件按 fileId 拆位构造的 Edge CDN 直链仍可 302 下载）。
+//   旧实现把 NSNull 原样塞进 ModVersion.primaryFile["url"]，版本页点下载即弹
+//   "未找到有效的下载链接"（i18n_str_265），重试恒失败（同一版本对象每次都是 NSNull）。
+//   本方法在构造 ModVersion 前把 null/空 downloadUrl 用 Edge CDN 规则补成可下载 URL，
+//   并按 AssetDownload 策略镜像（镜像失败时仍保留官方直链候选）。
+- (NSDictionary *)cfFileByResolvingNullDownloadURL:(NSDictionary *)file {
+    id du = file[@"downloadUrl"];
+    if ([du isKindOfClass:NSString.class] && [(NSString *)du length] > 0) {
+        return file;
+    }
+    NSString *fileId = [file[@"id"] description];
+    NSString *fileName = [file[@"fileName"] isKindOfClass:NSString.class] ? file[@"fileName"] : @"";
+    NSInteger numericId = fileId.integerValue;
+    if (numericId <= 0 || fileName.length == 0) {
+        return file;
+    }
+    NSString *encodedName = [fileName stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLPathAllowedCharacterSet] ?: fileName;
+    NSString *cdnURL = [NSString stringWithFormat:@"https://edge.forgecdn.net/files/%ld/%03ld/%@",
+                        (long)(numericId / 1000), (long)(numericId % 1000), encodedName];
+    NSMutableDictionary *patched = [file mutableCopy];
+    patched[@"downloadUrl"] = CFAMirrorResolvedURL(cdnURL);
+    return patched;
+}
+
 - (NSString *)gameVersionSummaryForFile:(NSDictionary *)file {
     NSArray<NSString *> *gameVersions = [file[@"gameVersions"] isKindOfClass:NSArray.class] ? file[@"gameVersions"] : @[];
     NSMutableArray<NSString *> *minecraftVersions = [NSMutableArray new];
@@ -520,8 +594,10 @@ static NSString *CFAMirrorResolvedURL(NSString *urlString) {
     if (query.length > 0) {
         params[@"searchFilter"] = query;
     }
-    if (searchFilters[@"mcVersion"].length > 0) {
-        params[@"gameVersion"] = searchFilters[@"mcVersion"];
+    // ★ [MODSRC-GAMEVER] 同步搜索同样归一化版本号（与异步 searchModWithFilters 同一实现）
+    NSString *syncMcVersion = [self normalizeMinecraftVersionForQuery:searchFilters[@"mcVersion"]];
+    if (syncMcVersion.length > 0) {
+        params[@"gameVersion"] = syncMcVersion;
     }
     if ([projectType isEqualToString:@"minecraft_java_server"]) {
         params[@"categoryId"] = @(kCurseForgeCategoryIDServerUtility);
@@ -634,93 +710,182 @@ static NSString *CFAMirrorResolvedURL(NSString *urlString) {
     int limit = [limitNum intValue];
     NSNumber *offsetNum = filters[@"offset"] ?: @0;
     int offset = [offsetNum intValue];
-    NSString *mcVersion = filters[@"mcVersion"] ?: filters[@"version"];
-    
-    // 构造 URL
-    NSMutableString *urlString = [NSMutableString stringWithFormat:@"%@/mods/search?gameId=%ld&classId=%@&pageSize=%d&index=%d",
-                                  self.baseURL,
+    // ★ [MODSRC-GAMEVER] CurseForge 的 gameVersion 只认纯 MC 版本号：带 -Fabric/-Forge/-NeoForge/
+    //   -Quilt 等加载器后缀会命中「未知版本」→ HTTP 200 + 空数组（界面显示「暂无」）。此处统一
+    //   归一化后再拼串，覆盖光影/数据包/模组/资源包/整合包/世界所有走 CF 的搜索。
+    NSString *rawVersion = filters[@"mcVersion"] ?: filters[@"version"];
+    NSString *mcVersion = [self normalizeMinecraftVersionForQuery:rawVersion];
+
+    // ★ [MODSRC-LIST] 路径+查询串（不含 baseURL），交由候选链逐个拼接官方/镜像基址。
+    NSMutableString *pathQuery = [NSMutableString stringWithFormat:@"mods/search?gameId=%ld&classId=%@&pageSize=%d&index=%d",
                                   (long)kCurseForgeGameIDMinecraft,
                                   [self classIDForProjectType:projectType],
                                   limit, offset];
     if (query.length > 0) {
         NSString *encodedQuery = [query stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
-        [urlString appendFormat:@"&searchFilter=%@", encodedQuery];
+        [pathQuery appendFormat:@"&searchFilter=%@", encodedQuery];
     }
     if (mcVersion.length > 0) {
-        [urlString appendFormat:@"&gameVersion=%@", mcVersion];
+        [pathQuery appendFormat:@"&gameVersion=%@", mcVersion];
     }
-    
-    NSURL *url = [NSURL URLWithString:urlString];
-    if (!url) {
-        if (completion) completion(nil, [NSError errorWithDomain:@"CurseForgeAPI" code:1 userInfo:@{NSLocalizedDescriptionKey: @"Invalid URL"}]);
+
+    // ★ [MODSRC-LIST] 候选链：官方 ↔ MCIM 镜像交叉回退；无 key 时把镜像提到最前
+    //   （官方 api.curseforge.com 无 x-api-key 恒 403），有 key 时按策略顺序。
+    NSArray<NSString *> *candidates = [PLMirrorCenter curseForgeAPIBaseURLCandidates];
+    if ([self apiKey].length == 0) {
+        candidates = [self cfaKeylessOrderedCandidates:candidates];
+    }
+    NSMutableArray<NSString *> *failures = [NSMutableArray array];
+    // ★ [MODSRC-403] 候选链共享状态：omitKey/authRejected/didKeylessPass。
+    NSMutableDictionary *srcState = [@{ @"omitKey": @(NO), @"authRejected": @(NO), @"didKeylessPass": @(NO) } mutableCopy];
+    __weak typeof(self) weakSelf = self;
+    [self cfaFetchListPathQuery:pathQuery
+                      candidates:candidates
+                        arrayKey:@"data"
+                       mapObject:^NSDictionary * _Nullable(NSDictionary *project) {
+        return [self projectFromCurseForgeProject:project projectType:projectType];
+    }
+                           index:0
+                           state:srcState
+                        failures:failures
+                      completion:^(NSArray * _Nullable results, NSError * _Nullable error) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        if (error) {
+            // ★ [MODSRC-LIST] 无 key 且所有候选（含镜像）都失败 ⇒ 明确提示去设置页填 Key，
+            //   不再把「请求失败」笼统显示成「暂无」，也不卡死其它源。
+            if ([strongSelf apiKey].length == 0) {
+                if (completion) completion(nil, [strongSelf missingAPIKeyError]);
+            } else {
+                if (completion) completion(nil, error);
+            }
+            return;
+        }
+        // 分页状态：结果数不足一页即视为末页（候选链已归一化输出结果数组）
+        strongSelf.reachedLastPage = (results.count == 0) || (results.count < (NSUInteger)limit);
+        NSLog(@"[CurseForgeAPI] searchModWithFilters success: returned %lu items", (unsigned long)results.count);
+        if (completion) completion(results, nil);
+    }];
+}
+
+#pragma mark - ★ [MODSRC-LIST] 候选链列表请求实现
+
+- (NSArray<NSString *> *)cfaKeylessOrderedCandidates:(NSArray<NSString *> *)candidates {
+    NSMutableArray<NSString *> *mirrors = [NSMutableArray array];
+    NSMutableArray<NSString *> *others = [NSMutableArray array];
+    for (NSString *base in candidates) {
+        if ([base containsString:@"mcimirror"]) [mirrors addObject:base];
+        else [others addObject:base];
+    }
+    [mirrors addObjectsFromArray:others];
+    return mirrors;
+}
+
+- (void)cfaFetchListPathQuery:(NSString *)pathQuery
+                   candidates:(NSArray<NSString *> *)candidates
+                     arrayKey:(NSString *)arrayKey
+                    mapObject:(NSDictionary * _Nullable (^)(NSDictionary *item))mapObject
+                        index:(NSUInteger)index
+                        state:(NSMutableDictionary *)state
+                     failures:(NSMutableArray<NSString *> *)failures
+                   completion:(void (^)(NSArray * _Nullable results, NSError * _Nullable error))completion {
+    // ★ [MODSRC-403] 全部候选失败：若曾用 key 且被拒（401/403），先整轮「去 key 重试」一次。
+    //   实证：官方带无效 key 恒 403；MCIM 镜像免 key 实测 200，但带 key 会被镜像网关拒（实测 500）。
+    //   去 key 重试是「有 key 但被拒」场景能真正退到镜像的关键；仍然全失败才报错。
+    if (index >= candidates.count) {
+        BOOL authRejected = [state[@"authRejected"] boolValue];
+        BOOL didKeylessPass = [state[@"didKeylessPass"] boolValue];
+        BOOL haveKey = [self apiKey].length > 0;
+        if (haveKey && authRejected && !didKeylessPass) {
+            NSLog(@"[CurseForgeAPI] ★ [MODSRC-403] all candidates failed with key (authRejected=YES); retrying entire chain keyless: %@", failures);
+            state[@"omitKey"] = @(YES);
+            state[@"didKeylessPass"] = @(YES);
+            [self cfaFetchListPathQuery:pathQuery candidates:candidates arrayKey:arrayKey mapObject:mapObject index:0 state:state failures:failures completion:completion];
+            return;
+        }
+        NSLog(@"[CurseForgeAPI] MODSRC-LIST: all sources failed: %@", failures);
+        NSString *detail;
+        if (authRejected) {
+            // ★ [MODSRC-403] 链中曾有候选以 401/403 拒绝该 key ⇒ 面向用户提示去设置检查 Key，
+            //   绝不把原始「HTTP=403」抛给界面（无 key 场景由调用方改用 missingAPIKeyError）。
+            detail = localize(@"i18n_str_9103", nil);
+        } else {
+            detail = failures.count ? [NSString stringWithFormat:@"CurseForge 列表请求失败: %@", [failures componentsJoinedByString:@" | "]] : @"CurseForge 列表请求失败";
+        }
+        NSMutableDictionary *userInfo = [NSMutableDictionary dictionary];
+        userInfo[NSLocalizedDescriptionKey] = detail;
+        if (failures.count) userInfo[@"CurseForgeListFailures"] = [failures copy];
+        if (completion) completion(nil, [NSError errorWithDomain:@"CurseForgeAPI"
+                                                            code:(authRejected ? 401 : kCFAListAllSourcesFailedCode)
+                                                        userInfo:userInfo]);
         return;
     }
-    
+    NSString *base = candidates[index];
+    NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"%@/%@", base, pathQuery]];
+    if (!url) {
+        [failures addObject:[NSString stringWithFormat:@"%@ (URL 无效)", base]];
+        [self cfaFetchListPathQuery:pathQuery candidates:candidates arrayKey:arrayKey mapObject:mapObject index:index + 1 state:state failures:failures completion:completion];
+        return;
+    }
+
+    // ★ [MODSRC-403] omitKey=YES 时剥离 x-api-key（镜像免 key；无效 key 会被镜像网关拒）。
+    //   无 key 时本就等同 [self headers] 的 Accept-only，行为不变。
+    BOOL omitKey = [state[@"omitKey"] boolValue] || [self apiKey].length == 0;
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
-    NSDictionary *headers = [self headers];
-    // ★ [MODPACK-FIX] keyless 不再拦截（旧：headers==nil -> 立即 missingAPIKeyError，
-    //   请求根本不发出，使 Task162 的镜像回退成死代码）。headers 无 key 时也返回
-    //   Accept-only 字典，照常发往 MCIM 镜像。for-in 对 nil 本就安全，此处不加门。
+    NSDictionary *headers = omitKey ? @{ @"Accept": @"application/json" } : [self headers];
     for (NSString *key in headers) {
         [request setValue:headers[key] forHTTPHeaderField:key];
     }
-    request.timeoutInterval = 30.0;
-    NSLog(@"[CurseForgeAPI] searchModWithFilters starting request: %@", urlString);
+    request.timeoutInterval = 20.0;
+    NSLog(@"[CurseForgeAPI] ★ [MODSRC-403] try source[%lu/%lu] host=%@ omitKey=%d url=%@",
+          (unsigned long)index + 1, (unsigned long)candidates.count, url.host, omitKey, url.absoluteString);
 
     NSURLSessionDataTask *task = [self.session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSHTTPURLResponse *httpResponse = [response isKindOfClass:[NSHTTPURLResponse class]] ? (NSHTTPURLResponse *)response : nil;
+        NSInteger status = httpResponse.statusCode;
+        NSArray *mapped = nil;
+        NSString *reason = nil;
+
         if (error) {
-            // 网络错误：透传原 NSError 并附带 HTTP 诊断信息（如可获取）
-            NSLog(@"[CurseForgeAPI] searchModWithFilters network error: %@", error.localizedDescription);
-            [self debugLogRequest:request response:response data:data jsonError:nil];
-            NSError *diagnosticError = [self errorWithResponse:response data:data originalError:error snippet:nil];
-            if (completion) completion(nil, diagnosticError);
+            reason = [NSString stringWithFormat:@"%@ HTTP=%ld 网络错误(%@)", base, (long)status, error.localizedDescription ?: @"?"];
+        } else if (status == 401 || status == 403) {
+            // ★ [MODSRC-403] 该候选拒绝本 key：视为「此候选失败」，继续下一个候选（镜像），
+            //   并把后续候选切到 keyless（镜像无需 key，带无效 key 反被镜像网关拒，实测 500）。
+            reason = [NSString stringWithFormat:@"%@ HTTP=%ld", base, (long)status];
+            state[@"authRejected"] = @(YES);
+            state[@"omitKey"] = @(YES);
+        } else if (status != 0 && (status < 200 || status >= 300)) {
+            // ★ [MODSRC-LIST] 旧实现不检查 HTTP 状态：403/5xx 的错误体若无 data 数组
+            //   会被静默转成空数组 ⇒ 用户只看到「暂无」。现在按失败处理并切下一个源。
+            reason = [NSString stringWithFormat:@"%@ HTTP=%ld", base, (long)status];
+        } else {
+            NSDictionary *json = data.length ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+            NSArray *arr = [json isKindOfClass:NSDictionary.class] ? json[arrayKey] : nil;
+            if ([arr isKindOfClass:NSArray.class]) {
+                NSMutableArray *out = [NSMutableArray arrayWithCapacity:arr.count];
+                for (NSDictionary *item in arr) {
+                    if (![item isKindOfClass:NSDictionary.class]) continue;
+                    NSDictionary *m = mapObject ? mapObject(item) : nil;
+                    if (m) [out addObject:m];
+                }
+                mapped = out;
+            } else {
+                reason = [NSString stringWithFormat:@"%@ HTTP=%ld 响应缺少 %@ 数组", base, (long)status, arrayKey];
+                [self debugLogRequest:request response:response data:data jsonError:nil];
+            }
+        }
+
+        // ★ [MODSRC-403] 每个候选都记 host + HTTP 码，方便真机定位。
+        NSLog(@"[CurseForgeAPI] ★ [MODSRC-403] source host=%@ http=%ld omitKey=%d -> %@",
+              url.host, (long)status, omitKey, mapped ? @"OK" : @"fail");
+
+        if (mapped) {
+            NSLog(@"[CurseForgeAPI] MODSRC-LIST: source %@ OK (%lu items)", base, (unsigned long)mapped.count);
+            if (completion) completion(mapped, nil);
             return;
         }
-        if (!data || data.length == 0) {
-            // 响应数据为空：返回包含 HTTP 状态码的 NSError
-            NSLog(@"[CurseForgeAPI] searchModWithFilters empty response");
-            [self debugLogRequest:request response:response data:data jsonError:nil];
-            NSError *emptyError = [NSError errorWithDomain:@"CurseForgeAPI"
-                                                      code:2
-                                                  userInfo:@{NSLocalizedDescriptionKey: @"CurseForge API returned empty response"}];
-            NSError *diagnosticError = [self errorWithResponse:response data:data originalError:emptyError snippet:nil];
-            if (completion) completion(nil, diagnosticError);
-            return;
-        }
-
-        NSError *jsonError = nil;
-        NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
-        if (jsonError || ![json isKindOfClass:NSDictionary.class]) {
-            // JSON 解析失败：输出完整调试日志，便于诊断 401 HTML 错误页等场景
-            NSLog(@"[CurseForgeAPI] searchModWithFilters JSON parse failed");
-            [self debugLogRequest:request response:response data:data jsonError:jsonError];
-            NSError *baseError = jsonError ?: [NSError errorWithDomain:@"CurseForgeAPI"
-                                                                   code:3
-                                                               userInfo:@{NSLocalizedDescriptionKey: @"CurseForge API returned non-JSON response"}];
-            NSError *diagnosticError = [self errorWithResponse:response data:data originalError:baseError snippet:nil];
-            if (completion) completion(nil, diagnosticError);
-            return;
-        }
-        
-        NSArray *projects = json[@"data"];
-        if (![projects isKindOfClass:NSArray.class]) { if (completion) completion(@[], nil); return; }
-
-        NSMutableArray *results = [NSMutableArray array];
-        for (NSDictionary *project in projects) {
-            if (![project isKindOfClass:NSDictionary.class]) continue;
-            [results addObject:[self projectFromCurseForgeProject:project projectType:projectType]];
-        }
-
-        // 更新分页状态
-        NSDictionary *pagination = json[@"pagination"] ?: @{};
-        NSUInteger total = [pagination[@"totalCount"] unsignedIntegerValue];
-        NSUInteger idx = [pagination[@"index"] unsignedIntegerValue];
-        NSUInteger count = [pagination[@"resultCount"] unsignedIntegerValue];
-        self.reachedLastPage = total == 0 || idx + count >= total;
-
-        NSLog(@"[CurseForgeAPI] searchModWithFilters success: returned %lu items (total=%lu)",
-              (unsigned long)results.count, (unsigned long)total);
-        if (completion) completion(results, nil);
+        [failures addObject:reason ?: [NSString stringWithFormat:@"%@ 未知错误", base]];
+        [self cfaFetchListPathQuery:pathQuery candidates:candidates arrayKey:arrayKey mapObject:mapObject index:index + 1 state:state failures:failures completion:completion];
     }];
     [task resume];
 }
@@ -921,7 +1086,9 @@ static NSString *CFAMirrorResolvedURL(NSString *urlString) {
         NSMutableArray *versions = [NSMutableArray array];
         for (NSDictionary *file in files) {
             if (![file isKindOfClass:NSDictionary.class]) continue;
-            ModVersion *mv = [[ModVersion alloc] initWithDictionary:file];
+            // ★ [MODSRC-FIX] 先补出 null downloadUrl（否则 ModVersion.primaryFile["url"] 为
+            //   NSNull，下载页点选版本即 "未找到有效的下载链接" i18n_str_265，重试恒失败）。
+            ModVersion *mv = [[ModVersion alloc] initWithDictionary:[self cfFileByResolvingNullDownloadURL:file]];
             if (mv) [versions addObject:mv];
         }
         item[@"versions"] = versions;

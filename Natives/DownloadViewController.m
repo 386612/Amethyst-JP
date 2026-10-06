@@ -2044,7 +2044,8 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
                 [strongSelf.modTableView reloadData];
                 strongSelf.emptyLabel.hidden = (strongSelf.modList.count > 0);
                 if (strongSelf.modList.count == 0) {
-                    strongSelf.emptyLabel.text = localize(@"i18n_str_180", nil);
+                    // ★ [MODSRC-GAMEVER] 有激活筛选时显示「筛选无结果」，否则「暂无」
+                    strongSelf.emptyLabel.text = localize([strongSelf hasActiveListFilter] ? @"resman.download.filter_empty" : @"i18n_str_180", nil);
                     strongSelf.emptyLabel.hidden = NO;
                 }
             } else if (error) {
@@ -2124,7 +2125,8 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
                 [strongSelf.shaderTableView reloadData];
                 strongSelf.emptyLabel.hidden = (strongSelf.shaderList.count > 0);
                 if (strongSelf.shaderList.count == 0) {
-                    strongSelf.emptyLabel.text = localize(@"i18n_str_181", nil);
+                    // ★ [MODSRC-GAMEVER] 有激活筛选时显示「筛选无结果」，否则「暂无」
+                    strongSelf.emptyLabel.text = localize([strongSelf hasActiveListFilter] ? @"resman.download.filter_empty" : @"i18n_str_181", nil);
                     strongSelf.emptyLabel.hidden = NO;
                 }
             } else if (error) {
@@ -2194,7 +2196,8 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
                 [strongSelf.modpackTableView reloadData];
                 strongSelf.emptyLabel.hidden = (strongSelf.modpackList.count > 0);
                 if (strongSelf.modpackList.count == 0) {
-                    strongSelf.emptyLabel.text = localize(@"i18n_str_182", nil);
+                    // ★ [MODSRC-GAMEVER] 有激活筛选时显示「筛选无结果」，否则「暂无」
+                    strongSelf.emptyLabel.text = localize([strongSelf hasActiveListFilter] ? @"resman.download.filter_empty" : @"i18n_str_182", nil);
                     strongSelf.emptyLabel.hidden = NO;
                 }
             } else if (error) {
@@ -2264,7 +2267,8 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
                 [strongSelf.resourcepackTableView reloadData];
                 strongSelf.emptyLabel.hidden = (strongSelf.resourcepackList.count > 0);
                 if (strongSelf.resourcepackList.count == 0) {
-                    strongSelf.emptyLabel.text = localize(@"i18n_str_183", nil);
+                    // ★ [MODSRC-GAMEVER] 有激活筛选时显示「筛选无结果」，否则「暂无」
+                    strongSelf.emptyLabel.text = localize([strongSelf hasActiveListFilter] ? @"resman.download.filter_empty" : @"i18n_str_183", nil);
                     strongSelf.emptyLabel.hidden = NO;
                 }
             } else if (error) {
@@ -2334,7 +2338,8 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
                 [strongSelf.datapackTableView reloadData];
                 strongSelf.emptyLabel.hidden = (strongSelf.datapackList.count > 0);
                 if (strongSelf.datapackList.count == 0) {
-                    strongSelf.emptyLabel.text = localize(@"i18n_str_184", nil);
+                    // ★ [MODSRC-GAMEVER] 有激活筛选时显示「筛选无结果」，否则「暂无」
+                    strongSelf.emptyLabel.text = localize([strongSelf hasActiveListFilter] ? @"resman.download.filter_empty" : @"i18n_str_184", nil);
                     strongSelf.emptyLabel.hidden = NO;
                 }
             } else if (error) {
@@ -2417,7 +2422,8 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
                 [strongSelf.worldTableView reloadData];
                 strongSelf.emptyLabel.hidden = (strongSelf.worldList.count > 0);
                 if (strongSelf.worldList.count == 0) {
-                    strongSelf.emptyLabel.text = localize(@"i18n_str_186", nil);
+                    // ★ [MODSRC-GAMEVER] 有激活筛选时显示「筛选无结果」，否则「暂无」
+                    strongSelf.emptyLabel.text = localize([strongSelf hasActiveListFilter] ? @"resman.download.filter_empty" : @"i18n_str_186", nil);
                     strongSelf.emptyLabel.hidden = NO;
                 }
             } else if (error) {
@@ -2566,7 +2572,7 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
         [alert addAction:[UIAlertAction actionWithTitle:version
                                                   style:UIAlertActionStyleDefault
                                                 handler:^(UIAlertAction * _Nonnull action) {
-            if ([version isEqualToString:@"全部版本"]) {
+            if ([version isEqualToString:localize(@"i18n_str_2032", nil)]) {  // ★ [AUDIT-FIX]
                 self.currentGameVersion = nil;
             } else {
                 self.currentGameVersion = version;
@@ -2724,6 +2730,17 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
     self.searchBar.text = nil;
     [self updateSidebarFilterValues];
     [self reloadCurrentList];
+}
+
+// ★ [MODSRC-GAMEVER] 当前是否处于「有激活筛选」状态：版本 / 加载器 / 搜索词任一非空。
+//   用于区分空列表文案：有筛选 → 「筛选无结果」，无筛选 → 「暂无」。这两栏的 emptyLabel
+//   始终显示（不隐藏），只切换文案。
+- (BOOL)hasActiveListFilter {
+    if (self.currentGameVersion.length > 0) return YES;
+    if (self.currentModLoader.length > 0) return YES;
+    NSString *query = self.searchBar.text ?: @"";
+    if (query.length > 0) return YES;
+    return NO;
 }
 
 - (void)reloadCurrentList {
@@ -3786,8 +3803,29 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
 }
 
 - (void)invokeAfterJITEnabled:(void(^)(void))handler {
-    BOOL hasTrollStoreJIT = getEntitlementValue(@"jb.pmap_cs.custom_trust");
-    
+    // ★ [JIT-FLOW] 原为 getEntitlementValue(@"jb.pmap_cs.custom_trust")：侧载模板
+    //   预写了该 entitlement，会导致每个侧载包都走 apple-magnifier:// 静默失败分支。
+    BOOL hasTrollStoreJIT = isTrollStoreInstall();
+    NSLog(@"[JIT-FLOW] [DownloadVC] invokeAfterJITEnabled: isJITEnabled=%d trollstore=%d keepAttached=%d ppid=%d jb=%@",
+          isJITEnabled(false), hasTrollStoreJIT, JIT26IsLikelyDebuggerKeepAttached(), getppid(), AMEJailbreakEnvSummary());
+
+    // ★ [JB-ADAPT] 越狱环境：JIT 原生可用（无需调试器 attach，也不需要外部 JIT 工具）。
+    //   先用**真能力自检**（本进程能否直接把匿名页置 RX；AMEJailbreakNativeJITReady 内部
+    //   即 DeviceCanCreateRXMap）确认，就绪 ⇒ 直接启动，**不再等待/调起外部 JIT 工具**。
+    //   不就绪 ⇒ 不加拦截，落回下方既有链路（TrollStore → 外部使能器 → stikjit://），
+    //   不把"越狱但本 App 未开 JIT"的用户挡死。
+    //   ⚠ 绝不因"检测到越狱"就放行：isJITEnabled 已不看 isJailbroken（[JB-ADAPT] 收紧）。
+    if (!isJITEnabled(false) && AMEJailbreakNativeJITPathApplies()) {
+        NSLog(@"[JB-ADAPT] [DownloadVC] jailbreak env=%@ -- attempting native JIT (skipping external enabler)",
+              AMEJailbreakEnvSummary());
+        if (AMEJailbreakNativeJITReady()) {
+            NSLog(@"[JB-ADAPT] [DownloadVC] native JIT verified -- launching directly without any external JIT tool");
+            handler();
+            return;
+        }
+        NSLog(@"[JB-ADAPT] [DownloadVC] native JIT not ready -- falling back to configured enabler path");
+    }
+
     if (isJITEnabled(false)) {
         [ALTServerManager.sharedManager stopDiscovering];
         // TXM 机型（议题 #133）：CS_DEBUGGED 置位只证明"曾经启用过"，调试器脱离后
@@ -3800,16 +3838,64 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
             [self jit_reattachJIT26ThenLaunch:handler];
             return;
         }
+        // ★ [JIT-FLOW] #115/#129/#151：快路径（越狱 / entitlement / 粘滞 CS_DEBUGGED）是
+        //   「能力声明」而非实测，直启会在 HotSpot 首个 brk #0x69 处闪退/卡死。
+        //   Universal 设备上先做一次真能力自检；不过就改走重挂。
+        if (DeviceNeedsDebugJITMapping() &&
+            !getPrefBool(@"debug.jit26_script_disable") &&
+            !AMEJITVerifyWritableJITRegion()) {
+            NSLog(@"[JIT-FLOW] [DownloadVC] isJITEnabled=1 but self-check failed (entitlement/jailbreak/sticky CS_DEBUGGED) -- re-attaching instead of launching");
+            [self jit_reattachJIT26ThenLaunch:handler];
+            return;
+        }
+        // ★ [JIT-FLOW] 三态可见化：isJITEnabled=1 但探针全灭 ⇒ CS_DEBUGGED 粘滞。
+        if (!JIT26IsLikelyDebuggerKeepAttached()) {
+            NSLog(@"[JIT-FLOW] [DownloadVC] WARNING: isJITEnabled=1 but no live JIT26 debugger (ppid=%d traced=%d exn=%d); launch may hit brk #0x69",
+                  getppid(), JIT26DebuggerAttachedViaPtrace(), JIT26DebuggerViaExceptionPorts());
+        }
         NSLog(@"[JIT] [DownloadVC] JIT enabled with live JIT26 debugger, launching directly");
         handler();
         return;
     } else if (hasTrollStoreJIT) {
+        // ★ [JIT-FLOW] 原为 completionHandler:nil：apple-magnifier:// 无人处理时
+        //   iOS 静默失败。现在拿 urlOK + 明确提示。
         NSURL *jitURL = [NSURL URLWithString:[NSString stringWithFormat:@"apple-magnifier://enable-jit?bundle-id=%@", NSBundle.mainBundle.bundleIdentifier]];
-        [UIApplication.sharedApplication openURL:jitURL options:@{} completionHandler:nil];
+        [UIApplication.sharedApplication openURL:jitURL options:@{} completionHandler:^(BOOL urlOK) {
+            NSLog(@"[JIT-FLOW] [DownloadVC] openURL apple-magnifier:// (TrollStore) -> %d", urlOK);
+            if (!urlOK) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    showDialog(localize(@"Error", nil), @"apple-magnifier:// 无响应（TrollStore / StikDebug 未处理该 URL Scheme？）。请在 TrollStore 设置里启用 URL Scheme，或改用其它 JIT 开启方式。\napple-magnifier:// was not handled (TrollStore URL Scheme disabled?). Enable it in TrollStore settings, or use another JIT enabler.");
+                });
+            }
+        }];
     } else if (getPrefBool(@"debug.debug_skip_wait_jit")) {
         NSLog(@"Debug option skipped waiting for JIT. Java might not work.");
         handler();
         return;
+    } else if (AMEJITConfiguredExternalEnablerIsActive()) {
+        // ★ [JIT-ADAPT] 用户在设置里显式选了“非 stikjit”的 JIT 获取方式
+        //   (StikDebug(stikdebug://)/StosDebug/JitStreamer/SideJITServer/SideStore/
+        //    TrollStore/AltStore/Sideloadly/越狱/manual)。原 UI 路径完全忽略该偏好、
+        //   永远走 stikjit:// ⇒ 只装了这些工具的用户“点了没反应”。这里按偏好调起或引导；
+        //   判定「已开」仍只认下方统一的可验证自检(AMEJITWaitReadyVerified → 真拿可写 JIT 区)。
+        AMEJITEnablerActionResult jitAdaptAct = AMEJITOpenConfiguredExternalEnabler();
+        NSLog(@"[JIT-ADAPT] [DownloadVC] configured enabler=%@ action=%ld",
+              AMEJITConfiguredEnablerKey(), (long)jitAdaptAct);
+        if (jitAdaptAct == AMEJITEnablerActionResultMissingTool) {
+            // 工具没装 / URL 无人处理 ⇒ 立刻给可辨识提示 + 安装建议，并走既有「重试/取消」
+            // 出路，不再白等一整个超时窗口。
+            showDialog(localize(@"jit.wait.abort.title", nil),
+                       [NSString stringWithFormat:localize(@"jit.wait.missing.tool", nil),
+                        AMEJITConfiguredEnablerDisplayName() ?: AMEJITConfiguredEnablerKey()]);
+            [self jit_showTimeoutRetryAlert:handler];
+            return;
+        }
+        // Opened / Manual ⇒ 落到下方统一「可验证等待 + 超时重试」；外部-attach 类
+        // (AltStore/Sideloadly/SideJITServer/越狱/manual)顺带给一次「怎么做」的引导。
+        NSString *jitAdaptGuideKey = AMEJITConfiguredEnablerGuidanceKey();
+        if (jitAdaptGuideKey.length > 0) {
+            showDialog(localize(@"jit.guide.title", nil), localize(jitAdaptGuideKey, nil));
+        }
     } else if (@available(iOS 17.4, *)) {
         NSString *scriptDataString = @"";
         if (DeviceNeedsDebugJITMapping()) {
@@ -3840,7 +3926,10 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
 
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         // 有界等待 120s + 心跳日志，超时走重试弹窗。
-        BOOL ok = ame169_waitForJITCondition(^{ return isJITEnabled(false); }, 120.0, @"isJITEnabled");
+        // ★ [JIT-FLOW] 等待条件由裸 isJITEnabled(false)（CS_DEBUGGED 粘滞 ⇒ attach
+        //   即 <2s 假阳性）改为 AMEJITWaitReadyVerified()：Universal 路径下必须真的
+        //   发 brk #0x69 拿到可写 JIT 区才算就绪，独立于外部工具的「完成」提示。
+        BOOL ok = ame169_waitForJITCondition(^{ return AMEJITWaitReadyVerified(); }, 120.0, @"JIT-FLOW verify");
         // 自愈式派发：防后台楔死主队列吞掉续接块。
         ame185_dispatchToMainSelfHealing(^{
             [jitAlert dismiss];
@@ -3849,6 +3938,8 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
                 jit_bgt = UIBackgroundTaskInvalid;
             }
             if (ok) {
+                NSLog(@"[JIT-FLOW] [DownloadVC] verified before launch (writable JIT region=%p)",
+                      AMEJITVerifiedRegionPtr());
                 // 等待成功不等于能安全启动：TXM 上调试器可能再次脱离，复查不过就重挂。
                 if (DeviceHasJITFlags(JIT_FLAG_FORCE_MIRRORED | JIT_FLAG_HAS_TXM) &&
                     !JIT26IsLikelyDebuggerKeepAttached() &&
@@ -3859,6 +3950,9 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
                     if (handler) handler();
                 }
             } else {
+                // ★ [JIT-FLOW] 外部工具可能已弹自己的「jit complete」，但独立自检
+                //   （brk #0x69 -> 可写 JIT 区）未过 ⇒ 明确告知，不静默继续。
+                NSLog(@"[JIT-FLOW] [DownloadVC] stikdebug reported complete but self-check failed (brk #0x69 not serviced) -- NOT launching");
                 [self jit_showTimeoutRetryAlert:handler];
             }
         }, @"DownloadVC main wait");
@@ -3904,7 +3998,7 @@ typedef NS_ENUM(NSInteger, ModernAssetType) {
     }
 
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        BOOL ok = ame169_waitForJITCondition(^{ return JIT26IsLikelyDebuggerKeepAttached(); }, 120.0, @"JIT26 debugger attach");
+        BOOL ok = ame169_waitForJITCondition(^{ return AMEJITWaitReadyVerified(); }, 120.0, @"JIT26 debugger attach");
         ame185_dispatchToMainSelfHealing(^{
             [jitAlert dismiss];
             if (jit_bgt != UIBackgroundTaskInvalid) {
@@ -5795,7 +5889,9 @@ static NSString *PLSha1FromPrimaryFile(NSDictionary *primaryFile) {
         NSDictionary *profiles = PLProfiles.current.profiles;
         NSDictionary *prof = profiles[instanceName];
         if ([prof isKindOfClass:[NSDictionary class]]) {
-            NSString *gameDir = prof[@"gameDir"];
+            // ★ [VER-ISOLATE-PCL] 改用版本隔离统一解析：隔离开启时 mods 落在
+            //   versions/<版本 id>/mods，关闭时仍是 "."（实例根）——与改动前一致。
+            NSString *gameDir = amePCLVersionGameDirSubpath(prof, nil);
             if ([gameDir isKindOfClass:[NSString class]] && gameDir.length > 0 && ![gameDir isEqualToString:@"."]) {
                 // gameDir 是相对路径时，相对于 POJAV_GAME_DIR 解析
                 NSString *baseDir;

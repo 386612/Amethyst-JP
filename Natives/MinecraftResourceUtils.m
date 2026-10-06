@@ -392,10 +392,29 @@
         return;
     }
     json[@"arguments"][@"jvm_processed"] = [[NSMutableArray alloc] init];
+    // ★ [158-FIX] 补全 MC 26.x 版本 JSON 里出现、但此前未被展开的占位符。
+    //   原先只映射 classpath_separator/library_directory/version_name，导致下面这些
+    //   JVM 参数以「字面量」落进 JVM：
+    //     -Djna.tmpdir=${natives_directory}/jna
+    //     -Dorg.lwjgl.system.SharedLibraryExtractPath=${natives_directory}/lwjgl
+    //     -Dio.netty.native.workdir=${natives_directory}/netty
+    //     -Dminecraft.launcher.brand=${launcher_name}
+    //     -Dminecraft.launcher.version=${launcher_version}
+    //   实证（issue #158 日志）：JNA 把 libjnidispatch 解包到
+    //     <gamedir>/${natives_directory}/jna/jna*.tmp
+    //   崩溃报告里也写着 "Launcher name: ${launcher_name}"。
+    //   ${natives_directory} 映射到「可写的每实例目录」——上面三个键都是解包/临时目录，
+    //   不能指向只读的 app 包；至于 -Djava.library.path=${natives_directory}/java，
+    //   已被 numberOfArgsToSkipForArg 跳过，由启动器硬编码为 <app>/Frameworks。
+    NSString *instanceNativesDir = [NSString stringWithFormat:@"%s/natives", getenv("POJAV_GAME_DIR")];
+    NSString *launcherVersion = NSBundle.mainBundle.infoDictionary[@"CFBundleShortVersionString"] ?: @"0";
     NSDictionary *varArgMap = @{
         @"${classpath_separator}": @":",
         @"${library_directory}": [NSString stringWithFormat:@"%s/libraries", getenv("POJAV_GAME_DIR")],
-        @"${version_name}": json[@"id"]
+        @"${version_name}": json[@"id"],
+        @"${natives_directory}": instanceNativesDir,
+        @"${launcher_name}": @"Amethyst",
+        @"${launcher_version}": launcherVersion
     };
     int argsToSkip = 0;
     for (id rawArg in json[@"arguments"][@"jvm"]) {

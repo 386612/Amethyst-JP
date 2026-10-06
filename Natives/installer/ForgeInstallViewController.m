@@ -387,7 +387,8 @@ static void PALCacheWrite(NSString *vendor, NSString *gameVersion, NSArray<NSStr
     self.searchController = [[UISearchController alloc] initWithSearchResultsController:nil];
     self.searchController.searchResultsUpdater = (id<UISearchResultsUpdating>)self;
     self.searchController.obscuresBackgroundDuringPresentation = NO;
-    self.searchController.searchBar.placeholder = @"Search versions";
+    // ★ [AUDIT-DECIDE] A-10：硬编码 "Search versions" → 复用已有键 i18n_str_155。
+    self.searchController.searchBar.placeholder = localize(@"i18n_str_155", nil);
     self.navigationItem.searchController = self.searchController;
     self.navigationItem.hidesSearchBarWhenScrolling = NO;
     self.definesPresentationContext = YES;
@@ -1158,7 +1159,8 @@ static void PALCacheWrite(NSString *vendor, NSString *gameVersion, NSArray<NSStr
     MinecraftVersionHeaderView *headerView = [tableView dequeueReusableHeaderFooterViewWithIdentifier:@"MinecraftVersionHeader"];
     
     if (self.isDataLoading) {
-        headerView.titleLabel.text = @"Loading...";
+        // ★ [AUDIT-DECIDE] A-10：硬编码 "Loading..." → 复用已有键 i18n_str_40。
+        headerView.titleLabel.text = localize(@"i18n_str_40", nil);
         headerView.isExpanded = NO;
         headerView.expandCollapseButton.tag = section;
         [headerView.expandCollapseButton removeTarget:nil action:NULL forControlEvents:UIControlEventTouchUpInside];
@@ -1168,7 +1170,8 @@ static void PALCacheWrite(NSString *vendor, NSString *gameVersion, NSArray<NSStr
     [self.dataLock lock];
     if (section >= self.versionList.count || self.versionList.count == 0) {
         [self.dataLock unlock];
-        headerView.titleLabel.text = @"Loading...";
+        // ★ [AUDIT-DECIDE] A-10：硬编码 "Loading..." → 复用已有键 i18n_str_40。
+        headerView.titleLabel.text = localize(@"i18n_str_40", nil);
         headerView.isExpanded = NO;
         headerView.expandCollapseButton.tag = section;
         [headerView.expandCollapseButton removeTarget:nil action:NULL forControlEvents:UIControlEventTouchUpInside];

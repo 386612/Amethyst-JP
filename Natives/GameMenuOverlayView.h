@@ -26,6 +26,11 @@ NS_ASSUME_NONNULL_BEGIN
 /// 是否显示 FPS/内存统计标签（可通过菜单开关，参照 FCL）
 @property (nonatomic, assign) BOOL statsLabelVisible;
 
+/// ★ [ISSUE-152] 是否显示设置悬浮球（「小齿轮」按钮）。
+/// 由设置页「自定义控制键 → 显示游戏内悬浮球」控（偏好键 control.menu_button_visible）。
+/// 默认 YES = 不改变现状；关掉后 menuButton 隐藏且 hitTest 不再拦截该区域触摸（触摸照常穿透到游戏）。
+@property (nonatomic, assign) BOOL menuButtonVisible;
+
 /// 初始化并添加到指定父视图
 - (instancetype)initWithParentView:(UIView *)parentView;
 

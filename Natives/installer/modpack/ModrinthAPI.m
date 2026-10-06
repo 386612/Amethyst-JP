@@ -11,6 +11,34 @@ static NSString *MRAMirrorResolvedURL(NSString *urlString) {
     return resolved.absoluteString ?: urlString;
 }
 
+#pragma mark - ★ [MODSRC-LIST] 列表/搜索候选链
+
+/// ★ [MODSRC-LIST] 全部候选源均失败时的错误码。
+static const NSInteger kMRAMListAllSourcesFailedCode = 9001;
+
+/// ★ [MODSRC-LIST] 把各候选的失败原因汇总成一条可辨识的错误（含 HTTP 状态码 / 源主机），
+///   供 UI 显示 —— 取代旧实现「请求失败静默转成空数组 ⇒ 用户只看到『暂无』」。
+static NSError *MRAMListRequestError(NSArray<NSString *> *failures) {
+    NSString *detail = failures.count ? [failures componentsJoinedByString:@" | "] : @"无可用源";
+    return [NSError errorWithDomain:@"ModrinthAPIError"
+                               code:kMRAMListAllSourcesFailedCode
+                           userInfo:@{NSLocalizedDescriptionKey:
+                                          [NSString stringWithFormat:@"Modrinth 列表请求失败: %@", detail]}];
+}
+
+@interface ModrinthAPI ()
+// ★ [MODSRC-LIST] 候选链列表请求：按顺序尝试 candidates，命中含 arrayKey 数组的 2xx 响应即回调
+//   映射后的结果；每个候选失败（网络错误 / 非 2xx / 响应缺少 arrayKey 数组）都会记录原因并切下一个；
+//   全部失败才回调 error。这样单一源不可达时不再整张列表直接空掉。
+- (void)mramFetchListPathQuery:(NSString *)pathQuery
+                    candidates:(NSArray<NSString *> *)candidates
+                      arrayKey:(NSString *)arrayKey
+                     mapObject:(NSDictionary * _Nullable (^)(NSDictionary *item))mapObject
+                         index:(NSUInteger)index
+                      failures:(NSMutableArray<NSString *> *)failures
+                    completion:(void (^)(NSArray * _Nullable results, NSError * _Nullable error))completion;
+@end
+
 @implementation ModrinthAPI
 
 @dynamic reachedLastPage, lastError;
@@ -310,56 +338,102 @@ static NSString *MRAMirrorResolvedURL(NSString *urlString) {
     NSString *encodedQuery = [query stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
     NSString *encodedFacets = [facetString stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
     NSString *index = query.length > 0 ? @"relevance" : @"follows";
-    NSString *urlString = [NSString stringWithFormat:@"%@/search?query=%@&limit=%d&offset=%d&facets=%@&index=%@",
-                           self.baseURL, encodedQuery, limit, offset, encodedFacets, index];
-    
-    NSURL *url = [NSURL URLWithString:urlString];
-    if (!url) {
-        if (completion) {
-            completion(nil, [NSError errorWithDomain:@"ModrinthAPIError" code:1 userInfo:@{NSLocalizedDescriptionKey: @"Invalid URL"}]);
-        }
+    // ★ [MODSRC-LIST] 路径+查询串（不含 baseURL），交由候选链逐个拼接官方/镜像基址。
+    NSString *pathQuery = [NSString stringWithFormat:@"search?query=%@&limit=%d&offset=%d&facets=%@&index=%@",
+                           encodedQuery, limit, offset, encodedFacets, index];
+
+    // ★ [MODSRC-LIST] 候选链：官方 ↔ MCIM 镜像交叉回退；不再只打单一 self.baseURL。
+    NSArray<NSString *> *candidates = [PLMirrorCenter modrinthAPIBaseURLCandidates];
+    NSMutableArray<NSString *> *failures = [NSMutableArray array];
+    [self mramFetchListPathQuery:pathQuery
+                      candidates:candidates
+                        arrayKey:@"hits"
+                       mapObject:^NSDictionary * _Nullable(NSDictionary *item) {
+        NSMutableDictionary *modData = [NSMutableDictionary dictionary];
+        modData[@"apiSource"] = @(1);
+        modData[@"isModpack"] = @([item[@"project_type"] isEqualToString:@"modpack"]);
+        modData[@"projectType"] = item[@"project_type"] ?: projectType;
+        modData[@"id"] = item[@"project_id"] ?: item[@"slug"] ?: @"";
+        modData[@"title"] = item[@"title"] ?: @"Unknown";
+        modData[@"description"] = item[@"description"] ?: @"";
+        modData[@"author"] = item[@"author"] ?: @"Unknown";
+        modData[@"downloads"] = item[@"downloads"] ?: @0;
+        modData[@"likes"] = item[@"follows"] ?: @0;
+        modData[@"imageUrl"] = item[@"icon_url"] ?: @"";
+        modData[@"categories"] = item[@"categories"] ?: @[];
+        modData[@"lastUpdated"] = item[@"date_modified"] ?: @"";
+        return modData;
+    }
+                           index:0
+                        failures:failures
+                      completion:completion];
+}
+
+#pragma mark - ★ [MODSRC-LIST] 候选链列表请求实现
+
+- (void)mramFetchListPathQuery:(NSString *)pathQuery
+                    candidates:(NSArray<NSString *> *)candidates
+                      arrayKey:(NSString *)arrayKey
+                     mapObject:(NSDictionary * _Nullable (^)(NSDictionary *item))mapObject
+                         index:(NSUInteger)index
+                      failures:(NSMutableArray<NSString *> *)failures
+                    completion:(void (^)(NSArray * _Nullable results, NSError * _Nullable error))completion {
+    if (index >= candidates.count) {
+        NSLog(@"[ModrinthAPI] MODSRC-LIST: all sources failed: %@", failures);
+        if (completion) completion(nil, MRAMListRequestError(failures));
         return;
     }
-    
+    NSString *base = candidates[index];
+    NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"%@/%@", base, pathQuery]];
+    if (!url) {
+        [failures addObject:[NSString stringWithFormat:@"%@ (URL 无效)", base]];
+        [self mramFetchListPathQuery:pathQuery candidates:candidates arrayKey:arrayKey mapObject:mapObject
+                               index:index + 1 failures:failures completion:completion];
+        return;
+    }
+
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
-    request.timeoutInterval = 30.0;
+    request.timeoutInterval = 20.0;
     [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
     [request setValue:@"Amethyst-iOS/1.0" forHTTPHeaderField:@"User-Agent"];
-    
-    NSURLSession *session = [NSURLSession sharedSession];
-    NSURLSessionDataTask *task = [session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-        if (error) { if (completion) completion(nil, error); return; }
-        if (!data) { if (completion) completion(nil, [NSError errorWithDomain:@"ModrinthAPIError" code:2 userInfo:@{NSLocalizedDescriptionKey: @"No data"}]); return; }
-        
-        NSError *jsonError = nil;
-        NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
-        if (jsonError || ![json isKindOfClass:[NSDictionary class]]) {
-            if (completion) completion(nil, jsonError ?: [NSError errorWithDomain:@"ModrinthAPIError" code:3 userInfo:@{NSLocalizedDescriptionKey: @"Invalid JSON"}]);
+
+    NSLog(@"[ModrinthAPI] MODSRC-LIST: try source[%lu/%lu] %@", (unsigned long)index + 1, (unsigned long)candidates.count, base);
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request
+        completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSInteger status = [response isKindOfClass:[NSHTTPURLResponse class]] ? ((NSHTTPURLResponse *)response).statusCode : 0;
+        NSArray *mapped = nil;
+        NSString *reason = nil;
+
+        if (error) {
+            reason = [NSString stringWithFormat:@"%@ HTTP=%ld 网络错误(%@)", base, (long)status, error.localizedDescription ?: @"?"];
+        } else if (status != 0 && (status < 200 || status >= 300)) {
+            // ★ [MODSRC-LIST] 旧实现不检查 HTTP 状态；镜像 5xx 的 JSON 错误体（无 hits）
+            //   会被静默转成空数组 ⇒ 用户只看到「暂无」。现在按失败处理并切下一个源。
+            reason = [NSString stringWithFormat:@"%@ HTTP=%ld", base, (long)status];
+        } else {
+            NSDictionary *json = data.length ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+            NSArray *arr = [json isKindOfClass:[NSDictionary class]] ? json[arrayKey] : nil;
+            if ([arr isKindOfClass:[NSArray class]]) {
+                NSMutableArray *out = [NSMutableArray arrayWithCapacity:arr.count];
+                for (NSDictionary *item in arr) {
+                    if (![item isKindOfClass:[NSDictionary class]]) continue;
+                    NSDictionary *m = mapObject ? mapObject(item) : nil;
+                    if (m) [out addObject:m];
+                }
+                mapped = out;
+            } else {
+                reason = [NSString stringWithFormat:@"%@ HTTP=%ld 响应缺少 %@ 数组", base, (long)status, arrayKey];
+            }
+        }
+
+        if (mapped) {
+            NSLog(@"[ModrinthAPI] MODSRC-LIST: source %@ OK (%lu items)", base, (unsigned long)mapped.count);
+            if (completion) completion(mapped, nil);
             return;
         }
-        
-        NSArray *hits = json[@"hits"];
-        if (![hits isKindOfClass:[NSArray class]]) { if (completion) completion(@[], nil); return; }
-        
-        NSMutableArray *results = [NSMutableArray array];
-        for (NSDictionary *item in hits) {
-            if (![item isKindOfClass:[NSDictionary class]]) continue;
-            NSMutableDictionary *modData = [NSMutableDictionary dictionary];
-            modData[@"apiSource"] = @(1);
-            modData[@"isModpack"] = @([item[@"project_type"] isEqualToString:@"modpack"]);
-            modData[@"projectType"] = item[@"project_type"] ?: projectType;
-            modData[@"id"] = item[@"project_id"] ?: item[@"slug"] ?: @"";
-            modData[@"title"] = item[@"title"] ?: @"Unknown";
-            modData[@"description"] = item[@"description"] ?: @"";
-            modData[@"author"] = item[@"author"] ?: @"Unknown";
-            modData[@"downloads"] = item[@"downloads"] ?: @0;
-            modData[@"likes"] = item[@"follows"] ?: @0;
-            modData[@"imageUrl"] = item[@"icon_url"] ?: @"";
-            modData[@"categories"] = item[@"categories"] ?: @[];
-            modData[@"lastUpdated"] = item[@"date_modified"] ?: @"";
-            [results addObject:modData];
-        }
-        if (completion) completion(results, nil);
+        [failures addObject:reason ?: [NSString stringWithFormat:@"%@ 未知错误", base]];
+        [self mramFetchListPathQuery:pathQuery candidates:candidates arrayKey:arrayKey mapObject:mapObject
+                               index:index + 1 failures:failures completion:completion];
     }];
     [task resume];
 }
@@ -478,55 +552,34 @@ static NSString *MRAMirrorResolvedURL(NSString *urlString) {
     NSString *encodedQuery = [query stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
     NSString *encodedFacets = [facetString stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
     NSString *index = query.length > 0 ? @"relevance" : @"follows";
-    NSString *urlString = [NSString stringWithFormat:@"%@/search?query=%@&limit=%d&offset=%d&facets=%@&index=%@",
-                           self.baseURL, encodedQuery, limit, offset, encodedFacets, index];
+    // ★ [MODSRC-LIST] 路径+查询串交由候选链（官方 ↔ 镜像交叉回退）。
+    NSString *pathQuery = [NSString stringWithFormat:@"search?query=%@&limit=%d&offset=%d&facets=%@&index=%@",
+                           encodedQuery, limit, offset, encodedFacets, index];
 
-    NSURL *url = [NSURL URLWithString:urlString];
-    if (!url) {
-        if (completion) completion(nil, [NSError errorWithDomain:@"ModrinthAPIError" code:1 userInfo:@{NSLocalizedDescriptionKey: @"Invalid URL"}]);
-        return;
+    NSArray<NSString *> *candidates = [PLMirrorCenter modrinthAPIBaseURLCandidates];
+    NSMutableArray<NSString *> *failures = [NSMutableArray array];
+    [self mramFetchListPathQuery:pathQuery
+                      candidates:candidates
+                        arrayKey:@"hits"
+                       mapObject:^NSDictionary * _Nullable(NSDictionary *item) {
+        NSMutableDictionary *serverData = [NSMutableDictionary dictionary];
+        serverData[@"apiSource"] = @(1);
+        serverData[@"projectType"] = item[@"project_type"] ?: projectType;
+        serverData[@"serverID"] = item[@"project_id"] ?: item[@"slug"] ?: @"";
+        serverData[@"title"] = item[@"title"] ?: @"Unknown";
+        serverData[@"description"] = item[@"description"] ?: @"";
+        serverData[@"author"] = item[@"author"] ?: @"Unknown";
+        serverData[@"downloads"] = item[@"downloads"] ?: @0;
+        serverData[@"likes"] = item[@"follows"] ?: @0;
+        serverData[@"icon_url"] = item[@"icon_url"] ?: @"";
+        serverData[@"page_url"] = item[@"page_url"] ?: @"";
+        serverData[@"categories"] = item[@"categories"] ?: @[];
+        serverData[@"date_modified"] = item[@"date_modified"] ?: @"";
+        return serverData;
     }
-
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
-    request.timeoutInterval = 30.0;
-    [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
-    [request setValue:@"Amethyst-iOS/1.0" forHTTPHeaderField:@"User-Agent"];
-
-    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-        if (error) { if (completion) completion(nil, error); return; }
-        if (!data) { if (completion) completion(nil, [NSError errorWithDomain:@"ModrinthAPIError" code:2 userInfo:@{NSLocalizedDescriptionKey: @"No data"}]); return; }
-
-        NSError *jsonError = nil;
-        NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
-        if (jsonError || ![json isKindOfClass:[NSDictionary class]]) {
-            if (completion) completion(nil, jsonError ?: [NSError errorWithDomain:@"ModrinthAPIError" code:3 userInfo:@{NSLocalizedDescriptionKey: @"Invalid JSON"}]);
-            return;
-        }
-
-        NSArray *hits = json[@"hits"];
-        if (![hits isKindOfClass:[NSArray class]]) { if (completion) completion(@[], nil); return; }
-
-        NSMutableArray *results = [NSMutableArray array];
-        for (NSDictionary *item in hits) {
-            if (![item isKindOfClass:[NSDictionary class]]) continue;
-            NSMutableDictionary *serverData = [NSMutableDictionary dictionary];
-            serverData[@"apiSource"] = @(1);
-            serverData[@"projectType"] = item[@"project_type"] ?: projectType;
-            serverData[@"serverID"] = item[@"project_id"] ?: item[@"slug"] ?: @"";
-            serverData[@"title"] = item[@"title"] ?: @"Unknown";
-            serverData[@"description"] = item[@"description"] ?: @"";
-            serverData[@"author"] = item[@"author"] ?: @"Unknown";
-            serverData[@"downloads"] = item[@"downloads"] ?: @0;
-            serverData[@"likes"] = item[@"follows"] ?: @0;
-            serverData[@"icon_url"] = item[@"icon_url"] ?: @"";
-            serverData[@"page_url"] = item[@"page_url"] ?: @"";
-            serverData[@"categories"] = item[@"categories"] ?: @[];
-            serverData[@"date_modified"] = item[@"date_modified"] ?: @"";
-            [results addObject:serverData];
-        }
-        if (completion) completion(results, nil);
-    }];
-    [task resume];
+                           index:0
+                        failures:failures
+                      completion:completion];
 }
 
 - (void)searchServersWithFilters:(NSDictionary *)filters

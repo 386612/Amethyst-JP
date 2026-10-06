@@ -189,7 +189,7 @@ static UIColor *CFKErrorColor(void) {
     // 适配自定义启动器背景：将当前视图控制器透明化，使全局背景壁纸能够透出
     [[BackgroundManager sharedManager] makeViewControllerTransparent:self];
 
-    self.title = @"CurseForge API Key";
+    self.title = localize(@"preference.title.curseforge_api_key", nil);  // ★ [AUDIT-DECIDE] A-10：硬编码 "CurseForge API Key" → 复用已有键
     self.view.backgroundColor = CFKPageBackgroundColor();
 
     [self setupUI];
@@ -259,7 +259,7 @@ static UIColor *CFKErrorColor(void) {
 
     _infoTitleLabel = [[UILabel alloc] init];
     _infoTitleLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    _infoTitleLabel.text = @"CurseForge API Key";
+    _infoTitleLabel.text = localize(@"preference.title.curseforge_api_key", nil);  // ★ [AUDIT-DECIDE] A-10
     _infoTitleLabel.font = [UIFont systemFontOfSize:20 weight:UIFontWeightSemibold];
     _infoTitleLabel.textColor = CFKPrimaryTextColor();
     _infoTitleLabel.numberOfLines = 1;
@@ -280,7 +280,7 @@ static UIColor *CFKErrorColor(void) {
 
     _inputCardTitleLabel = [[UILabel alloc] init];
     _inputCardTitleLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    _inputCardTitleLabel.text = @"API Key";
+    _inputCardTitleLabel.text = localize(@"curseforge.api_key", nil);  // ★ [AUDIT-DECIDE] A-10：硬编码 "API Key" → 新增键 curseforge.api_key
     _inputCardTitleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
     _inputCardTitleLabel.textColor = CFKPrimaryTextColor();
     [_inputCardView addSubview:_inputCardTitleLabel];

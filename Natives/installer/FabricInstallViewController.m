@@ -86,7 +86,7 @@ extern NSMutableArray *localVersionList;
               @"icon": @"ladybug",
               @"title": @"preference.profile.title.version_type",
               @"type": typePickSegment,
-              @"pickList": @[localize(@"Release", nil), localize(@"Snapshot", nil)],
+              @"pickList": @[localize(@"i18n_str_2058", nil), localize(@"Snapshot", nil)],  // ★ [AUDIT-DECIDE] A-11：复用 i18n_str_2058（Release 已有键）
               @"action": ^(int type) {
                   [weakSelf changeVersionTypeTo:type];
               }
@@ -111,7 +111,7 @@ extern NSMutableArray *localVersionList;
               @"icon": @"ladybug",
               @"title": @"preference.profile.title.loader_type",
               @"type": typePickSegment,
-              @"pickList": @[localize(@"Release", nil), @"Unstable"],
+              @"pickList": @[localize(@"i18n_str_2058", nil), @"Unstable"],  // ★ [AUDIT-DECIDE] A-11：复用 i18n_str_2058（Release 已有键）
               @"action": ^(int type) {
                   [weakSelf changeLoaderTypeTo:type];
               }
@@ -310,7 +310,8 @@ extern NSMutableArray *localVersionList;
             NSDictionary *profiles = PLProfiles.current.profiles;
             NSDictionary *prof = profiles[instanceName];
             if ([prof isKindOfClass:[NSDictionary class]]) {
-                NSString *profGameDir = prof[@"gameDir"];
+                // ★ [VER-ISOLATE-PCL] 版本隔离统一解析：隔离时 mods 落 versions/<版本 id>/mods
+                NSString *profGameDir = amePCLVersionGameDirSubpath(prof, nil);
                 if ([profGameDir isKindOfClass:[NSString class]] && profGameDir.length > 0 && ![profGameDir isEqualToString:@"."]) {
                     const char *env = getenv("POJAV_GAME_DIR");
                     NSString *baseDir = env ? [NSString stringWithUTF8String:env] : NSHomeDirectory();

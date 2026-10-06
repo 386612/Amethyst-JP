@@ -142,7 +142,7 @@ static UIColor *CFKErrorColor(void) {// ★ HIG:失败 → systemRed
 - (void)viewDidLoad {
     [super viewDidLoad];
 
-    self.title = @"CurseForge API Key";
+    self.title = localize(@"preference.title.curseforge_api_key", nil);  // ★ [AUDIT-DECIDE] A-10：硬编码 "CurseForge API Key" → 复用已有键
     // 强制深色风格，与 App 其他界面（BackgroundManager 始终深色）保持一致，
     // 避免浅色模式下此页变浅色实色背景与其他页面深色毛玻璃割裂。
     if (@available(iOS 13.0, *)) {
@@ -228,7 +228,7 @@ static UIColor *CFKErrorColor(void) {// ★ HIG:失败 → systemRed
 
     _infoTitleLabel = [[UILabel alloc] init];
     _infoTitleLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    _infoTitleLabel.text = @"CurseForge API Key";
+    _infoTitleLabel.text = localize(@"preference.title.curseforge_api_key", nil);  // ★ [AUDIT-DECIDE] A-10
     _infoTitleLabel.font = [UIFont systemFontOfSize:20 weight:UIFontWeightSemibold];
     _infoTitleLabel.textColor = CFKPrimaryTextColor();
     _infoTitleLabel.numberOfLines = 1;
@@ -249,7 +249,7 @@ static UIColor *CFKErrorColor(void) {// ★ HIG:失败 → systemRed
 
     _inputCardTitleLabel = [[UILabel alloc] init];
     _inputCardTitleLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    _inputCardTitleLabel.text = @"API Key";
+    _inputCardTitleLabel.text = localize(@"curseforge.api_key", nil);  // ★ [AUDIT-DECIDE] A-10：硬编码 "API Key" → 新增键 curseforge.api_key
     _inputCardTitleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
     _inputCardTitleLabel.textColor = CFKPrimaryTextColor();
     [_inputCardView addSubview:_inputCardTitleLabel];
