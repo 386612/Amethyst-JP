@@ -212,13 +212,20 @@ static NSAttributedString *AMERenderMarkdown(NSString *markdown, UIFont *bodyFon
     [self.view addSubview:container];
     self.containerView = container;
 
+    // ★ [ISSUE-90] 小屏(SE 320×568 / 6s 375×667)弹窗宽度必须夹在屏内：
+    //   原式 MAX(320, MIN(520, view.w-80)) 在 320 屏上会把容器顶到 320pt(=整屏宽,左右留白归零)，
+    //   375 屏上顶到 320(=只剩 27.5pt 边距，也比设计意图的 40pt 窄)。
+    //   改为：先取设计上限 maxWidth，再夹到 [280, view.w-32] ⇒ 任何机型都不越界、且保留可读最小宽。
     CGFloat maxWidth = MIN(520.0, CGRectGetWidth(self.view.bounds) - 80.0);
     CGFloat maxHeight = MIN(560.0, CGRectGetHeight(self.view.bounds) - 60.0);
+    CGFloat safeW = CGRectGetWidth(self.view.bounds) - 32.0;     // ★ [ISSUE-90] 左右各至少 16pt
+    if (safeW < 1.0) safeW = CGRectGetWidth(self.view.bounds);
+    CGFloat dialogWidth = MIN(MAX(280.0, maxWidth), safeW);      // ★ [ISSUE-90]
 
     [NSLayoutConstraint activateConstraints:@[
         [container.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
         [container.centerYAnchor constraintEqualToAnchor:self.view.centerYAnchor],
-        [container.widthAnchor constraintEqualToConstant:MAX(320.0, maxWidth)],
+        [container.widthAnchor constraintEqualToConstant:dialogWidth],
         [container.heightAnchor constraintLessThanOrEqualToConstant:MAX(280.0, maxHeight)]
     ]];
 

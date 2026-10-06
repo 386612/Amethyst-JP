@@ -13,12 +13,14 @@
 #import "UIKit+GlassSurface.h"   // ★ [E1] 液态玻璃材质 + 高光描边助手(纯头文件,不新增 .m ⇒ 不改 CMake 源列表)
 #import "PLProfiles.h"
 #import "utils.h"
+#import "ios_uikit_bridge.h"   // ★ [GAME-LANDSCAPE] 游戏方向锁状态查询(AmeGameLandscapeLockActive)
 #import "ModsManagerViewController.h"
 #import "ShadersManagerViewController.h"
 #import "ModpackImportViewController.h"
 #import "LauncherPrefGameDirViewController.h"
 #import "CustomControlsViewController.h"
 // ★ [MP-RESTORE] 联机恢复
+#import "MultiplayerViewController.h"
 #import "TerracottaViewController.h"
 #import "TerracottaManager.h"
 #import "TerracottaBridge.h"
@@ -65,7 +67,10 @@ static CGFloat LauncherCardLayoutSidebarWidth(UITraitCollection *trait) {
 /// 根据物理设备类型决定右侧面板宽度
 /// - iPhone 横屏：168pt（保证启动/编辑控件/执行 Jar 按钮文字不截断）
 /// - iPad：220pt
-static CGFloat LauncherCardLayoutRightPanelWidth(UITraitCollection *trait) {
+/// ★ [IPAD-HOME-LAYOUT] 右栏卡片已下线(见 setupCardContainers: rightPanelWidthConstraint 恒 0)⇒
+///   本函数不再被调用。改 static inline 只为保留原来的“按机型取宽”口径(便于日后一键恢复),
+///   同时避免 static 函数未被引用触发 -Wunused-function 告警(与本文件 E1ColorSide 同一写法)。
+static inline CGFloat LauncherCardLayoutRightPanelWidth(UITraitCollection *trait) {
     if (LauncherCardLayoutIsPhysicalPhone()) return kRightPanelWidthPhone;
     return kRightPanelWidthPad;
 }
@@ -156,11 +161,8 @@ static NSString *E1SymbolForInstance(NSString *name) {
 /// 实例副文:真实数据 —— 扫描该实例 gameDir/mods 下的 jar 数量 + lastVersionId。
 /// 取不到就退回「无模组」,不编造数字。
 static NSString *E1InstanceSubtitle(NSString *name, NSDictionary *profile) {
-    NSString *gameDir = profile[@"gameDir"];
-    if (![gameDir isKindOfClass:[NSString class]] || gameDir.length == 0 || [gameDir isEqualToString:@"."]) {
-        const char *env = getenv("POJAV_GAME_DIR");
-        gameDir = env ? @(env) : nil;
-    }
+    // ★ [VER-ISOLATE-PCL] 版本隔离统一解析（绝对路径）：隔离开启时统计 versions/<id>/mods
+    NSString *gameDir = amePCLVersionGameDirAbsolute(profile, nil);
     NSUInteger modCount = 0;
     if (gameDir.length > 0) {
         NSString *modsPath = [gameDir stringByAppendingPathComponent:@"mods"];
@@ -241,32 +243,27 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
 @property(nonatomic, strong) NSLayoutConstraint *contentBetweenLeadConstraint;
 @property(nonatomic, strong) NSLayoutConstraint *contentBetweenTrailConstraint;
 
-// ===== ★ [E1] 实例主区(顶部大卡 + 双列/三列实例网格)=====
-//   结构:contentCard ▸ instancesPanel(标题行 + 滚动网格),网格由 e1RebuildInstancesGrid 生成。
-@property(nonatomic, strong) UIView *instancesPanel;            // 「实例」主区(挂在 contentCard 内)
-@property(nonatomic, strong) UILabel *instancesTitleLabel;      // 大标题「实例」
-@property(nonatomic, strong) UIButton *instancesGearButton;     // 竖屏右上齿轮(40×40)
-@property(nonatomic, strong) UIButton *instancesSortButton;     // 横屏右上「排序 ⇅」
-@property(nonatomic, strong) UIButton *instancesNewButton;      // 横屏右上「＋ 新建」
-@property(nonatomic, strong) UIScrollView *instancesScrollView;
-// ★ [E1-fix] 实例面板表头高度约束(CI run#77 报 property not found: 漏声明)
-@property(nonatomic, strong) NSLayoutConstraint *instancesHeaderHeightConstraint;
-@property(nonatomic, strong) UIStackView *instancesGridView;     // 竖向:每行一个横排行容器
-@property(nonatomic, strong) NSMutableArray<UIView *> *e1InstanceCards;          // 布局后刷新高光/虚线用
-@property(nonatomic, strong) NSMutableArray<CAShapeLayer *> *e1DashedBorderLayers;
-@property(nonatomic, assign) BOOL showingInstancesPanel;        // 主区当前是否在「实例」页
-@property(nonatomic, assign) NSInteger e1GridBuiltColumns;       // ★ [UI-ADAPT] 网格最近一次按几列建的(列数随可用宽变化 ⇒ 用它去重)
-@property(nonatomic, assign) NSInteger e1SortMode;               // 0=默认(选中优先) 1=按名称 2=最近游玩
+// ===== ★ [TAB-CROSSTALK] E 方案实例网格(已抽出为独立视图 E1InstancesPanelView)=====
+//   原「实例」面板(标题行 + 顶部大卡 + 实例卡网格 + 虚线「＋新建实例」)的实现已整体移入
+//   E1InstancesPanelView(见本文件末尾)。数据/版式/交互一字未改。
+// ★ [TAB-INST-REVERT] 它唯一的活宿主 InstancesTabViewController 已删除(「实例」标签改回
+//   VersionManagerViewController 单页)⇒ E1 实例网格**当前无活入口**:全仓无人调用 e1ShowInstancesPage,
+//   故 setupInstancesPanel(:1388)也不会被触发,instancesPanelView 恒为 nil
+//   (下方每一处 `if (self.instancesPanelView …)` 均安全空转,不会占位/遮挡)。
+//   按「不删能力」保留类与实现,仅作为后续改版的现成素材;不在「主页」或「实例」标签下占任何位置。
+@property(nonatomic, strong) E1InstancesPanelView *instancesPanelView;   // (当前不可达)曾经的实例网格宿主
 
 /// ★ [E1] 右栏是否参与布局(E 方案主区以实例网格为主,默认不参与 ⇒ 启动入口下沉到卡;SPEC §5 G8)。
 ///   右栏 VC 仍作为子 VC 存在并可用 KVC 触发启动,只是不再占位(便于一键恢复)。
 @property(nonatomic, assign) BOOL e1ShowsRightPanel;
 
-/// ★ [E1] 构建/重建实例主区
+/// ★ [E1] 构建/重建实例主区(薄封装,转调 instancesPanelView)
 - (void)setupInstancesPanel;
 - (void)e1RebuildInstancesGrid;
 - (void)e1ShowInstancesPage;
 - (void)e1ApplyInstancesPanelAppearance;
+- (void)e1RefreshInstanceCardChrome;
+- (void)e1NewInstanceTapped;
 
 // ★ [UI-A][DARK-MODE] 深浅色切换时重刷卡片基底(实现在下方)
 - (void)applyAppearanceForCurrentInterfaceStyle;
@@ -295,8 +292,14 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
     // 添加子视图控制器
     [self setupChildViewControllers];
 
-    // ★ [E1] 构建「实例」主区(顶部大卡 + 双列实例卡网格),作为主区默认内容
-    [self setupInstancesPanel];
+    // ★ [TAB-CROSSTALK] 主页标签的默认主区必须是「主页」本身(便当盒),不能再把「实例」网格塞进来。
+    //   根因:原实现无条件 setupInstancesPanel ⇒ iPad(卡片布局 = 本 VC)一进「主页」标签,
+    //   看到的就是标题「实例」+ 实例卡片网格(用户实测「主页那块内容被换成了实例列表」)。
+    //   口径与标准布局 LauncherRootViewController.m:634(「中间内容 - 默认显示新闻页」)对齐。
+    // ★ [TAB-INST-REVERT] 实例网格现无宿主:「实例」标签已改回 VersionManagerViewController 单页,
+    //   而 e1ShowInstancesPage(唯一会建实例网格的方法)全仓无调用者 ⇒ 主区恒为上面这个新闻/便当盒主页。
+    LauncherNewsViewController *homeVC = [[LauncherNewsViewController alloc] init];
+    [self setContentViewController:homeVC animated:NO];
     
     // 应用背景
     [[BackgroundManager sharedManager] applyBackgroundToView:self.view];
@@ -428,16 +431,9 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
 /// 只在真正需要切换时动约束,避免每次转屏都重建(原工程有"约束累积"的历史教训)。
 - (void)updateLayoutForCurrentOrientation {
     BOOL portraitNow = (self.view.bounds.size.height > self.view.bounds.size.width);
-    // ★ [E1] 网格按当前朝向重排(竖屏 2 列 / 横屏 3 列;卡高与色令牌同步切换)。
-    //   独立于下面的 usingPortraitLayout 去重 ⇒ 首次布局(还没切过约束)也会按真实朝向正确建一次。
-    // ★ [UI-ADAPT] 去重口径从“朝向”改为“列数”:列数现在随可用宽变化(iPhone/iPad/分屏),
-    //   只有列数真变(或首次/无卡)才重建网格 —— 避免每次布局都重建。
-    NSInteger colsNow = [self e1GridColumns];
-    if (self.e1GridBuiltColumns != colsNow || self.e1InstanceCards.count == 0) {
-        self.e1GridBuiltColumns = colsNow;
-        [self e1RebuildInstancesGrid];
-        [self e1ApplyInstancesPanelAppearance];
-    }
+    // ★ [TAB-CROSSTALK] 实例网格已抽为独立视图 E1InstancesPanelView;
+    //   朝向/可用宽变化时的重建与外观刷新由该视图内部按列数去重处理(见 -refreshForCurrentWidth)。
+    [self.instancesPanelView refreshForCurrentWidth];
     if (!self.portraitConstraints || !self.landscapeConstraints) return;
     BOOL portrait = portraitNow;
     if (self.usingPortraitLayout == portrait) return;
@@ -544,7 +540,9 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
     [super traitCollectionDidChange:previousTraitCollection];
     // iPhone 与 iPad 切换、或分屏调整大小时，更新侧栏与右侧面板宽度
     CGFloat sidebarWidth = LauncherCardLayoutSidebarWidth(self.traitCollection);
-    CGFloat rightPanelWidth = LauncherCardLayoutRightPanelWidth(self.traitCollection);
+    // ★ [IPAD-HOME-LAYOUT] 右栏已下线 ⇒ 宽度恒为 0(不再随机型取 220/168),
+    //   否则转屏 / 换机型时又会把中栏从右边推离屏边,重新撑出一条空白带。
+    CGFloat rightPanelWidth = 0.0;
     if (self.sidebarWidthConstraint.constant != sidebarWidth) {
         self.sidebarWidthConstraint.constant = sidebarWidth;
     }
@@ -672,7 +670,11 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
 
     // 用自适应宽度创建可变宽度约束，便于 traitCollection 变化时更新
     self.sidebarWidthConstraint = [self.sidebarCard.widthAnchor constraintEqualToConstant:LauncherCardLayoutSidebarWidth(self.traitCollection)];
-    self.rightPanelWidthConstraint = [self.rightPanelCard.widthAnchor constraintEqualToConstant:LauncherCardLayoutRightPanelWidth(self.traitCollection)];
+    // ★ [IPAD-HOME-LAYOUT] 右栏卡片下线(与 iPhone 路径 LauncherRootViewController 的 [NORIGHT] 同口径):
+    //   宽度恒为 0(配合 hidden ⇒ 0×56 不可见)。原来 iPad 横屏把右栏钉成 220pt 并占位,
+    //   而中栏 contentCard.trailing 又挂在它左边(-12)⇒ 内容区被从右边硬扣掉 220+12 ≈ 232pt,
+    //   便当盒只铺满左边 2/3、右侧一大片空白(实拍:横屏图右半空白 + 空白上方残留头像)。
+    self.rightPanelWidthConstraint = [self.rightPanelCard.widthAnchor constraintEqualToConstant:0.0];
 
     // 卡片外边距：iPhone 窄屏用较小值减少留白
     CGFloat outerMargin = LauncherCardLayoutOuterMargin(self.traitCollection);
@@ -692,15 +694,21 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
     //   ★ [TOP-BAR] 按用户实测反馈改版:
     //     ① 工具栏搬到【顶部横条】;② 右端停在右栏之前 ⇒ 不挡右上角的用户头像;
     //     ③ 主页(内容卡)占掉原工具栏那条竖带(leading 直接贴屏边);④ 右栏(头像)常驻右上。
-    self.e1ShowsRightPanel = YES;
-    self.rightPanelCard.hidden = NO;
+    // ★ [IPAD-HOME-LAYOUT] 右栏卡片下线(与 iPhone 路径 LauncherRootViewController 的 [NORIGHT] 同口径):
+    //   隐藏 + 0 宽(见上面 rightPanelWidthConstraint)⇒ 右上角不再残留用户头像,中栏四边贴屏。
+    //   右栏 VC 仍是常驻的「不可见控制器」(启动/JIT/版本/下载中心动作链路照旧,见 setupChildViewControllers)。
+    self.e1ShowsRightPanel = NO;
+    self.rightPanelCard.hidden = YES;
 
-    // ★ [TOP-BAR] 顶栏(原左栏改横条):贴顶,右端停在右栏之前 ⇒ 绝不压住右上角头像
+    // ★ [TOP-BAR] 顶栏(原左栏改横条):贴顶。★ [IPAD-HOME-LAYOUT] 右端现改**贴屏边**(见下),
+    //   不再"停在右栏之前" —— 右栏已下线,顶栏本就该横贯全宽。
     NSLayoutConstraint *sidebarLeading = [self.sidebarCard.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:outerMargin];
     NSLayoutConstraint *sidebarTop = [self.sidebarCard.topAnchor constraintEqualToAnchor:self.view.topAnchor constant:outerMargin];
-    NSLayoutConstraint *sidebarTrail = [self.sidebarCard.trailingAnchor constraintEqualToAnchor:self.rightPanelCard.leadingAnchor constant:-kCardSpacing];
+    // ★ [IPAD-HOME-LAYOUT] 顶栏(侧栏卡)右端改贴屏边 —— 原来停在右栏卡之前,
+    //   右栏下线后若仍挂右栏左边,顶栏右端会凭空缩 232pt(右上角留一段空)。
+    NSLayoutConstraint *sidebarTrail = [self.sidebarCard.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-outerMargin];
     NSLayoutConstraint *sidebarHeight = [self.sidebarCard.heightAnchor constraintEqualToConstant:56.0];
-    // 右栏(用户头像)常驻右上角
+    // ★ [IPAD-HOME-LAYOUT] 右栏(用户头像)已下线:仅保留 0 宽 + 隐藏的占位卡,不再常驻右上角
     NSLayoutConstraint *rightTop = [self.rightPanelCard.topAnchor constraintEqualToAnchor:self.view.topAnchor constant:outerMargin];
     NSLayoutConstraint *rightTrail = [self.rightPanelCard.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-outerMargin];
     NSLayoutConstraint *rightHeight = [self.rightPanelCard.heightAnchor constraintEqualToConstant:56.0];
@@ -708,7 +716,10 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
     NSLayoutConstraint *contentLead = [self.contentCard.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:outerMargin];
     NSLayoutConstraint *contentTop = [self.contentCard.topAnchor constraintEqualToAnchor:self.sidebarCard.bottomAnchor constant:kCardSpacing];
     NSLayoutConstraint *contentBottom = [self.contentCard.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor constant:-outerMargin];
-    NSLayoutConstraint *contentTrail = [self.contentCard.trailingAnchor constraintEqualToAnchor:self.rightPanelCard.leadingAnchor constant:-kCardSpacing];
+    // ★ [IPAD-HOME-LAYOUT] 中栏右边界改贴屏边。根因:原来钉在右栏卡左边(-12),
+    //   而右栏卡被钉成 220pt 宽 ⇒ 内容区被从右边扣掉 232pt(横屏“内容只铺左边 2/3、右侧大片空白”)。
+    //   右栏下线后中栏必须四边贴屏 ⇒ 这里直接把 trailing 挂到 view.trailing。
+    NSLayoutConstraint *contentTrail = [self.contentCard.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-outerMargin];
 
     self.outerMarginConstraints = @[sidebarLeading, sidebarTop, rightTop, rightTrail,
                                     contentLead, contentTrail, contentTop, contentBottom];
@@ -741,12 +752,14 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
     // ★ [TOP-BAR] 竖屏也是顶栏:菜单横条在左上、头像小卡在右上,内容填满下方。
     NSLayoutConstraint *pSideTop      = [self.sidebarCard.topAnchor constraintEqualToAnchor:self.view.topAnchor constant:kE1MarginPortrait];
     NSLayoutConstraint *pSideLead     = [self.sidebarCard.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:kE1MarginPortrait];
-    NSLayoutConstraint *pSideTrail    = [self.sidebarCard.trailingAnchor constraintEqualToAnchor:self.rightPanelCard.leadingAnchor constant:-kCardSpacing];
+    // ★ [IPAD-HOME-LAYOUT] 竖屏顶栏右端也改贴屏边(原来停在右栏卡左边 ⇒ 右栏下线后右端白缩 12pt)
+    NSLayoutConstraint *pSideTrail    = [self.sidebarCard.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-kE1MarginPortrait];
     NSLayoutConstraint *pSideHeight   = [self.sidebarCard.heightAnchor constraintEqualToConstant:56.0];
     NSLayoutConstraint *pRightTop     = [self.rightPanelCard.topAnchor constraintEqualToAnchor:self.view.topAnchor constant:kE1MarginPortrait];
     NSLayoutConstraint *pRightTrail   = [self.rightPanelCard.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-kE1MarginPortrait];
     NSLayoutConstraint *pRightHeight  = [self.rightPanelCard.heightAnchor constraintEqualToConstant:56.0];
-    NSLayoutConstraint *pRightWidth   = [self.rightPanelCard.widthAnchor constraintEqualToConstant:56.0];
+    // ★ [IPAD-HOME-LAYOUT] 右栏下线 ⇒ 竖屏也钉成 0 宽(配合 hidden),不再占 56pt
+    NSLayoutConstraint *pRightWidth   = [self.rightPanelCard.widthAnchor constraintEqualToConstant:0.0];
     // ★ [PORTRAIT-SAFE] 顶栏在顶部 ⇒ 这几条要在 applyEdgeInsets 里加 insets.top(避开灵动岛)
     NSLayoutConstraint *pContentTop   = [self.contentCard.topAnchor constraintEqualToAnchor:self.sidebarCard.bottomAnchor constant:kCardSpacing];
     pSideTop.identifier    = @"portrait-top";
@@ -754,16 +767,21 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
     pContentTop.identifier = @"portrait-top";
     NSLayoutConstraint *pContentLead  = [self.contentCard.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:kE1MarginPortrait];
     NSLayoutConstraint *pContentTrail = [self.contentCard.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-kE1MarginPortrait];
+    // ★ [IPAD-HOME-LAYOUT] 竖屏内容卡原来**没有底边约束**:contentBottom 只存在于横屏那套约束里,
+    //   切竖屏时整组被停用 ⇒ contentCard 高度无解,Auto Layout 把它收成 ≈44pt(刚好只够顶栏那一行),
+    //   夹在中间的便当盒 collectionView 高度≈0 ⇒ 竖屏主页整片空白(实拍:竖屏图里「登录并启动」胶囊
+    //   被挤进顶栏同一行,下方全空)。这里补一条与横屏 contentBottom 同义的底边约束 ⇒ 竖屏内容恢复渲染。
+    NSLayoutConstraint *pContentBottom = [self.contentCard.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor constant:-(kE1MarginPortrait)];
     // ★ [IPAD15-CRASH] 删掉一行死约束:它用 NSLayoutAttributeNotAnAttribute 当【第一个 item 的属性】
     //   且 toItem:nil,建完立刻 (void) 丢弃、从未参与布局。iPadOS 15.4.1 上 CoreAutoLayout 会抛
     //   "NSLayoutConstraint ... : Unknown layout attribute" ⇒ LauncherCardLayoutViewController
     //   的 viewDidLoad 直接崩(iPad 走这个 VC,iPhone 走 LauncherRootViewController ⇒ 只在 iPad 复现)。
-    for (NSLayoutConstraint *c in @[pContentTop, pContentLead, pContentTrail,
+    for (NSLayoutConstraint *c in @[pContentTop, pContentLead, pContentTrail, pContentBottom,
                                     pSideLead, pSideTrail, pSideTop, pSideHeight,
                                     pRightTop, pRightTrail, pRightHeight, pRightWidth]) {
         c.identifier = @"portrait-set";
     }
-    self.portraitConstraints = @[pContentTop, pContentLead, pContentTrail,
+    self.portraitConstraints = @[pContentTop, pContentLead, pContentTrail, pContentBottom,
                                  pSideLead, pSideTrail, pSideTop, pSideHeight,
                                  pRightTop, pRightTrail, pRightHeight, pRightWidth];
 }
@@ -784,9 +802,10 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
     [sidebarVC didMoveToParentViewController:self];
     _sidebarViewController = sidebarVC;
     
-    // ★ [E1] 中间内容 - 默认显示「实例」主区(E 方案主界面 = 实例网格,见 setupInstancesPanel)。
-    //   原来这里默认放新闻页;按 E 方案 SPEC §3.1/§3.2「主区 = 实例网格」,主区改由实例网格承载,
-    //   实例卡各自带启动入口(启动不再依赖右栏)。新闻页保留可达路径(showNewsPage / ShowNewsPage 通知)。
+    // ★ [TAB-INST-REVERT] 本处**不建任何「实例」主区**:主页标签(index 0)的内容区由 viewDidLoad
+    //   里 setContentViewController:LauncherNewsViewController 决定(即便当盒主页,与 LauncherRootViewController.m 同口径)。
+    //   (原注释「默认显示实例主区」已与代码不符:setupInstancesPanel 只在 e1ShowInstancesPage
+    //   的「老流程/非标签栏」兜底分支里调用,而该方法全仓无调用者。)
     
     // 右侧面板 - 账户和启动
     LauncherRightPanelViewController *rightPanelVC = [[LauncherRightPanelViewController alloc] init];
@@ -804,7 +823,12 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
     // ★ [UI-ADAPT] 本布局把右栏卡钉成 56pt 高的小卡(仅常驻头像),而面板内部是按“竖条通高”
     //   写的 required 约束组(≈300pt) ⇒ 不切紧凑态必然冲突(日志刷 unsatisfiable + 头像被挤走)。
     //   切到“头像专用”布局:整组停用 + 只留头像铺满小卡;动作转发/通知链路一字不动。
-    [rightPanelVC norightAvatarOnlyLayout:YES];
+    // ★ [IPAD-HOME-LAYOUT] 右栏整体下线(与 iPhone 路径 LauncherRootViewController.m 的
+    //   [rightPanelVC norightCollapsePanelLayout:YES] 同款):整组内部 required 约束停用 + 全部子视图隐藏。
+    //   原来调的是 norightAvatarOnlyLayout:YES —— 它会把头像**显式显示**(avatarImageView.hidden = NO)
+    //   在右上角小卡里 ⇒ 右栏下线后仍残留 (实拍:横屏图右上空中的圆头像)。改 collapse 后彻底隐藏;
+    //   动作转发 / 通知链路一字不动。
+    [rightPanelVC norightCollapsePanelLayout:YES];
     
     // 注册通知监听
     [[NSNotificationCenter defaultCenter] addObserver:self
@@ -842,6 +866,10 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(showMultiplayer)
                                                  name:@"ShowMultiplayer"
+                                               object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(showZeroTier)
+                                                 name:@"ShowZeroTier"
                                                object:nil];
     // 账户管理：右侧面板点击头像会发 ShowAccountManager 通知。
     // 原实现遗漏此监听，导致卡片布局下点头像无反应、无法登录账号。
@@ -935,17 +963,23 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
     // 通知右侧面板刷新版本显示
     [[NSNotificationCenter defaultCenter] postNotificationName:@"SelectedProfileChanged" object:nil];
     // ★ [E1] 游戏目录/版本列表变化 ⇒ 实例集合也可能变,重建实例卡网格
-    if (self.showingInstancesPanel) {
+    if (self.instancesPanelView && !self.instancesPanelView.hidden) {
         [self e1RebuildInstancesGrid];
     }
 }
 
 - (void)showHomePage {
-    // ★ [E1] 主页 = 「实例」主区(E 方案:主界面即实例网格;底部/侧栏「实例」为默认选中项)。
-    //   原来是新闻页 —— 新闻页改由 ShowNewsPage 通知承载(见 showNewsPage)。
-    // ★ [HOST-BUG-B] 先切回「主页」标签(并回根),再确保主区为实例网格;不再整体替换主页内容造成串台。
+    // ★ [TAB-CROSSTALK] 「主页」标签 = 主页(便当盒)。原实现在切回标签 0 后调 e1ShowInstancesPage,
+    //   把「实例」网格当主页内容 ⇒ 底栏高亮「主页」、主区却是「实例」列表 = 用户报的串台。
+    //   改为与标准布局 LauncherRootViewController.m:775-788 完全同款:切标签 0 + 幂等还原主页内容
+    //   (内容区不是主页时才重建;已在主页则只把可能残留的实例面板收起)。
     AmeHomeSwitchToTab(self, 0, YES);
-    [self e1ShowInstancesPage];
+    if (![self.contentViewController isKindOfClass:[LauncherNewsViewController class]]) {
+        LauncherNewsViewController *homeVC = [[LauncherNewsViewController alloc] init];
+        [self setContentViewController:homeVC animated:YES];
+    } else if (self.instancesPanelView && !self.instancesPanelView.hidden) {
+        self.instancesPanelView.hidden = YES;
+    }
 }
 
 /// ★ [E1] 新闻页(原主页)。当前菜单/入口不再直接触发,保留方法 + ShowNewsPage 通知,
@@ -957,7 +991,7 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
 
 /// ★ [E1] profile(实例)选中项或列表变化 ⇒ 重建实例网格(选中卡置顶为大卡、副文/模组数刷新)
 - (void)e1ProfileChanged {
-    if (self.showingInstancesPanel) {
+    if (self.instancesPanelView && !self.instancesPanelView.hidden) {
         [self e1RebuildInstancesGrid];
     }
 }
@@ -1035,22 +1069,33 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
     [self setContentViewController:navVC animated:YES];
 }
 
-// ★ [MP-RESTORE] 联机恢复：陶瓦联机入口。
+// ★ [MP-RESTORE] 联机恢复：陶瓦联机 / ZeroTier 两个入口。
 //   ★ [MP-BACK] 改为 push 进【本页所在标签的导航栈】(本页即该标签的根)：系统自带返回键、返回即回主页；
 //   不再用 setContentViewController: 把根内容整体换掉(那会让新页成为全新 nav 的根、presentingViewController==nil，
 //   页面自己隐藏导航栏 ⇒ 用户实测「进得去、没有返回键、出不来」)。与主页磁贴的 fix2PushTab 落点完全一致。
 - (void)showMultiplayer {
     // 陶瓦联机界面（与 HMCL/FCL/ZL2 互通）；libterracotta 未链接时提示
     if (![TerracottaBridge isAvailable]) {
+        // ★ [AUDIT-DECIDE] A-12：iPad 可达路径上的硬编码中文告示 → 本地化（新增键 multiplayer.unavailable.*）。
         UIAlertController *alert = [UIAlertController
-            alertControllerWithTitle:@"联机功能不可用"
-                              message:@"libterracotta 库未链接，请按 README 中「陶瓦联机集成」章节下载 xcframework 后重新构建。"
+            alertControllerWithTitle:localize(@"multiplayer.unavailable.title", nil)
+                              message:localize(@"multiplayer.unavailable.message", nil)
                        preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+        [alert addAction:[UIAlertAction actionWithTitle:localize(@"OK", nil) style:UIAlertActionStyleDefault handler:nil]];
         [self presentViewController:alert animated:YES completion:nil];
         return;
     }
     TerracottaViewController *vc = [[TerracottaViewController alloc] init];
+    [self mpbackPushPageOrFallback:vc];
+}
+
+- (void)showZeroTier {
+    // ZeroTier 联机界面（独立入口）；若陶瓦会话进行中，先停以免端口冲突。
+    if ([TerracottaBridge isAvailable] &&
+        [TerracottaManager shared].status != TerracottaStatusDisconnected) {
+        [[TerracottaManager shared] stopSession];
+    }
+    MultiplayerViewController *vc = [[MultiplayerViewController alloc] initWithMode:MultiplayerVCModeLauncher];
     [self mpbackPushPageOrFallback:vc];
 }
 
@@ -1097,8 +1142,37 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
 
 #pragma mark - 首页快捷入口 (替换原 FormSheet 弹窗)
 
+// ★ [TAB-CROSSTALK] 通用落地:模组/光影/游戏目录/整合包导入这些「目标页本来就是某个标签的页」的入口,
+//   一律「切到目标标签 + 在她自己的导航栈里 push 子页」——本仓既有范式 LauncherNewsViewController
+//   fix2PushTab:(见 LauncherNewsViewController.m:2258)。绝不再用 setContentViewController: 把【主页内容】
+//   整体换掉:那会让底栏停在「主页」而内容是版本管理/下载页,用户返回后主页也回不来(串台)。
+//   @return YES = 已用标签栏处理完(调用方直接 return);NO = 不在标签栏(老流程)⇒ 调用方回退原实现。
+- (BOOL)tabcrosstalkPushTab:(NSInteger)tabIndex
+                     pushes:(Class)vcClass
+                     makeVC:(UIViewController * (^)(void))makeVC {
+    if (!vcClass || !makeVC) return NO;
+    UITabBarController *tbc = self.tabBarController;
+    if (![tbc isKindOfClass:[UITabBarController class]]) return NO;   // 不在标签栏 ⇒ 交给老流程
+    if (tabIndex < 0 || tabIndex >= (NSInteger)tbc.viewControllers.count) return NO;
+    UIViewController *tabVC = tbc.viewControllers[(NSUInteger)tabIndex];
+    if (![tabVC isKindOfClass:[UINavigationController class]]) return NO;
+    UINavigationController *nav = (UINavigationController *)tabVC;
+
+    tbc.selectedIndex = tabIndex;                          // ① 切目标标签(不碰页面内容)
+    for (UIViewController *c in nav.viewControllers) {      // ② 栈里已有同类页 ⇒ 回到它,不重复 push
+        if ([c isKindOfClass:vcClass]) { [nav popToViewController:c animated:YES]; return YES; }
+    }
+    [nav popToRootViewControllerAnimated:NO];              // ③ 否则先回本标签根页,避免越叠越多
+    UIViewController *vc = makeVC();
+    if (vc) [nav pushViewController:vc animated:YES];
+    return YES;
+}
+
 - (void)showModsManager {
-    // 切到版本管理页并直接 push 模组管理
+    // ★ [TAB-CROSSTALK] 模组管理是「实例」标签(3)的页 ⇒ 切标签 + 她自己的栈里 push。
+    if ([self tabcrosstalkPushTab:3 pushes:[ModsManagerViewController class]
+                           makeVC:^UIViewController *{ return [[ModsManagerViewController alloc] init]; }]) return;
+    // 兜底(老流程:不在标签栏)保持原实现 —— 在中间内容区显示
     // 修复"前一界面未消失"竞态：先构建完整 nav 栈再 setContentViewController，
     // 这样 setContentViewController 内的 for 循环能一次性透明化栈中所有 VC，
     // 避免 animated:YES 的 crossDissolve 进行中再 animated:NO push 导致新 VC 未透明化。
@@ -1111,6 +1185,13 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
 }
 
 - (void)showShadersManager {
+    // ★ [TAB-CROSSTALK] 光影管理是「实例」标签(3)的页 ⇒ 切标签 + 她自己的栈里 push。
+    if ([self tabcrosstalkPushTab:3 pushes:[ShadersManagerViewController class]
+                           makeVC:^UIViewController *{
+                               ShadersManagerViewController *s = [[ShadersManagerViewController alloc] init];
+                               s.initialMode = ShadersManagerModeLocal;
+                               return s;
+                           }]) return;
     VersionManagerViewController *vm = [[VersionManagerViewController alloc] init];
     UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vm];
     nav.navigationBar.prefersLargeTitles = NO;
@@ -1121,6 +1202,9 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
 }
 
 - (void)showGameDirectory {
+    // ★ [TAB-CROSSTALK] 游戏目录设置是「实例」标签(3)的页 ⇒ 切标签 + 她自己的栈里 push。
+    if ([self tabcrosstalkPushTab:3 pushes:[LauncherPrefGameDirViewController class]
+                           makeVC:^UIViewController *{ return [[LauncherPrefGameDirViewController alloc] init]; }]) return;
     VersionManagerViewController *vm = [[VersionManagerViewController alloc] init];
     UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vm];
     nav.navigationBar.prefersLargeTitles = NO;
@@ -1130,7 +1214,10 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
 }
 
 - (void)showModpackImport {
-    // 切到下载页并直接 push 整合包导入界面
+    // ★ [TAB-CROSSTALK] 整合包导入是「下载」标签(1)的页 ⇒ 切标签 + 她自己的栈里 push。
+    if ([self tabcrosstalkPushTab:1 pushes:[ModpackImportViewController class]
+                           makeVC:^UIViewController *{ return [[ModpackImportViewController alloc] init]; }]) return;
+    // 兜底:切到下载页并直接 push 整合包导入界面
     DownloadViewController *d = [[DownloadViewController alloc] init];
     UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:d];
     nav.navigationBar.prefersLargeTitles = NO;
@@ -1182,9 +1269,8 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
     }
 
     // ★ [E1] 显示任何子页面 ⇒ 收起「实例」主区(主区与子页面共用 contentCard,互斥显示)
-    if (self.instancesPanel && !self.instancesPanel.hidden) {
-        self.instancesPanel.hidden = YES;
-        self.showingInstancesPanel = NO;
+    if (self.instancesPanelView && !self.instancesPanelView.hidden) {
+        self.instancesPanelView.hidden = YES;
     }
 
     // 检查是否切换到非编辑器页面
@@ -1263,33 +1349,199 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
     }
 }
 
-#pragma mark - ★ [E1] 实例主区(顶部大卡 + 双列/三列实例网格)
+#pragma mark - ★ [TAB-CROSSTALK] 「实例」页入口(实现在 E1InstancesPanelView)
 
 // ============================================================================
-// 本区实现 E 方案(SPEC §3.1/§3.2)的主区版式:
-//   竖屏:标题「实例」+ 顶部大卡(右侧圆形 ▶)+ 双列实例卡网格(卡上「启动」)+ 底部菜单条;
-//   横屏:标题「实例」+ 右上「排序 ⇅ / ＋ 新建」+ 横向铺开的实例卡(3 列,首卡跨 2 列)。
-// 数据源 = PLProfiles 里真实的实例(profile);模组数 = 该实例 gameDir/mods 下 jar 计数;
-// 启动 = 复用右栏既有启动链路(见 e1LaunchInstanceNamed:),不在本文件重写启动逻辑。
+// E 方案「实例」网格的实现已整体移入本文件末尾的 E1InstancesPanelView(独立 UIView)。
+// 本类(卡片布局 = iPad 主页)只保留:① 主页内容区的兜底宿主(当前不可达); ② 切「实例」标签的入口。
+// ★ [TAB-INST-REVERT] 「实例」标签(index 3)已恢复为单页 VersionManagerViewController
+//   (见 AmeRootTabController.m)——不再有分段容器;E1InstancesPanelView 目前无活宿主(见本文件 248 行起的注释)。
 // ============================================================================
+
+/// ★ [TAB-CROSSTALK] 「实例」页统一落地:实例本就是「实例」标签(index 3)的页 ⇒ 切标签 + 回根,
+///   而不是把实例网格塞进「主页」内容区(那正是用户报的「主页变实例列表」串台)。
+- (void)e1ShowInstancesPage {
+    if (AmeHomeSwitchToTab(self, 3, YES)) {
+        if (self.instancesPanelView && !self.instancesPanelView.hidden) {
+            self.instancesPanelView.hidden = YES;
+        }
+        return;
+    }
+    // 兜底(不在标签栏,老流程):在主页内容区画实例网格
+    if (_contentViewController) {
+        UIViewController *oldVC = _contentViewController;
+        [oldVC willMoveToParentViewController:nil];
+        [oldVC.view removeFromSuperview];
+        [oldVC removeFromParentViewController];
+        if (self.currentContentConstraints.count > 0) {
+            [NSLayoutConstraint deactivateConstraints:self.currentContentConstraints];
+            self.currentContentConstraints = nil;
+        }
+        _contentViewController = nil;
+    }
+    self.isShowingProfileEditor = NO;
+    self.profileEditorVC = nil;
+    if (!self.instancesPanelView) {
+        [self setupInstancesPanel];
+    }
+    self.instancesPanelView.hidden = NO;
+    [self.instancesPanelView applyAppearance];
+    [self.instancesPanelView rebuildGrid];
+    [self.view setNeedsLayout];
+}
+
+/// 主页内容区兜底宿主:在 contentCard 内挂一个 E1InstancesPanelView(仅老流程/非标签栏时用到)。
+- (void)setupInstancesPanel {
+    if (!self.contentCard || self.instancesPanelView) return;
+    E1InstancesPanelView *panel = [[E1InstancesPanelView alloc] init];
+    [self.contentCard addSubview:panel];
+    [NSLayoutConstraint activateConstraints:@[
+        [panel.leadingAnchor  constraintEqualToAnchor:self.contentCard.leadingAnchor],
+        [panel.trailingAnchor constraintEqualToAnchor:self.contentCard.trailingAnchor],
+        [panel.topAnchor      constraintEqualToAnchor:self.contentCard.topAnchor],
+        [panel.bottomAnchor   constraintEqualToAnchor:self.contentCard.bottomAnchor],
+    ]];
+    __weak typeof(self) weakSelf = self;
+    panel.newInstanceHandler = ^{ [weakSelf e1NewInstanceTapped]; };
+    self.instancesPanelView = panel;
+}
+
+/// 薄封装:重建网格(转调 instancesPanelView;无面板时安全空转)
+- (void)e1RebuildInstancesGrid { [self.instancesPanelView rebuildGrid]; }
+- (void)e1ApplyInstancesPanelAppearance { [self.instancesPanelView applyAppearance]; }
+- (void)e1RefreshInstanceCardChrome { [self.instancesPanelView refreshCardChrome]; }
+
+/// 「＋新建实例」落点:切「实例」标签(index 3)+ 回根(落到版本管理页。「＋新建实例」本就是去版本管理里新建版本)。
+/// ★ [TAB-INST-REVERT] 该标签已恢复为单页 VersionManagerViewController(无分段)⇒ 原先那条
+///   `AmeInstancesTabShowVersionsPage`(唯一观察者是已删除的 InstancesTabViewController)已无宿主,
+///   这里一并删掉,不留无人观察的通知;落点行为不变(切标签 3 + 回根 = 版本管理页)。
+- (void)e1NewInstanceTapped {
+    // ★ [TAB-CROSSTALK] 与主页快捷入口同一范式:切「实例」标签,不碰主页内容区。
+    UITabBarController *tbc = self.tabBarController;
+    if ([tbc isKindOfClass:[UITabBarController class]] &&
+        tbc.viewControllers.count > 3 &&
+        [tbc.viewControllers[3] isKindOfClass:[UINavigationController class]]) {
+        tbc.selectedIndex = 3;
+        [(UINavigationController *)tbc.viewControllers[3] popToRootViewControllerAnimated:YES];
+        return;
+    }
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"ShowVersionManager" object:nil];
+}
+
+#pragma mark - Orientation
+
+- (BOOL)shouldAutorotate {
+    return YES;
+}
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    // ★ [GAME-LANDSCAPE] 启动中本页仍是根内容 ⇒ 跟着锁横屏（与 LauncherRootViewController 同一处理）。
+    if (AmeGameLandscapeLockActive()) return UIInterfaceOrientationMaskLandscape;
+    // ★ [PORTRAIT] 放开竖屏:原来是写死 Landscape ⇒ 竖屏进不去。
+    // 竖屏排布由 LauncherCardLayoutViewController 切换(三卡竖摞 + 菜单横排);
+    // 游戏(SurfaceViewController)单独锁横屏,保证游戏内不会竖过来。
+    if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+        return UIInterfaceOrientationMaskAll;
+    }
+    return UIInterfaceOrientationMaskAllButUpsideDown;
+}
+
+#pragma mark - UINavigationControllerDelegate
+
+/// nav push/pop 后重新透明化所有 VC 并重新应用 nav bar 效果
+/// 参照 RootVC 的同名实现，确保 push 后子页面样式与卡片背景一致
+- (void)navigationController:(UINavigationController *)navigationController
+       didShowViewController:(UIViewController *)viewController
+                    animated:(BOOL)animated {
+    // 透明化刚显示的 VC
+    [[BackgroundManager sharedManager] makeViewControllerTransparent:viewController];
+    // 同时透明化栈中所有 VC（防止前一个页面透出残留，解决"前一页面未及时消失"问题）
+    for (UIViewController *stackVC in navigationController.viewControllers) {
+        [[BackgroundManager sharedManager] makeViewControllerTransparent:stackVC];
+    }
+    // 重新应用导航栏毛玻璃效果（防止 push 后 nav bar 样式被重置）
+    [[BackgroundManager sharedManager] applyEffectToNavigationBar:navigationController.navigationBar];
+}
+
+@end
+
+#pragma mark - ★ [TAB-CROSSTALK] E 方案「实例」网格视图(从 LauncherCardLayoutViewController 抽出)
+// ============================================================================
+// 原「实例」面板(标题行 + 顶部大卡 + 实例卡网格 + 虚线「＋新建实例」)的整体实现。
+// 抽为独立 UIView 后原本有两个宿主:
+//   · LauncherCardLayoutViewController 的「主页内容区」兜底宿主(contentCard)。
+// ★ [TAB-INST-REVERT] 原第二个宿主(「实例」标签的 InstancesTabViewController)已删除
+//   ⇒ 本类当前无活入口;代码按「不删能力」保留(见本文件 248 行起的注释)。
+// 数据源(PLProfiles)、版式(SPEC §3.1/§3.2)、交互(选中/启动/排序)与抽出前逐字一致;
+// 仅两处宿主相关改为 block:启动走全局动作、新建实例/齿轮交给宿主。
+// ============================================================================
+
+@interface E1InstancesPanelView ()
+@property(nonatomic, strong) UILabel *instancesTitleLabel;              // 大标题「实例」
+@property(nonatomic, strong) UIButton *instancesGearButton;             // 竖屏右上齿轮(40×40)
+@property(nonatomic, strong) UIButton *instancesSortButton;             // 横屏右上「排序 ⇅」
+@property(nonatomic, strong) UIButton *instancesNewButton;              // 横屏右上「＋ 新建」
+@property(nonatomic, strong) UIScrollView *instancesScrollView;
+@property(nonatomic, strong) NSLayoutConstraint *instancesHeaderHeightConstraint;
+@property(nonatomic, strong) UIStackView *instancesGridView;            // 竖向:每行一个横排行容器
+@property(nonatomic, strong) NSMutableArray<UIView *> *e1InstanceCards;             // 布局后刷新高光/虚线用
+@property(nonatomic, strong) NSMutableArray<CAShapeLayer *> *e1DashedBorderLayers;
+@property(nonatomic, assign) NSInteger e1GridBuiltColumns;              // ★ [UI-ADAPT] 网格最近一次按几列建的
+@property(nonatomic, assign) NSInteger e1SortMode;                      // 0=默认(选中优先) 1=按名称 2=最近游玩
+@end
+
+@implementation E1InstancesPanelView
+
+#pragma mark 构建
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        self.translatesAutoresizingMaskIntoConstraints = NO;
+        self.backgroundColor = [UIColor clearColor];
+        self.e1InstanceCards = [NSMutableArray array];
+        self.e1DashedBorderLayers = [NSMutableArray array];
+        [self e1BuildPanelContents];
+        [self applyAppearance];
+        [self rebuildGrid];
+    }
+    return self;
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    [self refreshForCurrentWidth];
+    [self refreshCardChrome];
+}
+
+/// ★ [UI-ADAPT] 去重口径从“朝向”改为“列数”:列数随可用宽变化(iPhone/iPad/分屏),
+///   只有列数真变(或首次/无卡)才重建网格 —— 避免每次布局都重建(与抽出前一致)。
+- (void)refreshForCurrentWidth {
+    NSInteger colsNow = [self e1GridColumns];
+    if (self.e1GridBuiltColumns != colsNow || self.e1InstanceCards.count == 0) {
+        self.e1GridBuiltColumns = colsNow;
+        [self rebuildGrid];
+        [self applyAppearance];
+    }
+}
 
 #pragma mark 朝向相关的网格度量
 
-/// 当前是否竖屏(直接看 bounds,避免依赖 usingPortraitLayout 的切换时机)
+/// 当前是否竖屏(直接看 bounds)
 - (BOOL)e1IsPortraitNow {
-    CGSize s = self.view.bounds.size;
+    CGSize s = self.bounds.size;
     return s.height > s.width;
 }
 
-/// ★ [UI-ADAPT] 网格列数:按「可用宽 / 最小卡宽」分档(2~4),不再只按朝向写死 2/3。
-///   口径 = contentCard 实时可用宽(iPhone / iPad / 分屏 同一套算法)
+/// ★ [UI-ADAPT] 网格列数:按「可用宽 / 最小卡宽」分档(2~4)。
+///   口径 = 本视图实时可用宽(iPhone / iPad / 分屏 同一套算法)
 ///   ⇒ 小屏 2 列、手机横屏 & iPad 竖屏 3 列、iPad 横屏/大屏 4 列。
 - (NSInteger)e1GridColumns {
-    CGFloat avail = self.contentCard ? self.contentCard.bounds.size.width : 0.0;
-    if (avail < 1.0) avail = self.view.bounds.size.width;   // 首帧兜底
-    if (avail < 1.0) return [self e1IsPortraitNow] ? 2 : 3; // 宽度还没定 ⇒ 退化为经典值
+    CGFloat avail = self.bounds.size.width;
+    if (avail < 1.0 && self.superview) avail = self.superview.bounds.size.width;
+    if (avail < 1.0) return [self e1IsPortraitNow] ? 2 : 3;   // 首帧兜底
     CGFloat gap = [self e1GridGap];
-    CGFloat usable = avail - gap * 2.0;   // 内部小内边距(contentCard 已排除外边距,不能再去一遍)
+    CGFloat usable = avail - gap * 2.0;   // 内部小内边距(容器已排除外边距,不能再去一遍)
     if (usable < 1.0) return 2;
     NSInteger cols = (NSInteger)floor((usable + gap) / (kE1MinCardWidth + gap));
     if (cols < 2) cols = 2;
@@ -1297,42 +1549,17 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
     return cols;
 }
 
-- (CGFloat)e1GridGap {
-    return [self e1IsPortraitNow] ? kE1GridGapPortrait : kE1GridGapLandscape;
-}
-
-- (CGFloat)e1HeroHeight {
-    return [self e1IsPortraitNow] ? kE1HeroHeightPortrait : kE1HeroHeightLandscape;
-}
-
-- (CGFloat)e1CardHeight {
-    return [self e1IsPortraitNow] ? kE1CardHeightPortrait : kE1CardHeightLandscape;
-}
+- (CGFloat)e1GridGap { return [self e1IsPortraitNow] ? kE1GridGapPortrait : kE1GridGapLandscape; }
+- (CGFloat)e1HeroHeight { return [self e1IsPortraitNow] ? kE1HeroHeightPortrait : kE1HeroHeightLandscape; }
+- (CGFloat)e1CardHeight { return [self e1IsPortraitNow] ? kE1CardHeightPortrait : kE1CardHeightLandscape; }
 
 #pragma mark 构建面板
 
-- (void)setupInstancesPanel {
-    if (!self.contentCard || self.instancesPanel) return;
-
-    self.e1InstanceCards = [NSMutableArray array];
-    self.e1DashedBorderLayers = [NSMutableArray array];
-
-    UIView *panel = [[UIView alloc] initWithFrame:CGRectZero];
-    panel.translatesAutoresizingMaskIntoConstraints = NO;
-    panel.backgroundColor = [UIColor clearColor];
-    [self.contentCard addSubview:panel];
-    self.instancesPanel = panel;
-    [NSLayoutConstraint activateConstraints:@[
-        [panel.leadingAnchor  constraintEqualToAnchor:self.contentCard.leadingAnchor],
-        [panel.trailingAnchor constraintEqualToAnchor:self.contentCard.trailingAnchor],
-        [panel.topAnchor      constraintEqualToAnchor:self.contentCard.topAnchor],
-        [panel.bottomAnchor   constraintEqualToAnchor:self.contentCard.bottomAnchor],
-    ]];
-
+- (void)e1BuildPanelContents {
     // ---------- 标题行(SPEC §3.1「实例」25/700;§3.2 横屏「实例」21 + 排序 + 新建)----------
     UIView *header = [[UIView alloc] initWithFrame:CGRectZero];
     header.translatesAutoresizingMaskIntoConstraints = NO;
-    [panel addSubview:header];
+    [self addSubview:header];
 
     self.instancesTitleLabel = E1MakeLabel(@"实例", 25.0, UIFontWeightBold, [UIColor whiteColor]);
     [header addSubview:self.instancesTitleLabel];
@@ -1341,7 +1568,7 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
     self.instancesGearButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.instancesGearButton.translatesAutoresizingMaskIntoConstraints = NO;
     self.instancesGearButton.layer.cornerRadius = 13.0;
-    self.instancesGearButton.layer.cornerCurve = kCACornerCurveContinuous;   // ★ [CORNER-FIX] 连续圆角(与系统卡片一致)
+    self.instancesGearButton.layer.cornerCurve = kCACornerCurveContinuous;   // ★ [CORNER-FIX] 连续圆角
     self.instancesGearButton.layer.masksToBounds = YES;
     self.instancesGearButton.tintColor = [UIColor whiteColor];
     [self.instancesGearButton setImage:[UIImage systemImageNamed:@"gearshape.fill"] forState:UIControlStateNormal];
@@ -1352,10 +1579,12 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
     self.instancesSortButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.instancesSortButton.translatesAutoresizingMaskIntoConstraints = NO;
     self.instancesSortButton.titleLabel.font = [UIFont systemFontOfSize:12.5 weight:UIFontWeightSemibold];
-    [self.instancesSortButton setTitle:@"排序 ⇅" forState:UIControlStateNormal];
+    // ★ [AUDIT-DECIDE] A-12：死代码(E1InstancesPanelView 从无实例)里的硬编码中文 chip 一并本地化，
+    //   避免日后复活时变成 i18n bug。文案键为新增（见 .strings）。
+    [self.instancesSortButton setTitle:localize(@"home.instances.sort", nil) forState:UIControlStateNormal];
     self.instancesSortButton.contentEdgeInsets = UIEdgeInsetsMake(0, 13, 0, 13);
     self.instancesSortButton.layer.cornerRadius = 15.0;
-    self.instancesSortButton.layer.cornerCurve = kCACornerCurveContinuous;   // ★ [CORNER-FIX] 连续圆角(与系统卡片一致)
+    self.instancesSortButton.layer.cornerCurve = kCACornerCurveContinuous;   // ★ [CORNER-FIX] 连续圆角
     self.instancesSortButton.layer.masksToBounds = YES;
     [self.instancesSortButton addTarget:self action:@selector(e1SortTapped) forControlEvents:UIControlEventTouchUpInside];
     [header addSubview:self.instancesSortButton];
@@ -1364,11 +1593,12 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
     self.instancesNewButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.instancesNewButton.translatesAutoresizingMaskIntoConstraints = NO;
     self.instancesNewButton.titleLabel.font = [UIFont systemFontOfSize:12.5 weight:UIFontWeightSemibold];
-    [self.instancesNewButton setTitle:@"＋ 新建" forState:UIControlStateNormal];
+    // ★ [AUDIT-DECIDE] A-12：死代码 chip 的硬编码中文一并本地化（新增键 home.instances.new）。
+    [self.instancesNewButton setTitle:localize(@"home.instances.new", nil) forState:UIControlStateNormal];
     [self.instancesNewButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     self.instancesNewButton.contentEdgeInsets = UIEdgeInsetsMake(0, 14, 0, 14);
     self.instancesNewButton.layer.cornerRadius = 15.0;
-    self.instancesNewButton.layer.cornerCurve = kCACornerCurveContinuous;   // ★ [CORNER-FIX] 连续圆角(与系统卡片一致)
+    self.instancesNewButton.layer.cornerCurve = kCACornerCurveContinuous;   // ★ [CORNER-FIX] 连续圆角
     self.instancesNewButton.layer.masksToBounds = YES;
     [self.instancesNewButton addTarget:self action:@selector(e1NewInstanceTapped) forControlEvents:UIControlEventTouchUpInside];
     [header addSubview:self.instancesNewButton];
@@ -1378,9 +1608,9 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
     self.instancesHeaderHeightConstraint = headerHeight;
 
     [NSLayoutConstraint activateConstraints:@[
-        [header.leadingAnchor  constraintEqualToAnchor:panel.leadingAnchor constant:2.0],
-        [header.trailingAnchor constraintEqualToAnchor:panel.trailingAnchor constant:-2.0],
-        [header.topAnchor      constraintEqualToAnchor:panel.topAnchor],
+        [header.leadingAnchor  constraintEqualToAnchor:self.leadingAnchor constant:2.0],
+        [header.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-2.0],
+        [header.topAnchor      constraintEqualToAnchor:self.topAnchor],
         headerHeight,
 
         [self.instancesTitleLabel.leadingAnchor constraintEqualToAnchor:header.leadingAnchor],
@@ -1408,7 +1638,7 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
     scroll.translatesAutoresizingMaskIntoConstraints = NO;
     scroll.alwaysBounceVertical = YES;
     scroll.showsVerticalScrollIndicator = YES;
-    [panel addSubview:scroll];
+    [self addSubview:scroll];
     self.instancesScrollView = scroll;
 
     UIStackView *grid = [[UIStackView alloc] initWithFrame:CGRectZero];
@@ -1420,10 +1650,10 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
     self.instancesGridView = grid;
 
     [NSLayoutConstraint activateConstraints:@[
-        [scroll.leadingAnchor  constraintEqualToAnchor:panel.leadingAnchor],
-        [scroll.trailingAnchor constraintEqualToAnchor:panel.trailingAnchor],
+        [scroll.leadingAnchor  constraintEqualToAnchor:self.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
         [scroll.topAnchor      constraintEqualToAnchor:header.bottomAnchor constant:6.0],
-        [scroll.bottomAnchor   constraintEqualToAnchor:panel.bottomAnchor],
+        [scroll.bottomAnchor   constraintEqualToAnchor:self.bottomAnchor],
 
         [grid.leadingAnchor  constraintEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor],
         [grid.trailingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.trailingAnchor],
@@ -1431,41 +1661,11 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
         [grid.bottomAnchor   constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor],
         [grid.widthAnchor    constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor],
     ]];
-
-    self.showingInstancesPanel = YES;
-    [self e1ApplyInstancesPanelAppearance];
-    [self e1RebuildInstancesGrid];
-}
-
-/// ★ [E1] 切回「实例」主区:收起当前子页面(子 VC 仍按原逻辑按需新建,不缓存),
-/// 显示实例面板。ShowHomePage / 主页入口都走这里。
-- (void)e1ShowInstancesPage {
-    if (_contentViewController) {
-        UIViewController *oldVC = _contentViewController;
-        [oldVC willMoveToParentViewController:nil];
-        [oldVC.view removeFromSuperview];
-        [oldVC removeFromParentViewController];
-        if (self.currentContentConstraints.count > 0) {
-            [NSLayoutConstraint deactivateConstraints:self.currentContentConstraints];
-            self.currentContentConstraints = nil;
-        }
-        _contentViewController = nil;
-    }
-    self.isShowingProfileEditor = NO;
-    self.profileEditorVC = nil;
-    if (!self.instancesPanel) {
-        [self setupInstancesPanel];
-    }
-    self.instancesPanel.hidden = NO;
-    self.showingInstancesPanel = YES;
-    [self e1ApplyInstancesPanelAppearance];
-    [self e1RebuildInstancesGrid];
-    [self.view setNeedsLayout];
 }
 
 /// ★ [E1] 面板外观(深浅令牌 + 朝向版式):标题字号/颜色、齿轮 vs 排序/新建的显隐与配色。
-- (void)e1ApplyInstancesPanelAppearance {
-    if (!self.instancesPanel) return;
+- (void)applyAppearance {
+    if (!self.instancesTitleLabel) return;
     BOOL dark = E1UsesDarkTokens(self.traitCollection);
     BOOL portrait = [self e1IsPortraitNow];
 
@@ -1491,7 +1691,7 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
 
 #pragma mark 重建网格
 
-- (void)e1RebuildInstancesGrid {
+- (void)rebuildGrid {
     if (!self.instancesGridView) return;
 
     BOOL dark = E1UsesDarkTokens(self.traitCollection);
@@ -1619,15 +1819,14 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
         rowH = MAX(rowH, [cell[@"h"] doubleValue]);
         idx += span;
     }
-    // 行高:同一行的单元高度一致(竖屏 82/126、横屏 112),显式给一条避免 stack 推不出高度
+    // 行高:同一行的单元高度一致,显式给一条避免 stack 推不出高度
     [row.heightAnchor constraintEqualToConstant:rowH].active = YES;
     return row;
 }
 
 #pragma mark 卡片工厂
 
-/// 玻璃卡基底:走全局 BackgroundManager(用户的毛玻璃/透明度/玻璃强度偏好继续生效 —— 硬约束),
-/// 再叠 SPEC §2 令牌:叠色(glass/glass2)+ 高光描边(rim)+ 外阴影(shade)。
+/// 玻璃卡基底:走全局 BackgroundManager,再叠 SPEC §2 令牌(叠色 + 高光描边 + 外阴影)。
 - (UIView *)e1GlassCardWithRadius:(CGFloat)radius strong:(BOOL)strong {
     UIView *card = [[UIView alloc] initWithFrame:CGRectZero];
     card.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1639,8 +1838,7 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
 
     BOOL dark = E1UsesDarkTokens(self.traitCollection);
 
-    // ★ [GLASS-LIQUID] 系统材质路径(默认)⇒ 卡片材质由系统给(≥26 UIGlassEffect / <26 系统材质),
-    //   不再叠 SPEC 白底 + rim 描边 + 外阴影(那是"纯代码玻璃")。仅显式打开「自绘高光」时才叠加。
+    // ★ [GLASS-LIQUID] 系统材质路径(默认)⇒ 卡片材质由系统给,不再叠 SPEC 白底 + rim 描边 + 外阴影。
     if (!AMEGlassStyleAllowsHandDrawnGlass()) {
         card.layer.masksToBounds = YES;   // 系统材质自带圆角裁剪,不需要外阴影的溢出
         return card;
@@ -1666,8 +1864,8 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
 
     // ③ 外阴影(SPEC §2.5):blur/shine/tint 各自裁剪 ⇒ 宿主不裁剪也能保持圆角玻璃
     card.layer.masksToBounds = NO;
-    card.layer.shadowColor = E1ColorShade(dark).CGColor;   // SPEC §2.1 shade:深 rgba(0,0,0,.35) / 浅 rgba(0,0,0,.06)
-    card.layer.shadowOpacity = 1.0;                        // alpha 已含在 shade 令牌里,此处不再二次衰减
+    card.layer.shadowColor = E1ColorShade(dark).CGColor;
+    card.layer.shadowOpacity = 1.0;
     card.layer.shadowRadius = strong ? 12.0 : 9.0;
     card.layer.shadowOffset = CGSizeMake(0, 6);
     return card;
@@ -1716,7 +1914,7 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
     UIView *pill = [[UIView alloc] initWithFrame:CGRectZero];
     pill.translatesAutoresizingMaskIntoConstraints = NO;
     pill.layer.cornerRadius = 9.0;
-    pill.layer.cornerCurve = kCACornerCurveContinuous;   // ★ [CORNER-FIX] 连续圆角(与系统卡片一致)
+    pill.layer.cornerCurve = kCACornerCurveContinuous;   // ★ [CORNER-FIX] 连续圆角
     pill.layer.masksToBounds = YES;
     pill.backgroundColor = on ? [E1ColorSuccess() colorWithAlphaComponent:0.16] : E1ColorSeg(dark);
 
@@ -1769,7 +1967,7 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
     play.tintColor = [UIColor whiteColor];
     [play setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal];
     play.layer.cornerRadius = 19.0;
-    play.layer.cornerCurve = kCACornerCurveContinuous;   // ★ [CORNER-FIX] 连续圆角(与系统卡片一致)
+    play.layer.cornerCurve = kCACornerCurveContinuous;   // ★ [CORNER-FIX] 连续圆角
     play.layer.masksToBounds = YES;
     objc_setAssociatedObject(play, kE1InstanceNameKey, name, OBJC_ASSOCIATION_COPY_NONATOMIC);
     [play addTarget:self action:@selector(e1LaunchButtonTapped:) forControlEvents:UIControlEventTouchUpInside];
@@ -1824,12 +2022,13 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
 
     UIButton *launch = [UIButton buttonWithType:UIButtonTypeSystem];
     launch.translatesAutoresizingMaskIntoConstraints = NO;
-    [launch setTitle:@"启动" forState:UIControlStateNormal];
+    // ★ [AUDIT-DECIDE] A-12：死代码 chip 的硬编码中文一并本地化（新增键 home.instances.launch）。
+    [launch setTitle:localize(@"home.instances.launch", nil) forState:UIControlStateNormal];
     [launch setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     launch.titleLabel.font = [UIFont systemFontOfSize:12.5 weight:UIFontWeightSemibold];
     launch.backgroundColor = E1ColorAccent(dark);
     launch.layer.cornerRadius = 10.0;
-    launch.layer.cornerCurve = kCACornerCurveContinuous;   // ★ [CORNER-FIX] 连续圆角(与系统卡片一致)
+    launch.layer.cornerCurve = kCACornerCurveContinuous;   // ★ [CORNER-FIX] 连续圆角
     launch.layer.masksToBounds = YES;
     objc_setAssociatedObject(launch, kE1InstanceNameKey, name, OBJC_ASSOCIATION_COPY_NONATOMIC);
     [launch addTarget:self action:@selector(e1LaunchButtonTapped:) forControlEvents:UIControlEventTouchUpInside];
@@ -1924,7 +2123,7 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
     if (name.length == 0) return;
     if (![[PLProfiles current].selectedProfileName isEqualToString:name]) {
         [PLProfiles current].selectedProfileName = name;   // setter 内部会 post SelectedProfileChanged
-        [self e1RebuildInstancesGrid];
+        [self rebuildGrid];
     }
 }
 
@@ -1933,58 +2132,39 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
     [self e1LaunchInstanceNamed:name];
 }
 
-/// 启动指定实例:先选中它,再复用右栏既有启动链路(账号校验/JIT/下载拦截/版本解析都在里面)。
+/// 启动指定实例:先选中它,再复用全局启动链路(账号校验/JIT/下载拦截/版本解析都在右栏原实现里)。
+/// ★ [TAB-CROSSTALK] 本视图已与宿主解耦 ⇒ 通过 AmeRightPanelActionNotification 触发右栏原启动动作
+///   (与主页底部「启动胶囊」同一范式:只 post 动作名,零复制启动逻辑)。
 - (void)e1LaunchInstanceNamed:(NSString *)name {
-    if (name.length > 0 && ![[PLProfiles current].selectedProfileName isEqualToString:name]) {
+    if (name.length == 0) return;
+    if (![[PLProfiles current].selectedProfileName isEqualToString:name]) {
         [PLProfiles current].selectedProfileName = name;   // 内部 post SelectedProfileChanged ⇒ 右栏版本信息同步
     }
-
-    UIViewController *rp = self.rightPanelViewController;
-    UIButton *launchBtn = nil;
-    @try {
-        launchBtn = [rp valueForKey:@"launchButton"];
-    } @catch (__unused NSException *ex) {
-        launchBtn = nil;
-    }
-
-    if ([launchBtn isKindOfClass:[UIButton class]]) {
-        if (launchBtn.enabled) {
-            [launchBtn sendActionsForControlEvents:UIControlEventTouchUpInside];
-        } else {
-            // 该实例没有可启动版本(lastVersionId 缺失)⇒ 引导去版本管理(与右栏禁用态语义一致)
-            [self e1NewInstanceTapped];
-        }
+    NSDictionary *profile = [PLProfiles current].profiles[name];
+    NSString *ver = profile[@"lastVersionId"];
+    if (ver.length == 0) {
+        // 该实例没有可启动版本(lastVersionId 缺失)⇒ 引导去版本管理(与右栏禁用态语义一致)
+        [self e1NewInstanceTapped];
         return;
     }
-
-    // 退化:拿不到按钮(属性改名等)就直接调右栏的启动动作,再退到版本管理
-    SEL sel = NSSelectorFromString(@"launchButtonTapped");
-    if ([rp respondsToSelector:sel]) {
-        ((void (*)(id, SEL))objc_msgSend)(rp, sel);
-    } else {
-        [self e1NewInstanceTapped];
-    }
+    [LauncherRightPanelViewController norightPostAction:@"launch"];
 }
 
+/// 「＋新建实例」落点:交给宿主(切标签/切分段);无宿主时兜底发老通知。
 - (void)e1NewInstanceTapped {
-    // ★ [FIX3] 与主页快捷入口(LauncherNewsViewController)同一个坑:本方法原来只发 ShowVersionManager,
-    //   而本页(卡片布局的主页 tab,index 0)自己的 showVersionManager 收到后会调 setContentViewController:,
-    //   把【主页内容区】整体换成版本管理页 ⇒ 用户返回后主页就永久停在版本管理(同类“串台”)。
-    //   改为:优先切到「实例」标签(index 3 —— 其根页本即 VersionManagerViewController)并 pop 回根页,
-    //   主页内容区完全不被替换;不在标签栏(老流程)时才回退原通知。业务结果不变:仍是打开版本管理。
-    UITabBarController *tbc = self.tabBarController;
-    if ([tbc isKindOfClass:[UITabBarController class]] &&
-        tbc.viewControllers.count > 3 &&
-        [tbc.viewControllers[3] isKindOfClass:[UINavigationController class]]) {
-        tbc.selectedIndex = 3;
-        [(UINavigationController *)tbc.viewControllers[3] popToRootViewControllerAnimated:YES];
+    if (self.newInstanceHandler) {
+        self.newInstanceHandler();
         return;
     }
     [[NSNotificationCenter defaultCenter] postNotificationName:@"ShowVersionManager" object:nil];
 }
 
+/// 竖屏标题右侧齿轮 = 设置(SPEC §1.1);交给宿主,默认发 ShowSettings。
 - (void)e1GearTapped {
-    // 竖屏标题右侧齿轮 = 设置(SPEC §1.1)
+    if (self.settingsHandler) {
+        self.settingsHandler();
+        return;
+    }
     [[NSNotificationCenter defaultCenter] postNotificationName:@"ShowSettings" object:nil];
 }
 
@@ -1993,12 +2173,12 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
     NSString *t = (self.e1SortMode == 0) ? @"排序 ⇅"
                 : (self.e1SortMode == 1) ? @"名称 ⇅" : @"最近 ⇅";
     [self.instancesSortButton setTitle:t forState:UIControlStateNormal];
-    [self e1RebuildInstancesGrid];
+    [self rebuildGrid];
 }
 
 #pragma mark 布局后刷新(虚线路径 / 玻璃高光渐变)
 
-- (void)e1RefreshInstanceCardChrome {
+- (void)refreshCardChrome {
     for (UIView *card in self.e1InstanceCards) {
         AmeRefreshGlassRim(card);   // BackgroundManager 贴的玻璃高光渐变按新尺寸刷新
     }
@@ -2011,39 +2191,6 @@ static const void *kE1InstanceNameKey = &kE1InstanceNameKey;
         dash.path = [UIBezierPath bezierPathWithRoundedRect:CGRectInset(b, 0.5, 0.5)
                                               cornerRadius:MAX(0.0, dash.cornerRadius)].CGPath;
     }
-}
-
-#pragma mark - Orientation
-
-- (BOOL)shouldAutorotate {
-    return YES;
-}
-
-- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
-    // ★ [PORTRAIT] 放开竖屏:原来是写死 Landscape ⇒ 竖屏进不去。
-    // 竖屏排布由 LauncherCardLayoutViewController 切换(三卡竖摞 + 菜单横排);
-    // 游戏(SurfaceViewController)单独锁横屏,保证游戏内不会竖过来。
-    if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
-        return UIInterfaceOrientationMaskAll;
-    }
-    return UIInterfaceOrientationMaskAllButUpsideDown;
-}
-
-#pragma mark - UINavigationControllerDelegate
-
-/// nav push/pop 后重新透明化所有 VC 并重新应用 nav bar 效果
-/// 参照 RootVC 的同名实现，确保 push 后子页面样式与卡片背景一致
-- (void)navigationController:(UINavigationController *)navigationController
-       didShowViewController:(UIViewController *)viewController
-                    animated:(BOOL)animated {
-    // 透明化刚显示的 VC
-    [[BackgroundManager sharedManager] makeViewControllerTransparent:viewController];
-    // 同时透明化栈中所有 VC（防止前一个页面透出残留，解决"前一页面未及时消失"问题）
-    for (UIViewController *stackVC in navigationController.viewControllers) {
-        [[BackgroundManager sharedManager] makeViewControllerTransparent:stackVC];
-    }
-    // 重新应用导航栏毛玻璃效果（防止 push 后 nav bar 样式被重置）
-    [[BackgroundManager sharedManager] applyEffectToNavigationBar:navigationController.navigationBar];
 }
 
 @end

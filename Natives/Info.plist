@@ -10,14 +10,15 @@
 	<string>en</string>
 	<!-- ★ [I18N] 声明我们真正支持的界面语言：iOS 会据此把系统语言(含变体)匹配到对应
 	     .lproj（并用于「设置 > App > 语言」列表）。与 AmeLauncherSupportedLanguageCodes() 一致；
-	     未列出的 .lproj 是上游遗留空壳，不声明，避免系统误配到"没翻译的语言"。 -->
+	     未列出的 .lproj 是上游遗留空壳，不声明，避免系统误配到"没翻译的语言"。
+	     ★ [AUDIT-DECIDE] E-2/A-8：已移除 km —— km.lproj 实为中文内容，声明它会让
+	     「设置 > App > 语言」把中文界面当高棉语列给用户。km.lproj 文件仍在包内但不再声明。 -->
 	<key>CFBundleLocalizations</key>
 	<array>
 		<string>zh-Hans</string>
 		<string>zh-Hant</string>
 		<string>en</string>
 		<string>ja</string>
-		<string>km</string>
 	</array>
 	<key>CFBundleDisplayName</key>
 	<string>Air</string>
@@ -237,6 +238,8 @@
 	</array>
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>

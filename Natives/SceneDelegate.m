@@ -11,12 +11,9 @@
 // ★ [MP-RESTORE] Terracotta 联机恢复
 #import "TerracottaManager.h"
 #import "TerracottaBridge.h"
+#import "VersionIsolationWizardViewController.h"   // ★ [VI-POLISH] 版本隔离首启向导（只写设置）
 
 extern UIWindow *mainWindow;
-
-// ★ [FG] Air Task32 的呈现面执法入口（定义在 SurfaceViewController.m）。
-//   设计上可周期性重复调用且幂等：pojavWindow 为空时直接返回 NO，非游戏态零副作用。
-extern BOOL Amethyst_EnforceSDL3Presentation(void);
 
 @interface SceneDelegate ()
 @end
@@ -28,13 +25,30 @@ extern BOOL Amethyst_EnforceSDL3Presentation(void);
     AmeLauncherPrimeLanguage();
     UIWindowScene *windowScene = (UIWindowScene *)scene;
     
-    // 强制横屏 (iOS 16+)
+    // 初始方向：让系统按 AppDelegate/各根 VC 的 mask 重新评估。
+    // ★ [API-GUARD] requestGeometryUpdateWithPreferences:（iOS 16+ 实例方法）与
+    //   UIWindowSceneGeometryPreferencesIOS（iOS 16+ 类）都不能直接调：
+    //   老系统（iOS 14/15）直接调 ⇒ unrecognized selector 闪退。
+    //   守门组合：@available 版本判定 + respondsToSelector: 实例方法探测 + NSClassFromString 运行期类查找。
+    //   老系统回退：attemptRotationToDeviceOrientation（iOS 5–16 官方"重评估方向"手段）。
     if (@available(iOS 16.0, *)) {
-        UIWindowSceneGeometryPreferencesIOS *geometryPreferences = [[UIWindowSceneGeometryPreferencesIOS alloc] init];
-        geometryPreferences.interfaceOrientations = UIInterfaceOrientationMaskAllButUpsideDown;   // ★ [PORTRAIT]
-        [windowScene requestGeometryUpdateWithPreferences:geometryPreferences errorHandler:^(NSError *error) {
-            NSLog(@"[SceneDelegate] Failed to update geometry: %@", error);
-        }];
+        if ([windowScene respondsToSelector:@selector(requestGeometryUpdateWithPreferences:errorHandler:)]) {
+            Class prefsCls = NSClassFromString(@"UIWindowSceneGeometryPreferencesIOS");   // ★ 运行期类查找
+            if (prefsCls != Nil) {
+                UIWindowSceneGeometryPreferencesIOS *geometryPreferences = [[prefsCls alloc] init];
+                geometryPreferences.interfaceOrientations = UIInterfaceOrientationMaskAllButUpsideDown;   // ★ [PORTRAIT]
+                [windowScene requestGeometryUpdateWithPreferences:geometryPreferences errorHandler:^(NSError *error) {
+                    NSLog(@"[SceneDelegate] Failed to update geometry: %@", error);
+                }];
+            } else {
+                NSLog(@"★ [GAME-LANDSCAPE] legacy path: UIWindowSceneGeometryPreferencesIOS 缺失 ⇒ 跳过初始 geometry 请求");
+            }
+        } else {
+            NSLog(@"★ [GAME-LANDSCAPE] legacy path: 场景不支持 requestGeometryUpdateWithPreferences: ⇒ 跳过初始 geometry 请求");
+        }
+    } else if ([UIViewController respondsToSelector:NSSelectorFromString(@"attemptRotationToDeviceOrientation")]) {
+        [UIViewController attemptRotationToDeviceOrientation];
+        NSLog(@"★ [GAME-LANDSCAPE] legacy path: iOS<16 ⇒ 初始方向走 attemptRotationToDeviceOrientation");
     }
     
     self.window = [[UIWindow alloc] initWithWindowScene:windowScene];
@@ -84,6 +98,13 @@ extern BOOL Amethyst_EnforceSDL3Presentation(void);
     // 延后一拍执行，等 rootViewController 完成首轮布局后再 present。
     dispatch_async(dispatch_get_main_queue(), ^{
         [UpdateChecker performStartupCheckFromPresenter:self.window.rootViewController];
+    });
+
+    // ★ [VI-FLOW] B：版本隔离向导 —— 每次进启动器都会再弹，直到用户主动选「以后不再提示」
+    //   （哨兵 internal.version_isolation_wizard_off 只在用户点该按钮时写；弹出时【不】写哨兵）。
+    //   延后一拍 + 可跳过 ⇒ 绝不阻碍启动；用户随时可从实例设置页的「版本隔离向导」入口重新打开。
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self amePresentVersionIsolationWizardIfNeeded];
     });
 
     // ★ [MP-RESTORE] 联机恢复 —— lazy init：启动路径上**不**创建 TerracottaManager /
@@ -226,6 +247,39 @@ extern BOOL Amethyst_EnforceSDL3Presentation(void);
     [presenter presentViewController:alert animated:YES completion:nil];
 }
 
+#pragma mark - ★ [VI-FLOW] B. 版本隔离向导（每次进启动器再弹，直到用户选「以后不再提示」）
+
+// ★ [VI-FLOW]（用户修正 1 + 补充）：需求是「弹到用户主动说『以后都不弹』为止」，因此：
+//   ① 入口只【读】哨兵（ameVIWizardShouldPresent）：未落 ⇒ YES（该弹，本次进入都会出现）；
+//      已落 ⇒ NO（用户已选「以后不再提示」）。
+//   ② 弹出【不写】哨兵 —— 哨兵只由向导页里的「以后不再提示」按钮写（写点唯一）。
+//      ⇒ 用户「跳过」/ 本次关闭 ≠ 以后不弹，下次进启动器仍会再出现。
+//   ③ 手动重开：实例设置页「版本隔离向导」入口直接走 amePresentVersionIsolationWizard，
+//      不经过本哨兵 ⇒ 哨兵落了也能随时再看。
+// 可跳过：向导页自带「跳过」按钮，什么都不写。
+// 不阻碍启动：以下在 dispatch_async(主队列) 里跑，启动路径不等它。
+// 呈现兜底：若已有模态（更新提示 / 翻译提示）就挂到最顶层模态上，避免 present 失败。
+- (void)amePresentVersionIsolationWizardIfNeeded {
+    if (!ameVIWizardShouldPresent()) return;   // ★ [VI-FLOW] 用户已选「以后不再提示」⇒ 不自动弹
+    [self amePresentVersionIsolationWizard];
+}
+
+// 实际弹出向导（自动入口与手动入口共用；本身不读/写哨兵）。
+- (void)amePresentVersionIsolationWizard {
+    UIViewController *presenter = self.window.rootViewController;
+    while (presenter.presentedViewController) presenter = presenter.presentedViewController;
+    if (!presenter) {
+        NSLog(@"★ [VI-FLOW] 向导：无可用 presenter，本次跳过");
+        return;
+    }
+
+    VersionIsolationWizardViewController *vc = [[VersionIsolationWizardViewController alloc] init];
+    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
+    nav.modalPresentationStyle = UIModalPresentationFormSheet;
+    [presenter presentViewController:nav animated:YES completion:nil];
+    NSLog(@"★ [VI-FLOW] 向导已弹出（只写设置、不搬文件；可跳过；可选「以后不再提示」）");
+}
+
 - (void)applyUITheme:(NSNotification *)notification {
     // 实时切换外观模式。仅修改 window.overrideUserInterfaceStyle，
     // 不触碰 PLPreferences 重置逻辑、不读写账号数据，确保切换主题不会导致账号退出。
@@ -245,54 +299,32 @@ extern BOOL Amethyst_EnforceSDL3Presentation(void);
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"UIThemeChanged" object:nil];
 }
 
-#pragma mark - ★ [FG] 前后台切换：暂停 / 恢复 / 呈现面自愈
-
-// 取证锚点：切后台与回前台各打一次 swap 计数。若回前台后 swapOK 不再增长，
-// 即证实渲染循环在后台被楔死（而不是 MC 单纯停在暂停菜单）。
-static void AmeFGLogSwapStats(NSString *phase) {
-    unsigned long ok = 0, fail = 0;
-    ame_egl_swap_stats(&ok, &fail);
-    NSLog(@"[FG-Lifecycle] %@: swapOK=%lu swapFail=%lu", phase, ok, fail);
-}
-
 - (void)sceneDidBecomeActive:(UIScene *)scene {
-    // ★ [FG] 回前台自愈：切后台/多任务切换期间，SDL 自建的空 UIWindow 与视图
-    //   z 序可能被系统重新抬到宿主窗口之上（Air Task32「空窗黑盖子」），
-    //   宿主 CAMetalLayer 被整块盖住即表现为回前台黑屏/卡住。这里补一次执法。
-    //   该函数内部全程 @try 且幂等，非游戏态（pojavWindow==nil）直接返回 NO。
-    @try {
-        BOOL did = Amethyst_EnforceSDL3Presentation();
-        NSLog(@"[FG-Lifecycle] didBecomeActive: presentation enforcement did=%d", (int)did);
-    } @catch (NSException *e) {
-        NSLog(@"[FG-Lifecycle] didBecomeActive: enforcement exception: %@", e);
-    }
-    // 重申窗口尺寸：让 MC 重新同步 framebuffer（内部已做 0 尺寸兜底）。
-    CallbackBridge_resumeGameIfNeed();
-    AmeFGLogSwapStats(@"didBecomeActive");
 }
 
 - (void)sceneWillResignActive:(UIScene *)scene {
-    // ★ [FG] 立刻暂停。原先只有 sceneDidEnterBackground 会暂停，但上滑回主屏 /
-    //   控制中心 / 通知中心 / 来电等场景里 didEnterBackground 要么晚到要么不到，
-    //   且 pauseGameIfNeed 原先被 isGrabbing 挡住（26.3+ 恒 0，实为空操作）——
-    //   MC 全程不知自己已进后台，仍按前台全速渲染，回前台即卡在半截状态。
-    AmeFGLogSwapStats(@"willResignActive");
-    CallbackBridge_pauseGameIfNeed();
 }
 
 - (void)sceneWillEnterForeground:(UIScene *)scene {
-    AmeFGLogSwapStats(@"willEnterForeground");
 }
 
 - (void)sceneDidEnterBackground:(UIScene *)scene {
-    // 幂等：已经停在暂停菜单时再发一次 ESC 无副作用。
-    AmeFGLogSwapStats(@"didEnterBackground");
     CallbackBridge_pauseGameIfNeed();
 }
 
 #pragma mark - Orientation Support (iOS 16+)
 
+// ★ [API-GUARD] 审计结论（存疑/死代码，但【不会崩】）：
+//   UIKit 并未声明 `scene:supportedInterfaceOrientationsForWindowScene:` 这个 selector
+//   （iPhoneOS26.2 SDK 全量检索无此符号，UIWindowSceneDelegate 协议里也没有）⇒ 系统不会调用本方法。
+//   真正的窗口层方向约束来自 AppDelegate 的
+//   `application:supportedInterfaceOrientationsForWindow:` + 各根 VC 的 supportedInterfaceOrientations。
+//   这里保留实现只为"万一某版本系统按未文档化协议调用时兜底"；因为只是被【定义】而从不被系统调用，
+//   所以它本身不会产生 unrecognized selector。若后续要真正控制窗口场景方向，请用 iOS16+
+//   requestGeometryUpdateWithPreferences:（已按 [API-GUARD] 做存在性守门）+ 根 VC mask。
 - (UIInterfaceOrientationMask)scene:(UIScene *)scene supportedInterfaceOrientationsForWindowScene:(UIWindowScene *)windowScene API_AVAILABLE(ios(16.0)) {
+    // ★ [GAME-LANDSCAPE] 启动中/游戏中收窄为仅横屏（与根 VC 层一致；未锁时与改动前逐字一致）
+    if (AmeGameLandscapeLockActive()) return UIInterfaceOrientationMaskLandscape;
     return UIInterfaceOrientationMaskAllButUpsideDown;   // ★ [PORTRAIT] 窗口层放开
 }
 

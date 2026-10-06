@@ -68,25 +68,15 @@
 
 #pragma mark - 工具方法
 
-// 解析 profile 的 gameDir，返回 gameDir 或 nil
+// 解析 profile 的 gameDir，返回「版本隔离」解析后的绝对路径
 - (nullable NSString *)gameDirForProfile:(NSString *)profileName {
     NSString *profile = profileName.length ? profileName : @"default";
+    // ★ [VI-SWITCH-UI] 统一 resolver（关 = 共享根；开 = versions/<版本 id>），不再自拼 gameDir。
+    NSDictionary *prof = nil;
     @try {
-        NSDictionary *profiles = PLProfiles.current.profiles;
-        NSDictionary *prof = profiles[profile];
-        if ([prof isKindOfClass:[NSDictionary class]]) {
-            NSString *gameDir = prof[@"gameDir"];
-            if ([gameDir isKindOfClass:[NSString class]] && gameDir.length > 0) {
-                return gameDir;
-            }
-        }
+        prof = PLProfiles.current.profiles[profile];
     } @catch (NSException *ex) { }
-
-    const char *gameDirC = getenv("POJAV_GAME_DIR");
-    if (gameDirC) {
-        return [NSString stringWithUTF8String:gameDirC];
-    }
-    return nil;
+    return amePCLVersionGameDirAbsolute(prof, nil);
 }
 
 #pragma mark - Saves folder detection & scan
@@ -97,30 +87,17 @@
     NSFileManager *fm = [NSFileManager defaultManager];
 
     @try {
-        NSDictionary *profiles = PLProfiles.current.profiles;
-        NSDictionary *prof = profiles[profile];
-        if ([prof isKindOfClass:[NSDictionary class]]) {
-            NSString *gameDir = prof[@"gameDir"];
-            if ([gameDir isKindOfClass:[NSString class]] && gameDir.length > 0) {
-                NSString *savesPath = [gameDir stringByAppendingPathComponent:@"saves"];
-                BOOL isDir = NO;
-                if ([fm fileExistsAtPath:savesPath isDirectory:&isDir] && isDir) {
-                    return savesPath;
-                }
+        NSDictionary *prof = PLProfiles.current.profiles[profile];
+        // ★ [VI-SWITCH-UI] 统一 resolver（关 = 共享根；开 = versions/<版本 id>），不再自拼 gameDir。
+        NSString *gameDir = amePCLVersionGameDirAbsolute(prof, nil);
+        if (gameDir.length > 0) {
+            NSString *savesPath = [gameDir stringByAppendingPathComponent:@"saves"];
+            BOOL isDir = NO;
+            if ([fm fileExistsAtPath:savesPath isDirectory:&isDir] && isDir) {
+                return savesPath;
             }
         }
     } @catch (NSException *ex) { }
-
-    // 回退：读取 POJAV_GAME_DIR 环境变量
-    const char *gameDirC = getenv("POJAV_GAME_DIR");
-    if (gameDirC) {
-        NSString *gameDir = [NSString stringWithUTF8String:gameDirC];
-        NSString *savesPath = [gameDir stringByAppendingPathComponent:@"saves"];
-        BOOL isDir = NO;
-        if ([fm fileExistsAtPath:savesPath isDirectory:&isDir] && isDir) {
-            return savesPath;
-        }
-    }
     return nil;
 }
 
@@ -130,16 +107,15 @@
     NSFileManager *fm = [NSFileManager defaultManager];
     NSString *savesPath = nil;
 
+    // ★ [VI-SWITCH-UI] 统一 resolver（关 = 共享根；开 = versions/<版本 id>），不再自拼 gameDir。
+    NSDictionary *prof = nil;
     @try {
-        NSDictionary *profiles = PLProfiles.current.profiles;
-        NSDictionary *prof = profiles[profile];
-        if ([prof isKindOfClass:[NSDictionary class]]) {
-            NSString *gameDir = prof[@"gameDir"];
-            if ([gameDir isKindOfClass:[NSString class]] && gameDir.length > 0) {
-                savesPath = [gameDir stringByAppendingPathComponent:@"saves"];
-            }
-        }
+        prof = PLProfiles.current.profiles[profile];
     } @catch (NSException *ex) { }
+    NSString *gameDirResolved = amePCLVersionGameDirAbsolute(prof, nil);
+    if (gameDirResolved.length > 0) {
+        savesPath = [gameDirResolved stringByAppendingPathComponent:@"saves"];
+    }
 
     if (!savesPath) {
         const char *gameDirC = getenv("POJAV_GAME_DIR");

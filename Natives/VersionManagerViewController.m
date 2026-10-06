@@ -14,6 +14,7 @@
 #import "utils.h"
 #import "ModLoaderIconHelper.h"
 #import "ModpackExportService.h" // for parseVersionId:
+#import "AmePerfProbe.h"        // ★ [PERF] 低开销滚动帧率探针（默认关）
 #import <QuartzCore/QuartzCore.h>
 
 // Section 索引：2 个 section（游戏目录 / 已安装版本）
@@ -75,6 +76,18 @@ static NSInteger const kSectionVersions    = 1;
 
     // 规范 6.2：第 2 层 BackgroundManager 毛玻璃
     [[BackgroundManager sharedManager] applyEffectToCollectionViewCell:self];
+}
+
+// ★ [PERF] 卡片外阴影必须给【显式 shadowPath】。
+//   只设 shadowOffset/Opacity/Radius 而不设 shadowPath 时，CoreAnimation 每帧都要按图层
+//   的 alpha 通道现算阴影形状（一次离屏绘制）—— 每个可见卡片都在滚动时重复这笔开销，
+//   是典型的滚动掉帧源。这里把阴影形状钉成「与卡片同尺寸同圆角的圆角矩形」，
+//   观感不变（阴影本来就是沿圆角卡片外沿投的），但阴影从「每帧现算」变成「一次缓存几何」。
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGFloat radius = self.contentView.layer.cornerRadius > 0 ? self.contentView.layer.cornerRadius : 12.0;
+    self.layer.shadowPath = [UIBezierPath bezierPathWithRoundedRect:self.bounds
+                                                      cornerRadius:radius].CGPath;
 }
 
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
@@ -720,6 +733,16 @@ static NSInteger const kSectionVersions    = 1;
 @property (nonatomic, strong) NSArray<NSString *> *graphicsApiNames;
 @property (nonatomic, strong) NSArray<NSString *> *graphicsApiIcons;
 @property (nonatomic, strong) NSArray<NSString *> *graphicsApiDescs;
+// ★ [PERF] 版本隔离判定结果缓存：判定里含【磁盘嗅探】(fileExistsAtPath + contentsOfDirectoryAtPath)，
+//   原先在 cellForItemAtIndexPath 里逐卡实时算 ⇒ 每次卡片出队 = 主线程文件 I/O（滚动卡顿主因）。
+//   现在只在数据加载时（loadProfiles，见 viewDidLoad / 切目录 / ReloadProfileList）算一次，
+//   滚动期间只查表。判定结果与观感完全不变，只是不再每帧重算。
+@property (nonatomic, strong) NSDictionary<NSString *, NSNumber *> *isolationByProfile;
+// ★ [PERF] 实例目录大小缓存 + 在算集合：算大小是【递归遍历整个实例目录】的重活，
+//   原先每次 VMGameDirCell 出队都重新跑一遍（横向滚动 = 每秒几十次全量磁盘遍历）。
+//   现在按目录名缓存，同一目录只算一次；方向键在 loadGameDirList 时整体失效。
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *gameDirSizeCache;
+@property (nonatomic, strong) NSMutableSet<NSString *> *gameDirSizeInFlight;
 @end
 
 @implementation VersionManagerViewController
@@ -1283,6 +1306,18 @@ static NSInteger const kSectionVersions    = 1;
         return [obj2 compare:obj1];
     }];
     self.selectedProfile = PLProfiles.current.selectedProfileName;
+
+    // ★ [PERF] 一次性算好各 profile 的版本隔离判定（含磁盘嗅探），滚动期间只查表。
+    //   本方法在 viewDidLoad / 切游戏目录 / ReloadProfileList 时被调用 ⇒ 缓存随之刷新，
+    //   判定时机与原「每张卡片实时算」在可见范围内等价（页面打开与数据变更时都是最新的）。
+    NSMutableDictionary<NSString *, NSNumber *> *isoMap = [NSMutableDictionary dictionaryWithCapacity:self.profileList.count];
+    for (NSString *name in self.profileList) {
+        NSDictionary *prof = PLProfiles.current.profiles[name];
+        if (![prof isKindOfClass:[NSDictionary class]]) continue;
+        // 与原 cellForItemAtIndexPath 里完全同一条判定（concreteVersionId 传 nil）
+        isoMap[name] = @(amePCLVersionIsolationForProfile(prof, nil));
+    }
+    self.isolationByProfile = isoMap;
 }
 
 /// 加载游戏目录（实例）列表
@@ -1303,6 +1338,10 @@ static NSInteger const kSectionVersions    = 1;
     self.gameDirList = list;
     id raw = getPrefObject(@"general.game_directory");
     self.currentGameDir = [raw isKindOfClass:[NSString class]] ? raw : @"default";
+    // ★ [PERF] 目录列表是唯一会改变「目录大小」的入口（新建/删除/切目录）⇒ 在此整体失效缓存，
+    //   保证缓存里的数字只在同一份目录列表内被复用。
+    self.gameDirSizeCache = [NSMutableDictionary dictionary];
+    self.gameDirSizeInFlight = [NSMutableSet set];
 }
 
 #pragma mark - UICollectionViewDataSource
@@ -1331,22 +1370,48 @@ static NSInteger const kSectionVersions    = 1;
         NSString *dirName = self.gameDirList[indexPath.item];
         BOOL isSelected = [dirName isEqualToString:self.currentGameDir];
 
-        // 异步计算目录大小
-        __weak typeof(self) weakSelf = self;
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            unsigned long long folderSize = 0;
-            NSString *directory = [NSString stringWithFormat:@"%s/instances/%@", getenv("POJAV_HOME"), dirName];
-            [weakSelf calculateFolderSizeAtPath:directory size:&folderSize];
-            NSString *sizeStr = [NSByteCountFormatter stringFromByteCount:folderSize countStyle:NSByteCountFormatterCountStyleMemory];
-            dispatch_async(dispatch_get_main_queue(), ^{
-                VMGameDirCell *targetCell = (VMGameDirCell *)[collectionView cellForItemAtIndexPath:indexPath];
-                if (targetCell && [targetCell isKindOfClass:[VMGameDirCell class]]) {
-                    targetCell.detailLabel.text = sizeStr;
-                }
-            });
-        });
+        // ★ [PERF] 目录大小是【递归枚举整个实例目录】的重活，原先每次 cell 出队（dequeue）都重跑一遍
+        //   ⇒ 横向滚动时每秒几十次全量磁盘遍历 + NSFileManager 属性查询（滚动卡顿主因之一）。
+        //   现在：命中缓存直接显示；未命中只发起一次（in-flight 去重），其余出队走占位文案。
+        //   观感不变（数字仍会异步补上），磁盘遍历次数从 O(出队次数) 降到 O(目录数)。
+        NSString *sizeStr = nil;
+        // 防御：容器正常由 loadGameDirList 建立；万一路径上先出卡也不会退化成「每次都重算」。
+        if (!self.gameDirSizeCache) self.gameDirSizeCache = [NSMutableDictionary dictionary];
+        if (!self.gameDirSizeInFlight) self.gameDirSizeInFlight = [NSMutableSet set];
+        NSNumber *cachedSize = self.gameDirSizeCache[dirName];
+        if (cachedSize) {
+            sizeStr = [NSByteCountFormatter stringFromByteCount:cachedSize.unsignedLongLongValue
+                                                      countStyle:NSByteCountFormatterCountStyleMemory];
+        }
+        [cell configureWithName:dirName detail:(sizeStr ?: localize(@"i18n_str_134", nil)) isSelected:isSelected isAddButton:NO];
 
-        [cell configureWithName:dirName detail:localize(@"i18n_str_134", nil) isSelected:isSelected isAddButton:NO];
+        if (!cachedSize && ![self.gameDirSizeInFlight containsObject:dirName]) {
+            [self.gameDirSizeInFlight addObject:dirName];
+            NSString *capturedDir = dirName;
+            __weak typeof(self) weakSelf = self;
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                unsigned long long folderSize = 0;
+                NSString *directory = [NSString stringWithFormat:@"%s/instances/%@", getenv("POJAV_HOME"), capturedDir];
+                [weakSelf calculateFolderSizeAtPath:directory size:&folderSize];
+                NSString *computedSizeStr = [NSByteCountFormatter stringFromByteCount:folderSize countStyle:NSByteCountFormatterCountStyleMemory];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    __strong typeof(weakSelf) strongSelf = weakSelf;
+                    if (!strongSelf) return;
+                    [strongSelf.gameDirSizeInFlight removeObject:capturedDir];
+                    strongSelf.gameDirSizeCache[capturedDir] = @(folderSize);
+                    // 只更新「当前仍在屏、且确实对应这个目录」的那张卡片（按目录名反查索引，
+                    // 不用出队时的 indexPath —— 复用/插入后索引可能已经变了）
+                    NSInteger idx = [strongSelf.gameDirList indexOfObject:capturedDir];
+                    if (idx == NSNotFound) return;
+                    NSIndexPath *ip = [NSIndexPath indexPathForItem:idx inSection:kSectionGameDir];
+                    VMGameDirCell *targetCell = (VMGameDirCell *)[collectionView cellForItemAtIndexPath:ip];
+                    if (targetCell && [targetCell isKindOfClass:[VMGameDirCell class]]) {
+                        targetCell.detailLabel.text = computedSizeStr;
+                    }
+                });
+            });
+        }
+
         return cell;
     } else {
         VMVersionCardCell *cell = [collectionView dequeueReusableCellWithReuseIdentifier:@"VersionCell" forIndexPath:indexPath];
@@ -1355,8 +1420,11 @@ static NSInteger const kSectionVersions    = 1;
         NSDictionary *profile = PLProfiles.current.profiles[profileName];
         NSString *versionId = profile[@"lastVersionId"] ?: localize(@"i18n_str_1052", nil);
         BOOL isSelected = [profileName isEqualToString:self.selectedProfile];
-        NSString *gameDir = profile[@"gameDir"] ?: @".";
-        BOOL isolated = ![gameDir isEqualToString:@"."];
+        // ★ [VI-SWITCH-UI] 隔离态以「版本隔离」统一 resolver 为准（显式 versionIsolation / 自动判定 /
+        //   全局默认），不再只看 gameDir —— 新的隔离开关不改写 gameDir，只看它会把已隔离的版本漏报成共享。
+        // ★ [PERF] 该判定含磁盘嗅探，已改为在 loadProfiles 里一次算好（见 isolationByProfile），
+        //   这里只查表 —— 滚动期间不再做任何文件 I/O。
+        BOOL isolated = [self.isolationByProfile[profileName] boolValue];
         NSString *lastPlayed = [self formatLastPlayed:profile[@"lastPlayed"]];
 
         [cell configureWithName:profileName version:versionId isSelected:isSelected isolated:isolated lastPlayed:lastPlayed];
@@ -1391,12 +1459,22 @@ static NSInteger const kSectionVersions    = 1;
     }
     if (ts <= 0) return @"";
     NSDate *date = [NSDate dateWithTimeIntervalSince1970:ts];
-    NSDateFormatter *fmt = [[NSDateFormatter alloc] init];
-    fmt.locale = [NSLocale currentLocale];
-    fmt.doesRelativeDateFormatting = YES;
-    fmt.dateStyle = NSDateFormatterShortStyle;
-    fmt.timeStyle = NSDateFormatterShortStyle;
-    return [NSString stringWithFormat:localize(@"i18n_str_1069", nil), [fmt stringFromDate:date]];
+    // ★ [PERF] NSDateFormatter 的创建成本很高（毫秒级，含 locale/calendar 解析）。
+    //   原先每张卡片每次配置都 new 一个 ⇒ 滚动时等于每帧若干次毫秒级开销。
+    //   改为进程内单例：只配置一次；locale 若在会话中变化则就地刷新（与原语义一致）。
+    static NSDateFormatter *sAmeLastPlayedFormatter = nil;
+    static dispatch_once_t sOnceToken;
+    dispatch_once(&sOnceToken, ^{
+        sAmeLastPlayedFormatter = [[NSDateFormatter alloc] init];
+        sAmeLastPlayedFormatter.doesRelativeDateFormatting = YES;
+        sAmeLastPlayedFormatter.dateStyle = NSDateFormatterShortStyle;
+        sAmeLastPlayedFormatter.timeStyle = NSDateFormatterShortStyle;
+    });
+    NSLocale *currentLocale = [NSLocale currentLocale];
+    if (![sAmeLastPlayedFormatter.locale isEqual:currentLocale]) {
+        sAmeLastPlayedFormatter.locale = currentLocale;
+    }
+    return [NSString stringWithFormat:localize(@"i18n_str_1069", nil), [sAmeLastPlayedFormatter stringFromDate:date]];
 }
 
 - (UICollectionReusableView *)collectionView:(UICollectionView *)collectionView viewForSupplementaryElementOfKind:(NSString *)kind atIndexPath:(NSIndexPath *)indexPath {
@@ -1428,6 +1506,11 @@ static NSInteger const kSectionVersions    = 1;
 }
 
 #pragma mark - UICollectionViewDelegate
+
+// ★ [PERF] 低开销滚动帧率探针（默认关，见 AmePerfProbe.h）。未启用时本方法退化成一次静态 BOOL 判断。
+- (void)scrollViewDidScroll:(UIScrollView *)scrollView {
+    [AmePerfProbe noteScrollActivity:@"VersionManager"];
+}
 
 - (void)collectionView:(UICollectionView *)collectionView didSelectItemAtIndexPath:(NSIndexPath *)indexPath {
     [collectionView deselectItemAtIndexPath:indexPath animated:YES];

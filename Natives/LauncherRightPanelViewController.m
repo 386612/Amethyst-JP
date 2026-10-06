@@ -876,6 +876,12 @@ static void *ProgressObserverContext = &ProgressObserverContext;
 - (void)updateJITStatus {
     if (!self.jitStatusLabel) return;
     BOOL enabled = isJITEnabled(NO);
+    // ★ [JB-ADAPT] 越狱环境：isJITEnabled 已收紧为"真实证据"（不再看 isJailbroken），
+    //   越狱原生 JIT 不置 CS_DEBUGGED、也无 dynamic-codesigning entitlement ⇒ 上面会得
+    //   假；这里用**真能力判据**补正（本进程能否直接把匿名页置 RX），避免状态误报"未开启"。
+    if (!enabled && AMEJailbreakNativeJITPathApplies() && AMEJailbreakNativeJITReady()) {
+        enabled = YES;
+    }
     // 三态显示（议题 #133）：TXM 机型上 JIT 可能"已启用"（CS_DEBUGGED 置位）
     // 而服务 brk #0x69 的调试器已脱离——这是预期可恢复状态（启动时自动重附加），
     // 用琥珀色区别于红色"未开启"，两边都不误报。
@@ -969,9 +975,8 @@ static void *ProgressObserverContext = &ProgressObserverContext;
     for (NSString *profileName in sortedNames) {
         NSDictionary *profile = profiles[profileName];
         NSString *versionId = profile[@"lastVersionId"] ?: @"";
-        // 检测是否启用版本隔离（gameDir != "."）
-        NSString *gameDir = profile[@"gameDir"] ?: @".";
-        BOOL isolated = ![gameDir isEqualToString:@"."];
+        // ★ [VER-ISOLATE-PCL] 检测是否启用版本隔离（统一解析：显式值/自动判定/全局默认）
+        BOOL isolated = amePCLVersionIsolationForProfile(profile, nil);
         NSMutableString *title = [NSMutableString string];
         if ([profileName isEqualToString:currentSelected]) {
             [title appendString:@"✓ "];
@@ -1193,6 +1198,12 @@ static void *ProgressObserverContext = &ProgressObserverContext;
         [PLProfiles.current save];
     }
 
+    // ★ [GAME-LANDSCAPE] 用户点「启动游戏」⇒ 立刻锁横屏（幂等）。
+    //   位置：所有校验（账号 / 实例 / 版本）已通过、正式进入启动流程之前。
+    //   ⇒ 从「启动中/加载中」到进世界全程横屏；校验失败仍留在启动器，不锁。
+    //   恢复点成对：UIKit_returnToSplitView（回启动器）+ 本类各失败分支 + SurfaceViewController.dealloc。
+    AmeGameLandscapeLockEnter();
+
     // 设置UI为下载状态
     [self setInteractionEnabled:NO];
     
@@ -1210,6 +1221,7 @@ static void *ProgressObserverContext = &ProgressObserverContext;
         } else {
             // 如果在远程列表中找不到，可能是本地版本
             dispatch_async(dispatch_get_main_queue(), ^{
+                AmeGameLandscapeLockExit();   // ★ [GAME-LANDSCAPE] 启动失败 ⇒ 立刻恢复启动器方向
                 [self setInteractionEnabled:YES];
                 [self showAlert:localize(@"i18n_str_432", nil)];
             });
@@ -1227,6 +1239,7 @@ static void *ProgressObserverContext = &ProgressObserverContext;
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         weakSelf.task.handleError = ^{
             dispatch_async(dispatch_get_main_queue(), ^{
+                AmeGameLandscapeLockExit();   // ★ [GAME-LANDSCAPE] 下载/启动出错 ⇒ 立刻恢复启动器方向（防"启动失败后仍被锁横屏"）
                 [weakSelf setInteractionEnabled:YES];
                 // 关键修复（UI 累积异常）：handleError 时未移除 KVO 观察者，
                 // task.progress 被释放后 KVO 仍指向已释放对象，多次启动会导致野指针崩溃。
@@ -1395,6 +1408,7 @@ static void *ProgressObserverContext = &ProgressObserverContext;
             }];
         } else {
             self.task = nil;
+            AmeGameLandscapeLockExit();   // ★ [GAME-LANDSCAPE] 拿不到 metadata = 启动没成 ⇒ 恢复启动器方向
             [self setInteractionEnabled:YES];
             // 通知刷新版本列表
             [[NSNotificationCenter defaultCenter] postNotificationName:@"ReloadProfileList" object:nil];
@@ -1403,7 +1417,30 @@ static void *ProgressObserverContext = &ProgressObserverContext;
 }
 
 - (void)invokeAfterJITEnabled:(void(^)(void))handler {
-    BOOL hasTrollStoreJIT = getEntitlementValue(@"jb.pmap_cs.custom_trust");
+    // ★ [JIT-FLOW] 原为 getEntitlementValue(@"jb.pmap_cs.custom_trust")：侧载模板
+    //   预写了该 entitlement，导致【每个侧载包】都判成 TrollStore 机，被送进
+    //   下面 apple-magnifier:// 那条 completionHandler:nil 的静默失败分支。
+    //   改用 entitlement【且】磁盘标记的 isTrollStoreInstall()。
+    BOOL hasTrollStoreJIT = isTrollStoreInstall();
+    NSLog(@"[JIT-FLOW] [RightPanel] invokeAfterJITEnabled: isJITEnabled=%d trollstore=%d keepAttached=%d ppid=%d jb=%@",
+          isJITEnabled(false), hasTrollStoreJIT, JIT26IsLikelyDebuggerKeepAttached(), getppid(), AMEJailbreakEnvSummary());
+
+    // ★ [JB-ADAPT] 越狱环境：JIT 原生可用（无需调试器 attach，也不需要外部 JIT 工具）。
+    //   先用**真能力自检**（本进程能否直接把匿名页置 RX；AMEJailbreakNativeJITReady 内部
+    //   即 DeviceCanCreateRXMap）确认，就绪 ⇒ 直接启动，**不再等待/调起外部 JIT 工具**。
+    //   不就绪 ⇒ 不加拦截，落回下方既有链路（TrollStore → 外部使能器 → stikjit://），
+    //   不把"越狱但本 App 未开 JIT"的用户挡死。
+    //   ⚠ 绝不因"检测到越狱"就放行：isJITEnabled 已不看 isJailbroken（[JB-ADAPT] 收紧）。
+    if (!isJITEnabled(false) && AMEJailbreakNativeJITPathApplies()) {
+        NSLog(@"[JB-ADAPT] [RightPanel] jailbreak env=%@ -- attempting native JIT (skipping external enabler)",
+              AMEJailbreakEnvSummary());
+        if (AMEJailbreakNativeJITReady()) {
+            NSLog(@"[JB-ADAPT] [RightPanel] native JIT verified -- launching directly without any external JIT tool");
+            handler();
+            return;
+        }
+        NSLog(@"[JB-ADAPT] [RightPanel] native JIT not ready -- falling back to configured enabler path");
+    }
     
     if (isJITEnabled(false)) {
         [ALTServerManager.sharedManager stopDiscovering];
@@ -1419,16 +1456,67 @@ static void *ProgressObserverContext = &ProgressObserverContext;
             [self jit_reattachJIT26ThenLaunch:handler];
             return;
         }
+        // ★ [JIT-FLOW] #115/#129/#151：快路径（越狱 / dynamic-codesigning entitlement /
+        //   粘滞 CS_DEBUGGED）是「能力声明」而非实测，直启会在 HotSpot 首个 brk #0x69
+        //   处闪退/卡死（越狱环境 SIGBUS 亦常源于此）。Universal 设备上先做一次真能力
+        //   自检（申请+写一小块 JIT 区）；不过就改走重挂（其等待也已改为已验证就绪）。
+        if (DeviceNeedsDebugJITMapping() &&
+            !getPrefBool(@"debug.jit26_script_disable") &&
+            !AMEJITVerifyWritableJITRegion()) {
+            NSLog(@"[JIT-FLOW] [RightPanel] isJITEnabled=1 but self-check failed (entitlement/jailbreak/sticky CS_DEBUGGED) -- re-attaching instead of launching");
+            [self jit_reattachJIT26ThenLaunch:handler];
+            return;
+        }
+        // ★ [JIT-FLOW] 三态可见化：isJITEnabled=1 但探针全灭 ⇒ CS_DEBUGGED 粘滞。
+        if (!JIT26IsLikelyDebuggerKeepAttached()) {
+            NSLog(@"[JIT-FLOW] [RightPanel] WARNING: isJITEnabled=1 but no live JIT26 debugger (ppid=%d traced=%d exn=%d); launch may hit brk #0x69",
+                  getppid(), JIT26DebuggerAttachedViaPtrace(), JIT26DebuggerViaExceptionPorts());
+        }
         NSLog(@"[JIT] [RightPanel] JIT enabled with live JIT26 debugger, launching directly");
         handler();
         return;
     } else if (hasTrollStoreJIT) {
+        // ★ [JIT-FLOW] 原为 completionHandler:nil：apple-magnifier:// 无人处理
+        //   （未装 TrollStore/StikDebug，或 TrollStore 未启用 URL Scheme）时
+        //   iOS 静默失败，UI 却照样弹「正在等待」⇒ 用户白等一整个超时窗口。
+        //   现在拿 urlOK 并在失败时给明确提示。
         NSURL *jitURL = [NSURL URLWithString:[NSString stringWithFormat:@"apple-magnifier://enable-jit?bundle-id=%@", NSBundle.mainBundle.bundleIdentifier]];
-        [UIApplication.sharedApplication openURL:jitURL options:@{} completionHandler:nil];
+        [UIApplication.sharedApplication openURL:jitURL options:@{} completionHandler:^(BOOL urlOK) {
+            NSLog(@"[JIT-FLOW] [RightPanel] openURL apple-magnifier:// (TrollStore) -> %d", urlOK);
+            if (!urlOK) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    showDialog(localize(@"Error", nil), @"apple-magnifier:// 无响应（TrollStore / StikDebug 未处理该 URL Scheme？）。请在 TrollStore 设置里启用 URL Scheme，或改用其它 JIT 开启方式。\napple-magnifier:// was not handled (TrollStore URL Scheme disabled?). Enable it in TrollStore settings, or use another JIT enabler.");
+                });
+            }
+        }];
     } else if (getPrefBool(@"debug.debug_skip_wait_jit")) {
         NSLog(@"Debug option skipped waiting for JIT. Java might not work.");
         handler();
         return;
+    } else if (AMEJITConfiguredExternalEnablerIsActive()) {
+        // ★ [JIT-ADAPT] 用户在设置里显式选了“非 stikjit”的 JIT 获取方式
+        //   (StikDebug(stikdebug://)/StosDebug/JitStreamer/SideJITServer/SideStore/
+        //    TrollStore/AltStore/Sideloadly/越狱/manual)。原 UI 路径完全忽略该偏好、
+        //   永远走 stikjit:// ⇒ 只装了这些工具的用户“点了没反应”。这里按偏好调起或引导；
+        //   判定「已开」仍只认下方统一的可验证自检(AMEJITWaitReadyVerified → 真拿可写 JIT 区)。
+        AMEJITEnablerActionResult jitAdaptAct = AMEJITOpenConfiguredExternalEnabler();
+        NSLog(@"[JIT-ADAPT] [RightPanel] configured enabler=%@ action=%ld",
+              AMEJITConfiguredEnablerKey(), (long)jitAdaptAct);
+        if (jitAdaptAct == AMEJITEnablerActionResultMissingTool) {
+            // 工具没装 / URL 无人处理 ⇒ 立刻给可辨识提示 + 安装建议，并走既有「重试/取消」
+            // 出路（取消时的方向与交互恢复同超时路径），不再白等一整个超时窗口。
+            showDialog(localize(@"jit.wait.abort.title", nil),
+                       [NSString stringWithFormat:localize(@"jit.wait.missing.tool", nil),
+                        AMEJITConfiguredEnablerDisplayName() ?: AMEJITConfiguredEnablerKey()]);
+            [self jit_showTimeoutRetryAlert:handler];
+            return;
+        }
+        // Opened / Manual ⇒ 落到下方统一「可验证等待 + 超时重试」；外部-attach 类
+        // (AltStore/Sideloadly/SideJITServer/越狱/manual)顺带给一次「怎么做」的引导。
+        NSString *jitAdaptGuideKey = AMEJITConfiguredEnablerGuidanceKey();
+        if (jitAdaptGuideKey.length > 0) {
+            showDialog(localize(@"jit.guide.title", nil), localize(jitAdaptGuideKey, nil));
+        }
     } else if (@available(iOS 17.4, *)) {
         NSString *scriptDataString = @"";
         if (DeviceNeedsDebugJITMapping()) {
@@ -1461,7 +1549,10 @@ static void *ProgressObserverContext = &ProgressObserverContext;
 
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         // 有界等待 120s + 心跳日志，超时走重试弹窗（替代裸 while 死循环）。
-        BOOL ok = ame169_waitForJITCondition(^{ return isJITEnabled(false); }, 120.0, @"isJITEnabled");
+        // ★ [JIT-FLOW] 等待条件由裸 isJITEnabled(false)（CS_DEBUGGED 粘滞 ⇒ attach
+        //   即 <2s 假阳性）改为 AMEJITWaitReadyVerified()：Universal 路径下必须真的
+        //   发 brk #0x69 拿到可写 JIT 区才算就绪，独立于外部工具的「完成」提示。
+        BOOL ok = ame169_waitForJITCondition(^{ return AMEJITWaitReadyVerified(); }, 120.0, @"JIT-FLOW verify");
         // 自愈式派发：后台被楔死的主队列上续接块可能丢失，三道防线兜底。
         ame185_dispatchToMainSelfHealing(^{
             if (jit_bgt != UIBackgroundTaskInvalid) {
@@ -1469,6 +1560,8 @@ static void *ProgressObserverContext = &ProgressObserverContext;
                 jit_bgt = UIBackgroundTaskInvalid;
             }
             if (ok) {
+                NSLog(@"[JIT-FLOW] [RightPanel] verified before launch (writable JIT region=%p)",
+                      AMEJITVerifiedRegionPtr());
                 // 后台态 dismiss 的 completion 可能悬空，completion:nil + 直接执行。
                 [alert dismissViewControllerAnimated:YES completion:nil];
                 // 等待成功不等于能安全启动：TXM 上调试器可能在等待期间再次脱离，
@@ -1482,6 +1575,10 @@ static void *ProgressObserverContext = &ProgressObserverContext;
                     handler();
                 }
             } else {
+                // ★ [JIT-FLOW] 外部工具（如 StikDebug）可能已弹自己的「jit complete」，
+                //   但我们独立自检（brk #0x69 -> 可写 JIT 区）未过 ⇒ 明确告知，
+                //   绝不静默继续启动（否则就是黑屏/闪退）。
+                NSLog(@"[JIT-FLOW] [RightPanel] stikdebug reported complete but self-check failed (brk #0x69 not serviced) -- NOT launching");
                 [alert dismissViewControllerAnimated:YES completion:nil];
                 [self jit_showTimeoutRetryAlert:handler];
             }
@@ -1532,7 +1629,7 @@ static void *ProgressObserverContext = &ProgressObserverContext;
 
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         // 等调试器真正存活（探针），绝不用 CS_DEBUGGED（早已置位，会抢跑进首个 brk）。
-        BOOL ok = ame169_waitForJITCondition(^{ return JIT26IsLikelyDebuggerKeepAttached(); }, 120.0, @"JIT26 debugger attach");
+        BOOL ok = ame169_waitForJITCondition(^{ return AMEJITWaitReadyVerified(); }, 120.0, @"JIT26 debugger attach");
         ame185_dispatchToMainSelfHealing(^{
             if (jit_bgt != UIBackgroundTaskInvalid) {
                 [UIApplication.sharedApplication endBackgroundTask:jit_bgt];
@@ -1555,7 +1652,10 @@ static void *ProgressObserverContext = &ProgressObserverContext;
     UIAlertController *retry = [UIAlertController alertControllerWithTitle:localize(@"i18n_str_437", nil)
                                                                    message:localize(@"jit.timeout_retry_msg", nil)
                                                             preferredStyle:UIAlertControllerStyleAlert];
-    [retry addAction:[UIAlertAction actionWithTitle:localize(@"resman.common.cancel", nil) style:UIAlertActionStyleCancel handler:nil]];
+    [retry addAction:[UIAlertAction actionWithTitle:localize(@"resman.common.cancel", nil) style:UIAlertActionStyleCancel handler:^(UIAlertAction * _Nonnull action) {
+        // ★ [GAME-LANDSCAPE] 用户取消启动 ⇒ 立刻恢复启动器方向（与 Enter 成对；防"启动失败/取消后仍被锁横屏"）
+        AmeGameLandscapeLockExit();
+    }]];
     [retry addAction:[UIAlertAction actionWithTitle:localize(@"jit.retry", nil) style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
         [self invokeAfterJITEnabled:handler];
     }]];
@@ -1629,9 +1729,8 @@ static void *ProgressObserverContext = &ProgressObserverContext;
         NSDictionary *profile = PLProfiles.current.profiles[selectedProfile];
         if (profile) {
             NSString *versionId = profile[@"lastVersionId"] ?: @"unknown";
-            // 显示版本隔离状态：gameDir != "." 表示已隔离
-            NSString *gameDir = profile[@"gameDir"] ?: @".";
-            BOOL isolated = ![gameDir isEqualToString:@"."];
+            // ★ [VER-ISOLATE-PCL] 显示版本隔离状态（统一解析：显式值/自动判定/全局默认）
+            BOOL isolated = amePCLVersionIsolationForProfile(profile, nil);
             if (isolated) {
                 self.versionLabel.text = [NSString stringWithFormat:localize(@"i18n_str_440", nil), versionId];
             } else {

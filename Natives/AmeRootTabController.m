@@ -12,8 +12,11 @@
 //
 #import "AmeRootTabController.h"
 #import "utils.h"   // ★ [I18N] localize()
+#import "ios_uikit_bridge.h"   // ★ [GAME-LANDSCAPE] 游戏方向锁状态查询(AmeGameLandscapeLockActive)
 #import "DownloadViewController.h"
 #import "VersionManagerViewController.h"
+// ★ [TAB-INST-REVERT] 「实例」标签改回单页 ⇒ 本文件不再需要 LauncherCardLayoutViewController.h
+//   (E1InstancesPanelView 不在这里实例化;类仍保留在 LauncherCardLayoutViewController.{h,m})。
 #import "LauncherPreferencesViewController.h"
 #import "AI/AISessionListViewController.h"
 // ★ [MP-RESTORE] 联机入口
@@ -23,6 +26,11 @@ NSString * const AmeTabTappedNotification = @"AmeTabTapped";   // ★ [ROOTTAB]
 
 @interface AmeRootTabController () <UITabBarControllerDelegate>   // ★ 声明协议,消掉 delegate 赋值警告
 @end
+
+// ★ [TAB-INST-REVERT] 已删除分段容器 InstancesTabViewController:「实例」标签(index 3)
+//   恢复为单页 VersionManagerViewController(与 [TAB-CROSSTALK] 之前一致,带它自己的导航栈/返回键行为)。
+//   E1 实例网格 E1InstancesPanelView 保留在 LauncherCardLayoutViewController.{h,m},
+//   但当前无活宿主(全仓无人调 e1ShowInstancesPage)⇒ 不在「主页」或「实例」标签下占任何位置。
 
 #pragma mark - ★ [TAB-OVERLAP] 零时长标签过渡(保证任一时刻只有一个页面视图)
 
@@ -101,7 +109,7 @@ static UIViewController *AmeWrapInNav(UIViewController *vc) {
             //   ★ 不包导航控制器 —— 包了会多一条导航栏,把内容整体压低(用户报"下载实例界面还是有点低")。
             case 1: content = [[DownloadViewController alloc] init]; break;
             case 2: content = [[AISessionListViewController alloc] init]; break;
-            case 3: content = [[VersionManagerViewController alloc] init]; break;
+            case 3: content = [[VersionManagerViewController alloc] init]; break;   // ★ [TAB-INST-REVERT] 实例标签 = 版本管理单页(恢复原状,无分段)
             case 4: content = [[LauncherPreferencesViewController alloc] init]; break;
             default: content = [[UIViewController alloc] init]; break;
         }
@@ -128,6 +136,21 @@ static UIViewController *AmeWrapInNav(UIViewController *vc) {
     [super viewDidLoad];
     // 标签控制器自己的 view 透明(否则会盖出一片黑);壁纸由 window 与各页面负责
     self.view.backgroundColor = [UIColor clearColor];
+}
+
+#pragma mark - ★ [GAME-LANDSCAPE] 启动/游戏中锁横屏（根控制器层）
+
+// 本类就是 App 的 window.rootViewController（SceneDelegate 装根），启动器各页住在它下面。
+// 窗口场景方向 = 根控制器链的交集 ⇒ 这里收窄是「启动中」这段时间锁横屏的**决定性**一层。
+// unlock 时返回 [super ...]（与改动前逐字一致：iPhone=allButUpsideDown / iPad=all），不改变原行为。
+- (BOOL)shouldAutorotate {
+    if (AmeGameLandscapeLockActive()) return NO;   // ★ [GAME-LANDSCAPE]
+    return [super shouldAutorotate];
+}
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    if (AmeGameLandscapeLockActive()) return UIInterfaceOrientationMaskLandscape;   // ★ [GAME-LANDSCAPE]
+    return [super supportedInterfaceOrientations];
 }
 
 #pragma mark - UITabBarControllerDelegate

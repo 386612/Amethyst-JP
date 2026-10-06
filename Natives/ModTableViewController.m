@@ -27,7 +27,8 @@
     // 适配自定义启动器背景：透明化当前 VC，让全局背景图/毛玻璃透出
     // ModTableViewController 是 UITableViewController 子类，makeViewControllerTransparent 会自动处理 tableView 背景透明化
     [[BackgroundManager sharedManager] makeViewControllerTransparent:self];
-    self.title = @"Mods";
+    // ★ [AUDIT-DECIDE] A-10：硬编码 "Mods" → 复用已有键 i18n_str_1283。
+    self.title = localize(@"i18n_str_1283", nil);
     [self.tableView registerClass:[ModTableViewCell class] forCellReuseIdentifier:@"ModCell"];
     self.tableView.rowHeight = 96;
 

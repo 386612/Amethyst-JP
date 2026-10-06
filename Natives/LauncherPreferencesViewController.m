@@ -272,7 +272,9 @@
             // ★ [I18N] 显示"实际生效的语言"（用户选择 ?? 系统最佳匹配 ?? en），与界面
             // 实际渲染同一事实源；选择"跟随系统"时再标注，杜绝"系统英文却说中文"。
             NSString *override = AmeLauncherPreferredLanguageOverride();
-            NSString *name = AmeLauncherDisplayNameForLanguageCode(AmeLauncherEffectiveLanguageCode());
+            // ★ [I18N-PARTIAL] 实际生效语言若是"部分翻译"语言（如日语），设置页这一处
+            // 显示为「日本語（部分翻译）」——与语言选单同一事实源、同一标注。
+            NSString *name = AmeLauncherDisplayNameAnnotatedForLanguageCode(AmeLauncherEffectiveLanguageCode());
             if (override.length == 0) {
                 return [NSString stringWithFormat:@"%@（%@）", name,
                         localize(@"preference.lang.follow_system", @"跟随系统")];
@@ -343,6 +345,15 @@
             if (on && !AMEGlassStyleSystemSupportsLiquid()) { on = NO; }
             [BackgroundManager sharedManager].glassRimEnabled = on;   // 兼容既有全局强度收敛
             AMEGlassStyleSetHandDrawnOverlayEnabled(on);
+            return;
+        }
+        // ★ [ISSUE-152] 游戏内悬浮球（小齿轮）显示开关：写 control.menu_button_visible，
+        //   并广播 AmeGameMenuButtonVisibilityChanged ⇒ 游戏内已存在的 GameMenuOverlayView
+        //   立刻按新值显隐（无需重启游戏/重进世界）。
+        if ([section isEqualToString:@"control"] && [key isEqualToString:@"menu_button_visible"]) {
+            setPrefObject(@"control.menu_button_visible", value);
+            [[NSNotificationCenter defaultCenter] postNotificationName:@"AmeGameMenuButtonVisibilityChanged"
+                                                                object:value];
             return;
         }
         NSString *keyFull = [NSString stringWithFormat:@"%@.%@", section, key];
@@ -628,6 +639,16 @@
               @"type": self.typeSwitch,
               @"enableCondition": whenNotInGame
             },
+            // ★ [VER-ISOLATE-PCL] 默认版本隔离（对齐 PCL-CE「默认实例隔离」LaunchArgumentIndieV2）：
+            // 关闭（默认）= 实例内各版本共享 mods/config/saves（现状）；
+            // 开启 = 新版本/未显式设置的版本默认隔离到 <实例根>/versions/<版本 id>/。
+            // 单版本可在「编辑配置」页用 versionIsolation 开关覆盖（对应 PCL 的实例设置页）。
+            @{@"key": @"version_isolation",
+              @"hasDetail": @YES,
+              @"icon": @"square.on.square.dashed",
+              @"type": self.typeSwitch,
+              @"enableCondition": whenNotInGame
+            },
             @{@"key": @"announcement_preview_level",
               @"hasDetail": @YES,
               @"icon": @"megaphone",
@@ -858,8 +879,14 @@
             // 当渲染器选择为 MobileGlues 或 Vulkan 时，init_loadMobileGluesConfig()
             // 写入的 <POJAV_HOME>/MG/config.json 会被 MobileGlues 读取并生效。
             // Vulkan 渲染器的 OpenGL 回退使用 MobileGlues（对齐 Ynnyny 仓库）。
-            // ★ [DROP-ANGLE] 原 enable_angle 开关已随 Angle 渲染器一并移除。
+            // Auto 渲染器会被解析为 ANGLE，不会加载 MobileGlues。
             @{@"icon": @"cpu"},
+            @{@"key": @"enable_angle",
+              @"hasDetail": @YES,
+              @"icon": @"triangle",
+              @"type": self.typeSwitch,
+              @"enableCondition": whenNotInGame
+            },
             @{@"key": @"enable_no_error",
               @"hasDetail": @YES,
               @"icon": @"exclamationmark.triangle",
@@ -1146,6 +1173,16 @@
                 @"icon": @"cursorarrow.click.2",
                 @"type": self.typeSwitch,
             },
+            // ★ [TAP-BTN] 「非按键区域轻触默认动作」开关（沿用本页既有 UISwitch 样式）：
+            //   开 = 点非按键区域(游戏视野)的轻触恒发左键；关(默认) = 不改变现状，仍按
+            //   tap_click_mode 智能判定(auto/单键通用)。仅当上方「轻触发键方式」为 auto 时生效
+            //   （显式选了恒左/恒右则后者优先）。写入 control.tap_default_left，设置页
+            //   setPreference 走通用路径 setPrefObject ⇒ 游戏内每次轻触实时 getPrefBool 读取，即时生效。
+            @{@"key": @"tap_default_left",
+                @"hasDetail": @YES,
+                @"icon": @"hand.tap.fill",
+                @"type": self.typeSwitch,
+            },
             @{@"key": @"button_scale",
                 @"hasDetail": @YES,
                 @"icon": @"aspectratio",
@@ -1170,6 +1207,15 @@
             @{@"key": @"virtmouse_enable",
                 @"hasDetail": @YES,
                 @"icon": @"cursorarrow.rays",
+                @"type": self.typeSwitch
+            },
+            // ★ [ISSUE-152] 隐藏游戏内悬浮球（小齿轮）：
+            //   复用既有 UISwitch 开关样式（本页 typeSwitch），标题走 preference.title.menu_button_visible
+            //   （四语言已同步）；写入 control.menu_button_visible，设置页 setPreference 里广播即时生效。
+            //   默认关=显示（不改变现状）。
+            @{@"key": @"menu_button_visible",
+                @"hasDetail": @YES,
+                @"icon": @"gearshape.fill",
                 @"type": self.typeSwitch
             },
             @{@"key": @"gyroscope_enable",
@@ -1219,6 +1265,16 @@
                 @"hasDetail": @YES,
                 @"icon": @"terminal",
                 @"type": self.typeTextField,
+                @"enableCondition": whenNotInGame
+            },
+            // ★ [DYLD-SWITCH] dyld 旁路总开关。真机 A/B 证实旁路是 MC 26.2 启动崩溃的元凶
+            // （旁路开 → 卡死 dlopen(libjli)；关 → JVM 正常起来），故默认关闭。
+            // 仅在确认本机确实需要时才开启；改动需完全重启 App 生效。
+            // 来源 fork 分支 fix/dyld-bypass-default-off @ c26262a58b。
+            @{@"key": @"dyld_bypass",
+                @"hasDetail": @YES,
+                @"icon": @"wrench.and.screwdriver",
+                @"type": self.typeSwitch,
                 @"enableCondition": whenNotInGame
             },
             @{@"key": @"auto_ram",
@@ -1293,7 +1349,13 @@
                     @"sidestore",
                     @"stosdebug",
                     @"jitstreamer",
+                    // ★ [JIT-ADAPT] 新增:逐工具适配「本机无 URL 可调、需用户手动开」的方式。
+                    //   与 URL 类工具一样走统一可验证自检;仅引导文案/前置条件不同。
+                    @"sidejitserver",
+                    @"altstore",
+                    @"sideloadly",
                     @"trollstore",
+                    @"jailbreak",
                     @"manual"
                 ],
                 @"pickList": @[
@@ -1303,7 +1365,11 @@
                     localize(@"preference.debug.jit_enabler.sidestore", nil),
                     localize(@"preference.debug.jit_enabler.stosdebug", nil),
                     localize(@"preference.debug.jit_enabler.jitstreamer", nil),
+                    localize(@"preference.debug.jit_enabler.sidejitserver", nil),
+                    localize(@"preference.debug.jit_enabler.altstore", nil),
+                    localize(@"preference.debug.jit_enabler.sideloadly", nil),
                     localize(@"preference.debug.jit_enabler.trollstore", nil),
+                    localize(@"preference.debug.jit_enabler.jailbreak", nil),
                     localize(@"preference.debug.jit_enabler.manual", nil)
                 ]
             },

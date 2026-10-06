@@ -853,7 +853,11 @@
     NSString *extension = url.pathExtension.lowercaseString;
     
     if ([@[@"jpg", @"jpeg", @"png", @"heic"] containsObject:extension]) {
+        // ★ [ISSUE-FIX] #92（同类）：Document Picker 返回的是 security-scoped URL，
+        //   未取用作用域时 imageWithContentsOfFile: 返回 nil（表现为「选图无反应」）。
+        BOOL ame92Scoped = [url startAccessingSecurityScopedResource];
         UIImage *image = [UIImage imageWithContentsOfFile:url.path];
+        if (ame92Scoped) [url stopAccessingSecurityScopedResource];
         if (image) [self processSelectedImage:image];
     } else if ([@[@"mp4", @"mov", @"m4v"] containsObject:extension]) {
         [self processSelectedVideo:url];

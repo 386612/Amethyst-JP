@@ -405,17 +405,7 @@ static UIView *findSDL_uikitview(UIView *root);
 
 // æ£æ¥è§å¾æ¯å¦å·²å³é­
 - (BOOL)isViewDismissed {
-    // 修复：self.view.window 和 self.isBeingDismissed 是 UIKit 属性，
-    // 必须在主线程访问。从后台线程 TouchController 循环调用时需 dispatch 到主线程。
-    __block BOOL dismissed = NO;
-    if ([NSThread isMainThread]) {
-        dismissed = !self.view.window || self.isBeingDismissed;
-    } else {
-        dispatch_sync(dispatch_get_main_queue(), ^{
-            dismissed = !self.view.window || self.isBeingDismissed;
-        });
-    }
-    return dismissed;
+    return !self.view.window || self.isBeingDismissed;
 }
 
 // ç¼ç  ProxyMessage: AddPointerMessage (type=1, index=int32, x=float, y=float)
@@ -1304,8 +1294,41 @@ static UIView *findSDL_uikitview(UIView *root);
     [super viewDidAppear:animated];
     [self setNeedsUpdateOfPrefersPointerLocked];
 
+    // ★ [GAME-LANDSCAPE] 补锁（幂等）：即使某条启动路径漏调 Enter，游戏曲面一旦上屏也保证仅横屏。
+    AmeGameLandscapeLockEnter();
+    // ★ [API-GUARD] setNeedsUpdateOfSupportedInterfaceOrientations 是 iOS 16+ 才有的【实例方法】。
+    //   老系统（iPad iOS 14/15）上本行直接发消息 ⇒ -[SurfaceViewController
+    //   setNeedsUpdateOfSupportedInterfaceOrientations]: unrecognized selector ⇒
+    //   NSInvalidArgumentException 闪退 —— 这就是本机型闪退的崩溃点(viewDidAppear +96)。
+    //   双重守门：① @available 版本判定（编译期不依赖该符号）② respondsToSelector: 运行期确认真的存在。
+    //   老系统回退：attemptRotationToDeviceOrientation（iOS 5–16 官方"让系统重评估方向"手段）
+    //   —— 本 VC 的 supportedInterfaceOrientations 已恒返回仅横屏，重评估即可归位横屏。
+    if (@available(iOS 16.0, *)) {
+        if ([self respondsToSelector:@selector(setNeedsUpdateOfSupportedInterfaceOrientations)]) {
+            [self setNeedsUpdateOfSupportedInterfaceOrientations];
+        }
+    } else if ([UIViewController respondsToSelector:NSSelectorFromString(@"attemptRotationToDeviceOrientation")]) {
+        [UIViewController attemptRotationToDeviceOrientation];
+        NSLog(@"★ [GAME-LANDSCAPE] legacy path: iOS<16 ⇒ attemptRotationToDeviceOrientation 重评估方向(本 VC 恒 landscape)");
+    }
+
     // LAN 端口检测器已改为手动输入模式（LanPortDetector.h 说明），
     // 自动检测（startDetecting/stopDetecting）已移除，无需在此启动。
+}
+
+#pragma mark - ★ [GAME-LANDSCAPE] 游戏内方向硬锁（只要本 VC 在屏幕上就只能是横屏）
+
+// 与窗口层/根控制器层的锁（AmeGameLandscapeLockActive）互为双保险：
+//   ① 窗口层：游戏曲面是 window.rootViewController ⇒ 这里的返回值就是系统看到的第一道方向约束；
+//   ② 状态层：Enter/Exit 的幂等状态让启动器侧各页在「加载中」也跟着锁横屏。
+// 注意：本 VC 不以模态覆盖自身时不会被 viewWillDisappear 触发（游戏内菜单/日志是覆盖式呈现），
+//   所以解锁不在 viewWillDisappear 做（会被游戏内弹出的模态误触发），只走 returnToSplitView + dealloc。
+- (BOOL)shouldAutorotate {
+    return NO;   // ★ [GAME-LANDSCAPE] 游戏内锁住：不跟随设备旋转
+}
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    return UIInterfaceOrientationMaskLandscape;   // ★ [GAME-LANDSCAPE] 仅横屏
 }
 
 - (void)viewDidLayoutSubviews {
@@ -1525,10 +1548,7 @@ static UIView *findSDL_uikitview(UIView *root);
 
 - (void)updateGrabState {
     if (isGrabbing == JNI_TRUE) {
-        // Task59：contentsScale 已被 Task52 呈现对齐钉成 1.0，作输入乘数会缺 ×2
-        // （lastVirtualMousePoint 是点，乘 1 后落入 MC 2360 像素空间的 1/4 处）。
-        // 与 sendTouchPoint 同口径：用 screenScale（scene.screen.scale，即 2.0）。
-        CGFloat screenScale = self.screenScale > 0 ? self.screenScale : UIScreen.mainScreen.scale;
+        CGFloat screenScale = self.surfaceView.layer.contentsScale;
         CallbackBridge_nativeSendCursorPos(ACTION_DOWN, lastVirtualMousePoint.x * screenScale, lastVirtualMousePoint.y * screenScale);
         virtualMouseFrame.origin.x = self.view.frame.size.width / 2;
         virtualMouseFrame.origin.y = self.view.frame.size.height / 2;
@@ -1877,19 +1897,72 @@ static BOOL ame87_mcVersionRequiresTextureBuffer(NSString *mcVersionId) {
                                                  name:@"PojavFirstFrameRendered"
                                                object:nil];
 
-    // 兜底：关闭 SDL GL bridge 后，GL 上下文由 SDL 自行管理，egl_bridge 的
-    // pojavSwapBuffers 不再被调用，"PojavFirstFrameRendered" 永远不会发出，
-    // 遮罩就会一直盖住画面，看起来像卡死（实测导致用户误判并手动取消启动）。
-    // 这里加一个宽松的超时，到点直接移除遮罩 —— 遮罩只是加载提示，
-    // 不该成为进入游戏的门槛。
+    // ★ [SDL-FIRSTFRAME] 超时判定改为「证据化」，并撤掉旧的错误归因。
+    //
+    // 前身（必须修掉的原因）：到点无条件打出「no PojavFirstFrameRendered received
+    // (SDL owns the GL context; egl_bridge swap is not used)」——**把一条未经证实的
+    // 推测当成本次启动失败的结论**。真机反例（iPad Pro 11 / iPadOS 16.3.1 /
+    // TrollStore / MobileGlues / MC 26.2）：分析者据此把现场判成「SDL 钩子没装上
+    // ⇒ sdlWin=0x0 ⇒ 没首帧」。事实是 MC 26.2 走 GLFW（LWJGL 3.4.1 库表有
+    // lwjgl-glfw、无 lwjgl-sdl），**从不查询 SDL\* 名字** ⇒ 零 [SDLHook] 与
+    // sdlWin=0x0 都是设计内行为，与「有没有首帧」无关。
+    //
+    // 现在：到点先取三组真实证据再分流 ——
+    //   ① 呈现计数器（gl_bridge 的 eglSwapBuffers 成功/失败，两条 GL 桥呈现路径都计数）
+    //   ② dlsym 钩子活性（hooked_dlsym 调用次数 / 其中 SDL* 名字次数）
+    //   ③ SDL3 兼容层是否被咨询/接管
+    // 依据 ① 分流：swapOK>0 ⇒ 画面已在出帧，缺的只是通知 ⇒ 按成功撤遮罩（不写 launch
+    // error）；swapOK==0 ⇒ 确实没走到交换，据实写明「未呈现」，不再赖到 SDL 头上。
+    // 注意 Vulkan/Metal 直渲场次本就不走 gl 桥计数器（swapOK 恒 0），故判据行里
+    // 明确标注计数器口径，避免又一次误读。
     __weak typeof(self) weakSelf = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(45 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf || strongSelf.launchOverlayDismissed) return;
-        NSLog(@"[SurfaceViewController] Launch overlay timeout after 45s: "
-              @"no PojavFirstFrameRendered received (SDL owns the GL context; "
-              @"egl_bridge swap is not used). Dismissing overlay so it cannot block gameplay.");
-        [strongSelf dismissLaunchOverlayOnError];
+
+        unsigned long ameSwapOK = 0, ameSwapFail = 0;
+        ame_egl_swap_stats(&ameSwapOK, &ameSwapFail);
+        unsigned long ameDlsymCalls = 0, ameSdlNames = 0;
+        ame_sdlhook_probe(&ameDlsymCalls, &ameSdlNames);
+        unsigned long ameSdlConsulted = 0, ameSdlTakenOver = 0;
+        amethyst_sdl3_hook_stats(&ameSdlConsulted, &ameSdlTakenOver);
+
+        // 窗口链判定：SDL 名字只有 SDL3 链（MC 26.3+）才会查。确认走 GLFW 时，
+        // 现场里的零 [SDLHook]/sdlWin=0x0 一律不得再当作故障证据。
+        const char *ameWindowPath =
+            (ameSdlConsulted > 0)          ? "SDL3(MC 26.3+, lwjgl-sdl)"
+          : (ameDlsymCalls > 0)            ? "GLFW/非SDL(MC <=26.2 走 GLFW；或 Metal 直渲)"
+          :                                  "UNKNOWN(dlsym 钩子从未被调用——先看 self-test 行)";
+        const char *ameHookState =
+            (ameDlsymCalls == 0)           ? "NOT-CONSULTED(钩子从未被调用，见启动期 self-test)"
+          : (ameSdlConsulted > 0 && ameSdlTakenOver == 0) ? "CONSULTED-BUT-NOT-TAKEN-OVER(真·未生效)"
+          : (ameSdlConsulted > 0)          ? "SDL3-HOOK-ACTIVE"
+          :                                  "LIVE-但本场未查 SDL(正常)";
+        const char *ameVerdict =
+            (ameSwapOK > 0)                ? "FRAMES PRESENTED(swapOK>0)——45s 缺的是首帧通知，不是渲染"
+          : (ameSwapFail > 0)              ? "PRESENT FAILING(swapFail>0)——交换在跑但一直失败"
+          :                                  "NEVER PRESENTED(swapOK=0 swapFail=0)——启动未达交换阶段";
+
+        NSLog(@"[SurfaceViewController] Launch overlay timeout after 45s [SDL-FIRSTFRAME] evidence: "
+              @"%s | 窗口链=%s | dlsym钩子=%s | "
+              @"present swapOK=%lu swapFail=%lu（gl 桥计数口径；Vulkan/Metal 直渲恒 0）| "
+              @"hooked_dlsym 调用=%lu（其中 SDL* 名字=%lu）| SDL3 兼容层 consulted=%lu takenOver=%lu",
+              ameVerdict, ameWindowPath, ameHookState,
+              ameSwapOK, ameSwapFail, ameDlsymCalls, ameSdlNames, ameSdlConsulted, ameSdlTakenOver);
+
+        if (ameSwapOK > 0) {
+            // 画面确实在出帧（eglSwapBuffers 成功过）——这是通知缺口，按成功路径撤遮罩。
+            NSLog(@"[SDL-FIRSTFRAME] dismissing launch overlay: frames confirmed by swap counter "
+                  @"(notification gap, NOT a launch error)");
+            [strongSelf onFirstFrameRendered];
+            return;
+        }
+        // ★ [SDL-FIRSTFRAME] 明确写成「超时且未呈现」，不再复用「launch error」文案，
+        //   也不再把原因归到 'SDL owns the GL context / egl_bridge swap is not used'
+        //   （该说法未被证实，且已被 26.2=GLFW 装机日志证伪）。
+        [strongSelf ameDismissLaunchOverlayWithReason:
+            @"Launch overlay dismissed after 45s timeout: no frame presented (see [SDL-FIRSTFRAME] "
+            @"evidence line above; cause NOT attributed to 'SDL owns the GL context')"];
     });
 }
 
@@ -2011,6 +2084,14 @@ static BOOL ame87_mcVersionRequiresTextureBuffer(NSString *mcVersionId) {
 
 /// 启动失败时移除遮罩层（JVM 启动失败、metadata 为空等错误路径调用）
 - (void)dismissLaunchOverlayOnError {
+    // ★ [SDL-FIRSTFRAME] 保留原方法名/原日志文案（既有调用点与日志检索依赖它），
+    //   只把实现转交到带原因的私有版本，让「超时」不再冒充「启动错误」。
+    [self ameDismissLaunchOverlayWithReason:@"Launch overlay dismissed due to launch error"];
+}
+
+/// ★ [SDL-FIRSTFRAME] 带原因的遮罩移除（纯文案区分，UI 行为与 dismissLaunchOverlayOnError
+/// 完全一致：同样的 stopAnimating / removeObserver / removeFromSuperview 序列）。
+- (void)ameDismissLaunchOverlayWithReason:(NSString *)reason {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (self.launchOverlayDismissed) return;
         self.launchOverlayDismissed = YES;
@@ -2024,7 +2105,7 @@ static BOOL ame87_mcVersionRequiresTextureBuffer(NSString *mcVersionId) {
         self.launchGradientLayer = nil;
         [self.launchCancelButton removeFromSuperview];
         self.launchCancelButton = nil;
-        NSLog(@"[SurfaceViewController] Launch overlay dismissed due to launch error");
+        NSLog(@"[SurfaceViewController] %@", reason);
     });
 }
 
@@ -2157,12 +2238,7 @@ static BOOL ame87_mcVersionRequiresTextureBuffer(NSString *mcVersionId) {
 
 - (void)sendTouchEvent:(UITouch *)touchEvent withUIEvent:(UIEvent *)uievent withEvent:(int)event
 {
-    // Task59：rootView 比 surfaceView 宽 30pt（菜单溢出，层级转储 1210x820 层），
-    // 游戏画面在 rootView 内两侧各缩进 15pt——用 rootView 坐标会给启动器直发
-    // 路径引入 +15pt 恒定水平偏移，且与 TouchController mod 的 surfaceView
-    // 归一化口径不一致。改用 surfaceView 参考系（mod 路径同款，下游
-    // touchHotbar 的 phys=2360x1640 数学也以游戏表面为基准）。
-    CGPoint locationInView = [touchEvent locationInView:self.surfaceView];
+    CGPoint locationInView = [touchEvent locationInView:self.rootView];
     switch (event) {
         case ACTION_DOWN:
             self.clickRange = CGRectMake(locationInView.x - 2, locationInView.y - 2, 5, 5);
@@ -2501,15 +2577,26 @@ static btRawAXFunc btRawAXGet(void) {
 //   优先新键 control.tap_click_mode ∈ {auto,left,right}；
 //   向后兼容旧键 control.tap_click_button_right(=YES ⇒ 强制 right，即旧"轻触=右键放置")。
 //   非法/缺失一律回退 auto。两端都是 NSString 比较，无需新增 getPrefString。
+// ★ [TAP-BTN] 新增「非按键区域轻触默认动作」开关 control.tap_default_left(BOOL)：
+//   仅在【没有显式模式选择】时把轻触默认动作切成左键（ON ⇒ left）。优先级(高→低)：
+//     ① control.tap_click_button_right == YES           → right（旧键显式，兼容）
+//     ② control.tap_click_mode ∈ {left,right}(非 auto)   → 该键（设置页显式选择）
+//     ③ control.tap_default_left  == YES                → left（本开关；只改写 auto 兜底）
+//     ④ 否则                                            → auto（智能/单键通用，现状默认）
+//   默认全 OFF ⇒ 永远回 auto ⇒ 【零行为变化】。作用范围见 handleTapClickIfQualified：
+//   其唯一调用方 surfaceOnClick 挂在 self.touchView(游戏视野层)，控制按钮在 ctrlView，
+//   故本开关只影响"非按键区域"的轻触，绝不动屏幕上真实按钮。
 - (NSString *)tapClickEffectiveMode {
     if (getPrefBool(@"control.tap_click_button_right")) return @"right";  // 旧开关优先(兼容)
     id v = getPrefObject(@"control.tap_click_mode");
     if ([v isKindOfClass:[NSString class]]) {
         NSString *s = [(NSString *)v lowercaseString];
-        if ([s isEqualToString:@"left"] || [s isEqualToString:@"right"] || [s isEqualToString:@"auto"]) {
-            return s;
+        if ([s isEqualToString:@"left"] || [s isEqualToString:@"right"]) {
+            return s;   // ★ [TAP-BTN] 设置页的显式选择优先于本开关
         }
     }
+    // ★ [TAP-BTN] auto 兜底：用户打开「非按键区域轻触默认发左键」时改发真左键。
+    if (getPrefBool(@"control.tap_default_left")) return @"left";
     return @"auto";
 }
 
@@ -3579,6 +3666,9 @@ CALayer *Amethyst_SDL3RenderLayer(void) {
 }
 
 - (void)dealloc {
+    // ★ [GAME-LANDSCAPE] 幂等兜底：本 VC 销毁 = 游戏结束。正常退出走 UIKit_returnToSplitView（已 Exit），
+    //   这里覆盖异常路径（崩溃回收 / 曲面被直接替换）——重复 Exit 无副作用。
+    AmeGameLandscapeLockExit();
     // 停止 FPS/内存采样定时器与渲染循环
     [self.statsTimer invalidate];
     self.statsTimer = nil;

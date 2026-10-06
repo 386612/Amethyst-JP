@@ -17,7 +17,7 @@
 //
 //  enhance-ai-agent 第二轮增强：
 //  - Modrinth 请求链：官方 → MCIM 镜像（mod.mcimirror.top）→ 官方重试；下载文件双候选
-//    （官方 CDN → cdn.mcimirror.top 镜像），失败自动切换（PLDownloadClient candidateURLs）。
+//    （官方 CDN → mod.mcimirror.top 镜像），失败自动切换（PLDownloadClient candidateURLs）。
 //  - 版本清单链：BMCLAPI 默认 → official 兜底（不依赖 general.download_source 偏好）。
 //  - latest 别名：install_loader 的 loaderVersion 与资源安装的 versionId 均可传
 //    "latest"/"latest-release"，等价于自动选择最新稳定版，无需先拉版本列表。
@@ -40,6 +40,7 @@
 #import "MinecraftResourceDownloadTask.h"
 #import "PLTaskStages.h"
 #import "AiSafetyManager.h"
+#import "utils.h"   // ★ [VER-ISOLATE-PCL] 版本隔离统一解析
 
 /// 工具错误域与常见错误码
 static NSString * const kAiAssetToolDomain = @"AiAssetTool";
@@ -120,7 +121,7 @@ static BOOL aiIsLatestAlias(NSString *s) {
                  completion:(void (^)(NSString * _Nullable result, NSError * _Nullable error))completion;
 
 /// 下载一个文件到目标目录（增强版）：
-/// - 下载候选含 MCIM 镜像（cdn.modrinth.com → cdn.mcimirror.top），失败自动切换；
+/// - 下载候选含 MCIM 镜像（cdn.modrinth.com → mod.mcimirror.top），失败自动切换；
 /// - waitForCompletion=NO 时注册任务后立即回调「已加入后台下载」，下载继续后台进行，
 ///   终态仅回调 onFinished（可为 nil）；
 /// - waitForCompletion=YES 时行为同旧版（completion 在终态回调），onFinished 亦会触发。
@@ -1111,7 +1112,9 @@ static BOOL aiIsLatestAlias(NSString *s) {
         NSDictionary *profiles = [PLProfiles current].profiles;
         NSDictionary *prof = [profiles isKindOfClass:[NSDictionary class]] ? profiles[profile] : nil;
         if ([prof isKindOfClass:[NSDictionary class]]) {
-            NSString *gameDir = prof[@"gameDir"];
+            // ★ [VER-ISOLATE-PCL] 版本隔离统一解析：隔离开启时 gameDir 为
+            //   versions/<版本 id>，关闭时为 "."（实例根）——与改动前一致。
+            NSString *gameDir = amePCLVersionGameDirSubpath(prof, nil);
             if ([gameDir isKindOfClass:[NSString class]] && gameDir.length > 0) {
                 if ([gameDir isEqualToString:@"."]) {
                     const char *env = getenv("POJAV_GAME_DIR");
@@ -1415,12 +1418,16 @@ static BOOL aiIsLatestAlias(NSString *s) {
     task.downloadURL = url.absoluteString;
     [[DownloadTaskManager sharedManager] setTaskWithId:task.taskId state:DownloadTaskStateDownloading];
 
-    // 下载候选：官方 CDN 优先，MCIM 镜像兜底（cdn.modrinth.com → cdn.mcimirror.top）
+    // 下载候选：官方 CDN 优先，MCIM 镜像兜底（cdn.modrinth.com → mod.mcimirror.top）
+    // ★ [MODSRC-FIX] 旧实现镜像到 cdn.mcimirror.top —— 该主机不存在（NXDOMAIN，实测
+    //   `curl: (6) Could not resolve host`），使镜像兜底成死代码；MCIM 的 Modrinth CDN
+    //   镜像正确主机是 mod.mcimirror.top（PLMirrorCenter.mcimPrefixPairs 同口径，实测
+    //   /data/... 路径 302 → 官方 CDN 200）。
     NSMutableArray<NSURL *> *candidates = [NSMutableArray arrayWithObject:url];
     NSString *urlStr = url.absoluteString ?: @"";
     if ([urlStr containsString:@"cdn.modrinth.com"]) {
         NSString *mirrored = [urlStr stringByReplacingOccurrencesOfString:@"https://cdn.modrinth.com"
-                                                                withString:@"https://cdn.mcimirror.top"];
+                                                                withString:@"https://mod.mcimirror.top"];
         NSURL *mirrorURL = [NSURL URLWithString:mirrored];
         if (mirrorURL) [candidates addObject:mirrorURL];
     }

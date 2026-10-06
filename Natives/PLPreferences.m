@@ -115,6 +115,14 @@ NSString *const PREF_MOD_MIRROR = @"general.mod_mirror";
             //   键必须在此注册：否则 PLPreferences getter/setter 因键不存在而静默
             //   失败，设置页既读不出也存不下。
             @"bt_pointer_enable": @YES,
+            // ★ [ISSUE-152] 游戏内悬浮球（小齿轮 = GameMenuOverlayView.menuButton）显示开关。
+            //   默认 @YES = 【不改变现状】：升级后行为与改动前逐字一致（浮球照常显示），
+            //   只有用户主动关掉才隐藏。issue #152 诉求「把小齿轮改成 Amethyst 那样，或加一个
+            //   隐藏小齿轮的设置」——本仓无 Amethyst 参考实现/截图，故采用可验证的后半条：
+            //   设置页加一行开关（沿用现有 UISwitch 样式）+ 偏好键。
+            //   键必须在此注册：否则 PLPreferences getter/setter 因键不存在而静默失败，
+            //   设置页开关既读不出也存不下。
+            @"menu_button_visible": @YES,
             @"gesture_hotbar": @YES,
             @"disable_haptics": @NO,
             @"slideable_hotbar": @NO,
@@ -142,6 +150,12 @@ NSString *const PREF_MOD_MIRROR = @"general.mod_mirror";
             @"tap_click_move": @(10),
             @"tap_click_button_right": @NO,
             @"tap_click_mode": @"auto",
+            // ★ [TAP-BTN] 「非按键区域轻触默认动作」开关：ON = 非按键区域(游戏视野)的轻触恒发左键。
+            //   优先级见 SurfaceViewController -tapClickEffectiveMode：旧键 tap_click_button_right(=right)
+            //   > tap_click_mode 显式 left/right > 本开关(→left) > auto(智能/单键通用)。
+            //   默认 @NO = 【不改变现状】：轻触仍按 tapClickEffectiveMode 智能判定(auto)。
+            //   键必须在此注册：否则 getPrefBool/setter 因键不存在而静默失败，设置页既读不出也存不下。
+            @"tap_default_left": @NO,
             @"button_scale": @(100),
             @"mouse_scale": @(100),
             @"mouse_speed": @(100),
@@ -173,6 +187,12 @@ NSString *const PREF_MOD_MIRROR = @"general.mod_mirror";
             }.mutableCopy,
             @"java_args": @"",
             @"env_variables": @"",
+            // ★ [DYLD-SWITCH] dyld 库校验旁路总开关（设置页：Java 调整 → 绕过 dyld 库校验）。
+            // 键必须在此注册，否则 getter/setter 静默失败，设置页开关存不下来
+            // （日志 "could not find preference java.dyld_bypass"）。
+            // 默认 @NO：真机 A/B 证实旁路会让启动器卡死在 dlopen(libjli)。
+            // 来源 fork 分支 fix/dyld-bypass-default-off @ c26262a58b。
+            @"dyld_bypass": @NO,
             @"auto_ram": @(!getEntitlementValue(@"com.apple.private.memorystatus")),
             @"allocated_memory": [NSNumber numberWithFloat:roundf((NSProcessInfo.processInfo.physicalMemory / 1048576) * 0.25)],
             // profile 写入的强制 Java 版本，auto=根据游戏版本自动选择
@@ -213,6 +233,10 @@ NSString *const PREF_MOD_MIRROR = @"general.mod_mirror";
         @"internal": @{
             @"isolated": @NO,
             @"latest_version": [NSDictionary new],
+            // ★ [VER-ISOLATE-PCL] 版本隔离一次性迁移哨兵（对应 [UI-LAYOUT-MIGRATE] 的写法）：
+            // YES 表示"升级前已手工隔离过"的 profile 已被显式写回 versionIsolation。
+            // 默认值只在键缺失时写入，故哨兵保证迁移只跑一次且不会被重复覆盖。
+            @"version_isolation_migrated": @NO,
             // Task129d 迁移哨兵：YES 表示旧的 32MB 着色器缓存默认已治愈为 128MB。
             // 默认值只在键缺失时写入，而 @(32) 也会占住键——存量设备的 plist
             // 里那个 32 必须迁移一次才吃得到新默认；本哨兵保证只跑一次，
@@ -225,6 +249,12 @@ NSString *const PREF_MOD_MIRROR = @"general.mod_mirror";
         // Preferences that cannot be isolated
         NSDictionary *general = @{
             @"game_directory": @"default",
+            // ★ [VER-ISOLATE-PCL] 默认版本隔离（全局，对应 PCL-CE 的「默认实例隔离」
+            // LaunchArgumentIndieV2）。关闭 = 实例内各版本共享 mods/config/saves（现状，
+            // 默认值沿用本工程既有习惯，保证升级零行为变化）；开启 = 逐版本隔离到
+            // <实例根>/versions/<版本 id>/。单版本可在「编辑配置」页用 versionIsolation 覆盖。
+            // 放在 global 段（不可被实例偏好覆盖），与 game_directory 同层。
+            @"version_isolation": @NO,
             @"hidden_sidebar": @(realUIIdiom == UIUserInterfaceIdiomPhone),
             @"appicon": @"AppIcon-Light",
             // ★ [UI-LAYOUT] 遗留键：布局已改为按设备自动判定（iPhone⇒标准 / iPad⇒卡片），SceneDelegate 不再读它。

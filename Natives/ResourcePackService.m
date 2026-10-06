@@ -135,25 +135,16 @@
     NSString *profile = profileName.length ? profileName : @"default";
     NSFileManager *fm = [NSFileManager defaultManager];
 
+    // ★ [VI-SWITCH-UI] 统一走「版本隔离」resolver（关 = 共享根 POJAV_GAME_DIR；开 = versions/<版本 id>）。
+    //   原先自拼 prof[@"gameDir"]：隔离不改写 gameDir（恒为 "."），且相对路径会基于 cwd 解析
+    //   ⇒ 开了隔离仍在读共享目录，用户看到「隔离了但资源包还是老的那批」。
+    NSDictionary *prof = nil;
     @try {
-        NSDictionary *profiles = PLProfiles.current.profiles;
-        NSDictionary *prof = profiles[profile];
-        if ([prof isKindOfClass:[NSDictionary class]]) {
-            NSString *gameDir = prof[@"gameDir"];
-            if ([gameDir isKindOfClass:[NSString class]] && gameDir.length > 0) {
-                NSString *resourcePacksPath = [gameDir stringByAppendingPathComponent:@"resourcepacks"];
-                BOOL isDir = NO;
-                if ([fm fileExistsAtPath:resourcePacksPath isDirectory:&isDir] && isDir) {
-                    return resourcePacksPath;
-                }
-            }
-        }
+        prof = PLProfiles.current.profiles[profile];
     } @catch (NSException *ex) { }
 
-    // 回退：读取 POJAV_GAME_DIR 环境变量
-    const char *gameDirC = getenv("POJAV_GAME_DIR");
-    if (gameDirC) {
-        NSString *gameDir = [NSString stringWithUTF8String:gameDirC];
+    NSString *gameDir = amePCLVersionGameDirAbsolute(prof, nil);
+    if (gameDir.length > 0) {
         NSString *resourcePacksPath = [gameDir stringByAppendingPathComponent:@"resourcepacks"];
         BOOL isDir = NO;
         if ([fm fileExistsAtPath:resourcePacksPath isDirectory:&isDir] && isDir) {
@@ -169,23 +160,14 @@
     NSFileManager *fm = [NSFileManager defaultManager];
     NSString *resourcePacksPath = nil;
 
+    // ★ [VI-SWITCH-UI] 统一 resolver（关 = 共享根；开 = versions/<版本 id>），不再自拼 gameDir。
+    NSDictionary *prof = nil;
     @try {
-        NSDictionary *profiles = PLProfiles.current.profiles;
-        NSDictionary *prof = profiles[profile];
-        if ([prof isKindOfClass:[NSDictionary class]]) {
-            NSString *gameDir = prof[@"gameDir"];
-            if ([gameDir isKindOfClass:[NSString class]] && gameDir.length > 0) {
-                resourcePacksPath = [gameDir stringByAppendingPathComponent:@"resourcepacks"];
-            }
-        }
+        prof = PLProfiles.current.profiles[profile];
     } @catch (NSException *ex) { }
-
-    if (!resourcePacksPath) {
-        const char *gameDirC = getenv("POJAV_GAME_DIR");
-        if (gameDirC) {
-            NSString *gameDir = [NSString stringWithUTF8String:gameDirC];
-            resourcePacksPath = [gameDir stringByAppendingPathComponent:@"resourcepacks"];
-        }
+    NSString *gameDirResolved = amePCLVersionGameDirAbsolute(prof, nil);
+    if (gameDirResolved.length > 0) {
+        resourcePacksPath = [gameDirResolved stringByAppendingPathComponent:@"resourcepacks"];
     }
 
     if (!resourcePacksPath) {
@@ -326,24 +308,14 @@
     if (!resourcePacksFolder) {
         // 目录不存在时尝试创建
         NSString *profile = profileName.length ? profileName : @"default";
-        NSString *gameDir = nil;
-
+        // ★ [VI-SWITCH-UI] 统一 resolver（关 = 共享根；开 = versions/<版本 id>），不再自拼 gameDir。
+        NSDictionary *prof = nil;
         @try {
-            NSDictionary *profiles = PLProfiles.current.profiles;
-            NSDictionary *prof = profiles[profile];
-            if ([prof isKindOfClass:[NSDictionary class]]) {
-                gameDir = prof[@"gameDir"];
-            }
+            prof = PLProfiles.current.profiles[profile];
         } @catch (NSException *ex) { }
+        NSString *gameDir = amePCLVersionGameDirAbsolute(prof, nil);
 
-        if (!gameDir) {
-            const char *gameDirC = getenv("POJAV_GAME_DIR");
-            if (gameDirC) {
-                gameDir = [NSString stringWithUTF8String:gameDirC];
-            }
-        }
-
-        if (gameDir) {
+        if (gameDir.length > 0) {
             resourcePacksFolder = [gameDir stringByAppendingPathComponent:@"resourcepacks"];
             NSError *dirError = nil;
             BOOL created = [fm createDirectoryAtPath:resourcePacksFolder

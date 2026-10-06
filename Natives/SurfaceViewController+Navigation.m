@@ -46,7 +46,7 @@ static const void *kMenuDimViewKey = &kMenuDimViewKey;
         @"game.menu.log_output",            // 日志输出
         @"game.menu.custom_controls",       // 按键布局编辑
         // ★ [MP-RESTORE] 恢复「联机 / 多人游戏」菜单项（原 index 3 ⇒ 其后各项 index +1）
-        @"game.menu.multiplayer",           // 联机（陶瓦联机 Terracotta）
+        @"game.menu.multiplayer",           // 联机（陶瓦联机 Terracotta，右上角可切 ZeroTier）
         @"game.menu.toggle_stats",          // FPS/内存显示开关
         @"game.menu.toggle_controls",       // 隐藏/显示控制按钮
         @"game.menu.toggle_virtual_mouse",  // 虚拟鼠标开关
@@ -390,7 +390,7 @@ static const void *kMenuDimViewKey = &kMenuDimViewKey;
         case 2: // 按键布局编辑
             [self actionOpenCustomControls];
             break;
-        case 3: // 联机（陶瓦联机 Terracotta）
+        case 3: // 联机（陶瓦联机 Terracotta，右上角可切 ZeroTier）
             [self actionOpenMultiplayer];
             break;
         case 4: // FPS/内存显示开关

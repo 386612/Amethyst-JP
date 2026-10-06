@@ -205,7 +205,7 @@ viewForFooterInSection:(NSInteger)section
         menuItems = @[open];
     } else {
         UIAction *rename = [UIAction
-            actionWithTitle:localize(@"Rename", nil)
+            actionWithTitle:localize(@"launcher.pref.gamedir.rename", nil)  // ★ [AUDIT-DECIDE] A-11：English 字面量当 key → 新增键
             image:[UIImage systemImageNamed:@"pencil"]
             identifier:nil
             handler:^(UIAction *action) {

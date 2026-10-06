@@ -10,6 +10,7 @@
 #import "BackgroundManager.h"
 #import "LauncherPreferences.h"
 #import "utils.h"   // ★ [HOST-BUG-A] 统一取词 localize()
+#import "AIViewController.h"   // ★ [AI-SESSION-TAP] 点会话后打开的聊天页
 
 @interface AISessionListViewController () <UITableViewDataSource, UITableViewDelegate, UISearchResultsUpdating>
 
@@ -349,10 +350,42 @@
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if (indexPath.row >= (NSInteger)self.displayedSessions.count) return;   // ★ [AI-SESSION-TAP] 防越界
     AiSession *session = self.displayedSessions[indexPath.row];
+    if (!session) return;
     if (self.onSelectSession) {
+        // ★ [AI-SESSION-TAP] 有回调的入口(聊天页内弹出的会话列表)交给调用方,行为不变
         self.onSelectSession(session);
+        return;
     }
+    // ★ [AI-SESSION-TAP] 无回调的独立入口兜底,见 ameOpenChatForSession:
+    [self ameOpenChatForSession:session];
+}
+
+#pragma mark - ★ [AI-SESSION-TAP] 点会话打开聊天页
+
+/// ★ [AI-SESSION-TAP] 根因修复(「每一个会话条目都点不进去」):
+///   本页有多个独立入口 —— 根标签栏「AI」标签(AmeRootTabController case 2)、
+///   菜单 showAI(LauncherMenuViewController)、设置「会话列表」(LauncherPreferencesViewController)——
+///   它们都只是 `[[AISessionListViewController alloc] init]`,**没有一个设 onSelectSession**。
+///   于是 didSelectRowAtIndexPath 里 self.onSelectSession == nil ⇒ 点【每一个】会话条目都"没反应";
+///   而左上角「+」是 UIBarButtonItem 的 target/action(newSessionAction),不依赖任何回调,
+///   所以才会"能新建、条目点不动" —— 二者在视图树上的唯一差异就是「这个回调有没有接上」。
+///   修法:无回调时由本页自己打开聊天页(AIViewController),路径是
+///   **本页所在导航栈内 push**(而不是 setContentViewController 换根 —— 那是本仓串台铁律禁止的),
+///   与「返回」语义天然一致;有回调的入口(聊天页内弹出列表)仍走回调,不重复 push。
+- (void)ameOpenChatForSession:(AiSession *)session {
+    if (!session) return;
+    AIViewController *chat = [[AIViewController alloc] initWithSession:session];
+    UINavigationController *nav = self.navigationController;
+    if (nav) {
+        [nav pushViewController:chat animated:YES];
+        return;
+    }
+    // 兜底:万一本页不在导航栈里(当前所有入口都会包 nav,理论到不了这里),自建 nav 模态呈现
+    UINavigationController *wrap = [[UINavigationController alloc] initWithRootViewController:chat];
+    wrap.modalPresentationStyle = UIModalPresentationFormSheet;
+    [self presentViewController:wrap animated:YES completion:nil];
 }
 
 #pragma mark - UISearchResultsUpdating

@@ -238,9 +238,10 @@
         UIMenuItem *actionDelete = [[UIMenuItem alloc] initWithTitle:localize(@"Remove", nil) action:@selector(actionMenuBtnDelete)];
         if ([sender.view isKindOfClass:[ControlDrawer class]]) {
             UIMenuItem *actionAddSubButton = [[UIMenuItem alloc] initWithTitle:localize(@"custom_controls.button_menu.add_subbutton", nil) action:@selector(actionMenuAddSubButton)];
-            [menuController setMenuItems:@[actionEdit, /* actionCopy, */ actionDelete, actionAddSubButton]];
+            // ★ [AUDIT-DECIDE] B-1：恢复「Copy」菜单项（此前被注释掉、且实现体为空 ⇒ 点了没反应）。
+            [menuController setMenuItems:@[actionEdit, actionCopy, actionDelete, actionAddSubButton]];
         } else {
-            [menuController setMenuItems:@[actionEdit, /* actionCopy, */ actionDelete]];
+            [menuController setMenuItems:@[actionEdit, actionCopy, actionDelete]];
         }
         self.selectedPoint = sender.view.bounds;
     }
@@ -267,7 +268,8 @@
         message:exit?localize(@"custom_controls.control_menu.exit.warn", nil):@""
         preferredStyle:UIAlertControllerStyleAlert];
     [controller addTextFieldWithConfigurationHandler:^(UITextField *textField) {
-        textField.placeholder = @"Name";
+        // ★ [AUDIT-DECIDE] A-10：硬编码 "Name" → 复用已有键 custom_controls.button_edit.name。
+        textField.placeholder = localize(@"custom_controls.button_edit.name", nil);
         textField.text = self.currentFileName;
         textField.clearButtonMode = UITextFieldViewModeWhileEditing;
         textField.borderStyle = UITextBorderStyleRoundedRect;
@@ -445,8 +447,68 @@
         initWithTarget:self action:@selector(onTouch:)]];
 }
 
+// ★ [AUDIT-DECIDE] B-1：实现自定义控件「复制」——把**当前控件的配置**序列化到剪贴板。
+// 序列化格式 = 与「保存(Save)/导入(Load)」完全一致的 controlmap 文档结构
+//   { scaledAt, mControlDataList, mDrawerDataList, mJoystickDataList }
+// 只把当前控件这一条放进它所属的列表，另外两个列表补空数组 ⇒ 结构与 Load 读入的文件同构，
+// 可直接另存为 <name>.json 再用「Load」导入，或粘贴进现有 controlmap 文件里手工合并。
+// 失败（无控件 / JSON 序列化失败）一律给出可辨识提示，绝不静默。
 - (void)actionMenuBtnCopy {
-    // copy
+    UIView *targetView = self.currentGesture.view;
+    if (![targetView isKindOfClass:[ControlButton class]] || self.ctrlView.layoutDictionary == nil) {
+        showDialog(localize(@"custom_controls.control_menu.copy.error.none", nil), @"");
+        return;
+    }
+    ControlButton *button = (ControlButton *)targetView;
+
+    // 取该控件在 layout 字典里的那一条原始数据（与 doAddButton/doRemoveButton 用的同一份
+    // 字典对象，字段逐一对齐 ⇒ 与导入格式天然兼容）。
+    id entry = nil;
+    NSString *listKey = nil;
+    if ([button isKindOfClass:[ControlDrawer class]]) {
+        entry = ((ControlDrawer *)button).drawerData;
+        listKey = @"mDrawerDataList";
+    } else if ([button isKindOfClass:[ControlJoystick class]]) {
+        entry = button.properties;
+        listKey = @"mJoystickDataList";
+    } else {
+        // ControlButton 与 ControlSubButton：均以 properties 作为控件数据（子按钮除外层抽屉外同构）。
+        entry = button.properties;
+        listKey = @"mControlDataList";
+    }
+    if (entry == nil) {
+        showDialog(localize(@"custom_controls.control_menu.copy.error.none", nil), @"");
+        return;
+    }
+
+    NSMutableDictionary *doc = [NSMutableDictionary dictionary];
+    id scaledAt = self.ctrlView.layoutDictionary[@"scaledAt"];
+    if (scaledAt != nil) {
+        doc[@"scaledAt"] = scaledAt;
+    }
+    doc[listKey] = @[entry];
+    for (NSString *k in @[@"mControlDataList", @"mDrawerDataList", @"mJoystickDataList"]) {
+        if (doc[k] == nil) {
+            doc[k] = [NSMutableArray array];
+        }
+    }
+
+    NSError *error = nil;
+    NSData *jsonData = [NSJSONSerialization dataWithJSONObject:doc options:NSJSONWritingPrettyPrinted error:&error];
+    NSString *json = jsonData ? [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding] : nil;
+    if (json.length == 0) {
+        // 与 Save 失败同口径（同一组错误键），并带上具体原因。
+        showDialog(localize(@"custom_controls.control_menu.save.error.json", nil),
+                   error.localizedDescription ?: @"");
+        return;
+    }
+
+    [UIPasteboard generalPasteboard].string = json;
+    // 成功也给一次轻提示：本项当初被报的正是「点了没反应」。
+    NSLog(@"[CUSTOM-CONTROLS] control copied to pasteboard (%@, %lu bytes)",
+          listKey, (unsigned long)jsonData.length);
+    showDialog(localize(@"custom_controls.control_menu.copy.ok", nil),
+               localize(@"custom_controls.control_menu.copy.ok.message", nil));
 }
 
 - (void)actionMenuBtnDelete {
@@ -711,7 +773,8 @@ CGFloat currentY;
         [self.editSizeWidth addTarget:self action:@selector(textFieldEditingChanged) forControlEvents:UIControlEventEditingChanged];
         [self.editSizeWidth addTarget:self.editSizeWidth action:@selector(resignFirstResponder) forControlEvents:UIControlEventEditingDidEndOnExit];
         self.editSizeWidth.keyboardType = UIKeyboardTypeDecimalPad;
-        self.editSizeWidth.placeholder = @"width";
+        // ★ [AUDIT-DECIDE] A-10：硬编码 "width"/"height" → 新增两键（尺寸输入框占位符）。
+        self.editSizeWidth.placeholder = localize(@"custom_controls.button_edit.width", nil);
         self.editSizeWidth.returnKeyType = UIReturnKeyDone;
         self.editSizeWidth.text = [self.targetButton.properties[@"width"] stringValue];
         self.editSizeWidth.textAlignment = NSTextAlignmentCenter;
@@ -720,7 +783,7 @@ CGFloat currentY;
         [self.editSizeHeight addTarget:self action:@selector(textFieldEditingChanged) forControlEvents:UIControlEventEditingChanged];
         [self.editSizeHeight addTarget:self.editSizeHeight action:@selector(resignFirstResponder) forControlEvents:UIControlEventEditingDidEndOnExit];
         self.editSizeHeight.keyboardType = UIKeyboardTypeDecimalPad;
-        self.editSizeHeight.placeholder = @"height";
+        self.editSizeHeight.placeholder = localize(@"custom_controls.button_edit.height", nil);
         self.editSizeHeight.returnKeyType = UIReturnKeyDone;
         self.editSizeHeight.text = [self.targetButton.properties[@"height"] stringValue];
         self.editSizeHeight.textAlignment = NSTextAlignmentCenter;

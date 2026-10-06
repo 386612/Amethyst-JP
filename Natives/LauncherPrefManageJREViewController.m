@@ -448,7 +448,7 @@ static NSString *currentImportTaskId;
                                                                        message:nil
                                                                 preferredStyle:UIAlertControllerStyleActionSheet];
         if (versionTitles.count == 0) {
-            [alert addAction:[UIAlertAction actionWithTitle:localize(@"None", nil)
+            [alert addAction:[UIAlertAction actionWithTitle:localize(@"launcher.pref.jre.none", nil)  // ★ [AUDIT-DECIDE] A-11：English 字面量当 key → 新增键 launcher.pref.jre.none
                                                        style:UIAlertActionStyleDefault
                                                      handler:nil]];
         } else {
@@ -498,7 +498,7 @@ static NSString *currentImportTaskId;
 
     if (menuItems.count == 0) {
         [menuItems addObject:[UIAction
-            actionWithTitle:localize(@"None", nil)
+            actionWithTitle:localize(@"launcher.pref.jre.none", nil)  // ★ [AUDIT-DECIDE] A-11：English 字面量当 key → 新增键 launcher.pref.jre.none
             image:nil
             identifier:nil
             handler:^(UIAction *action){}]];

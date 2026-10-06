@@ -11,12 +11,14 @@
 #import "BackgroundManager.h"
 #import "PLProfiles.h"
 #import "utils.h"
+#import "ios_uikit_bridge.h"   // ★ [GAME-LANDSCAPE] 游戏方向锁状态查询(AmeGameLandscapeLockActive)
 #import "ModsManagerViewController.h"
 #import "ShadersManagerViewController.h"
 #import "ModpackImportViewController.h"
 #import "LauncherPrefGameDirViewController.h"
 #import "CustomControlsViewController.h"
 // ★ [MP-RESTORE] 联机恢复
+#import "MultiplayerViewController.h"
 #import "TerracottaViewController.h"
 #import "TerracottaManager.h"
 #import "TerracottaBridge.h"
@@ -682,6 +684,10 @@ static const CGFloat kPortraitCardCorner      = 16.0;   // 竖屏底部卡圆角
                                              selector:@selector(showMultiplayer)
                                                  name:@"ShowMultiplayer"
                                                object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(showZeroTier)
+                                                 name:@"ShowZeroTier"
+                                               object:nil];
     // 首页快捷瓷砖触发：切到对应内容区子页面（不再 FormSheet 弹窗）
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(showModsManager)
@@ -853,7 +859,7 @@ static const CGFloat kPortraitCardCorner      = 16.0;   // 竖屏底部卡圆角
     [self setContentViewController:navVC animated:YES];
 }
 
-// ★ [MP-RESTORE] 联机恢复：陶瓦联机入口。
+// ★ [MP-RESTORE] 联机恢复：陶瓦联机 / ZeroTier 两个入口。
 //   ★ [MP-BACK] 改为 push 进【本页所在标签的导航栈】(本页即该标签的根)：系统自带返回键、返回即回主页；
 //   不再用 setContentViewController: 把根内容整体换掉(那会让新页成为全新 nav 的根、presentingViewController==nil，
 //   页面自己隐藏导航栏 ⇒ 用户实测「进得去、没有返回键、出不来」)。与主页磁贴的 fix2PushTab 落点完全一致。
@@ -869,6 +875,16 @@ static const CGFloat kPortraitCardCorner      = 16.0;   // 竖屏底部卡圆角
         return;
     }
     TerracottaViewController *vc = [[TerracottaViewController alloc] init];
+    [self mpbackPushPageOrFallback:vc];
+}
+
+- (void)showZeroTier {
+    // ZeroTier 联机界面（独立入口）；若陶瓦会话进行中，先停以免端口冲突。
+    if ([TerracottaBridge isAvailable] &&
+        [TerracottaManager shared].status != TerracottaStatusDisconnected) {
+        [[TerracottaManager shared] stopSession];
+    }
+    MultiplayerViewController *vc = [[MultiplayerViewController alloc] initWithMode:MultiplayerVCModeLauncher];
     [self mpbackPushPageOrFallback:vc];
 }
 
@@ -893,8 +909,37 @@ static const CGFloat kPortraitCardCorner      = 16.0;   // 竖屏底部卡圆角
 
 #pragma mark - 首页快捷入口 (替换原 FormSheet 弹窗)
 
+// ★ [TAB-CROSSTALK] 通用落地:模组/光影/游戏目录/整合包导入这些「目标页本来就是某个标签的页」的入口,
+//   一律「切到目标标签 + 在她自己的导航栈里 push 子页」——本仓既有范式 LauncherNewsViewController
+//   fix2PushTab:(见 LauncherNewsViewController.m:2258)。绝不再用 setContentViewController: 把【主页内容】
+//   整体换掉(那会让底栏停在「主页」而内容是版本管理/下载页,返回后主页也回不来 = 串台)。
+//   @return YES = 已用标签栏处理完(调用方直接 return);NO = 不在标签栏(老流程)⇒ 调用方回退原实现。
+- (BOOL)tabcrosstalkPushTab:(NSInteger)tabIndex
+                     pushes:(Class)vcClass
+                     makeVC:(UIViewController * (^)(void))makeVC {
+    if (!vcClass || !makeVC) return NO;
+    UITabBarController *tbc = self.tabBarController;
+    if (![tbc isKindOfClass:[UITabBarController class]]) return NO;   // 不在标签栏 ⇒ 交给老流程
+    if (tabIndex < 0 || tabIndex >= (NSInteger)tbc.viewControllers.count) return NO;
+    UIViewController *tabVC = tbc.viewControllers[(NSUInteger)tabIndex];
+    if (![tabVC isKindOfClass:[UINavigationController class]]) return NO;
+    UINavigationController *nav = (UINavigationController *)tabVC;
+
+    tbc.selectedIndex = tabIndex;                          // ① 切目标标签(不碰页面内容)
+    for (UIViewController *c in nav.viewControllers) {      // ② 栈里已有同类页 ⇒ 回到它,不重复 push
+        if ([c isKindOfClass:vcClass]) { [nav popToViewController:c animated:YES]; return YES; }
+    }
+    [nav popToRootViewControllerAnimated:NO];              // ③ 否则先回本标签根页,避免越叠越多
+    UIViewController *vc = makeVC();
+    if (vc) [nav pushViewController:vc animated:YES];
+    return YES;
+}
+
 - (void)showModsManager {
-    // 切到版本管理页并直接 push 模组管理
+    // ★ [TAB-CROSSTALK] 模组管理是「实例」标签(3)的页 ⇒ 切标签 + 她自己的栈里 push。
+    if ([self tabcrosstalkPushTab:3 pushes:[ModsManagerViewController class]
+                           makeVC:^UIViewController *{ return [[ModsManagerViewController alloc] init]; }]) return;
+    // 兜底(老流程:不在标签栏)保持原实现
     // 修复"前一界面未消失"竞态：先构建完整 nav 栈再 setContentViewController，
     // 这样 setContentViewController 内的 for 循环能一次性透明化栈中所有 VC，
     // 避免 animated:YES 的 crossDissolve 进行中再 animated:NO push 导致新 VC 未透明化。
@@ -907,6 +952,13 @@ static const CGFloat kPortraitCardCorner      = 16.0;   // 竖屏底部卡圆角
 }
 
 - (void)showShadersManager {
+    // ★ [TAB-CROSSTALK] 光影管理是「实例」标签(3)的页 ⇒ 切标签 + 她自己的栈里 push。
+    if ([self tabcrosstalkPushTab:3 pushes:[ShadersManagerViewController class]
+                           makeVC:^UIViewController *{
+                               ShadersManagerViewController *s = [[ShadersManagerViewController alloc] init];
+                               s.initialMode = ShadersManagerModeLocal;
+                               return s;
+                           }]) return;
     VersionManagerViewController *vm = [[VersionManagerViewController alloc] init];
     UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vm];
     nav.navigationBar.prefersLargeTitles = NO;
@@ -917,6 +969,9 @@ static const CGFloat kPortraitCardCorner      = 16.0;   // 竖屏底部卡圆角
 }
 
 - (void)showGameDirectory {
+    // ★ [TAB-CROSSTALK] 游戏目录设置是「实例」标签(3)的页 ⇒ 切标签 + 她自己的栈里 push。
+    if ([self tabcrosstalkPushTab:3 pushes:[LauncherPrefGameDirViewController class]
+                           makeVC:^UIViewController *{ return [[LauncherPrefGameDirViewController alloc] init]; }]) return;
     VersionManagerViewController *vm = [[VersionManagerViewController alloc] init];
     UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vm];
     nav.navigationBar.prefersLargeTitles = NO;
@@ -926,7 +981,10 @@ static const CGFloat kPortraitCardCorner      = 16.0;   // 竖屏底部卡圆角
 }
 
 - (void)showModpackImport {
-    // 切到下载页并直接 push 整合包导入界面
+    // ★ [TAB-CROSSTALK] 整合包导入是「下载」标签(1)的页 ⇒ 切标签 + 她自己的栈里 push。
+    if ([self tabcrosstalkPushTab:1 pushes:[ModpackImportViewController class]
+                           makeVC:^UIViewController *{ return [[ModpackImportViewController alloc] init]; }]) return;
+    // 兜底:切到下载页并直接 push 整合包导入界面
     DownloadViewController *d = [[DownloadViewController alloc] init];
     UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:d];
     nav.navigationBar.prefersLargeTitles = NO;
@@ -1149,6 +1207,10 @@ static const CGFloat kPortraitCardCorner      = 16.0;   // 竖屏底部卡圆角
 }
 
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    // ★ [GAME-LANDSCAPE] 启动中（点「启动游戏」那一刻 → 游戏曲面接管之前）本页仍是根内容，
+    //   必须跟着锁横屏；否则「启动中/加载中」这一段时间会竖过来。
+    //   状态由 AmeGameLandscapeLockEnter/Exit 维护（幂等同拍），此处只读。
+    if (AmeGameLandscapeLockActive()) return UIInterfaceOrientationMaskLandscape;
     // ★ [PORTRAIT] 放开竖屏:原来是写死 Landscape ⇒ 竖屏进不去。
     // 竖屏排布由 LauncherCardLayoutViewController 切换(三卡竖摞 + 菜单横排);
     // 游戏(SurfaceViewController)单独锁横屏,保证游戏内不会竖过来。

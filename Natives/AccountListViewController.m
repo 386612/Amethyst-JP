@@ -480,7 +480,8 @@
         //   保持上一轮 [ACCT-AUDIT] 的 nil 回滚语义（恢复可交互、停转圈、提示）。
         [self ameSetLoginInFlight:NO];
         [self removeActivityIndicatorFrom:cell];
-        showDialog(localize(@"Error", nil), @"Account data could not be loaded.");
+        // ★ [AUDIT-DECIDE] A-10/A-11：account data 载入失败的提示此前硬编码英文，走 localize。
+        showDialog(localize(@"Error", nil), localize(@"login.error.account_load", nil));
         return;
     }
     [auth refreshTokenWithCallback:callback];
@@ -488,24 +489,35 @@
 
 - (void)tableView:(UITableView *)tableView commitEditingStyle:(UITableViewCellEditingStyle)editingStyle forRowAtIndexPath:(NSIndexPath *)indexPath {
     if (editingStyle == UITableViewCellEditingStyleDelete) {
-        // TODO: invalidate token
+        // ★ [AUDIT-DECIDE] E-1：删除账户不再"只删本地凭据"——尽力让**远端会话**失效。
+        //   判定与登录一致：有 clientToken ⇒ 第三方(Yggdrasil/authlib-injector)；否则 Microsoft/本地。
+        //   · 第三方：调官方 Yggdrasil 失效端点 POST <API Root>/authserver/invalidate（见下方 helper）。
+        //   · Microsoft：identity platform **没有**消费级 refresh token 的公开撤销端点
+        //     （无 RFC 7009 /revoke 等价物；end_session 只结束浏览器会话）⇒ 只做本地失效：
+        //     删账户文件 + 清 keychain 里的 access/refresh token（clearTokenDataOfProfile:），
+        //     并把内存里该账户的 token/refresh 字段随文件一并丢弃（"标记失效"= 本地不再持有任何可用凭据）。
+        //   · 本地账户：无远端会话。
+        //   远端调用异步、非阻塞、失败仅记日志（绝不阻断删除）；★ 任何日志都不打印 token 明文。
+        NSDictionary *accountData = self.accountList[indexPath.row];
 
         // 用 accountId 作为文件名（唯一标识），同名账户删除互不影响
         // 若 accountId 缺失（旧格式账户未迁移），回退到 username
-        NSString *accountId = self.accountList[indexPath.row][@"accountId"];
+        NSString *accountId = accountData[@"accountId"];
         if (accountId.length == 0) {
-            accountId = self.accountList[indexPath.row][@"username"];
+            accountId = accountData[@"username"];
         }
         NSFileManager *fm = [NSFileManager defaultManager];
         NSString *path = [NSString stringWithFormat:@"%s/accounts/%@.json", getenv("POJAV_HOME"), accountId];
         if (self.whenDelete != nil) {
             self.whenDelete(accountId);
         }
-        NSString *xuid = self.accountList[indexPath.row][@"xuid"];
+        NSString *xuid = accountData[@"xuid"];
         if (xuid) {
             [MicrosoftAuthenticator clearTokenDataOfProfile:xuid];
         }
         [fm removeItemAtPath:path error:nil];
+        // ★ [AUDIT-DECIDE] E-1：本地凭据已清除（账户文件 + keychain token），再尽力触发远端失效。
+        [self ameInvalidateRemoteSessionForAccountData:accountData accountId:accountId];
         // ★ [ACCT-AUDIT] 清理：删除账户时一并移除其自定义头像文件（Documents/avatars/<accountId>.png），
         //   避免用户图像残留在磁盘上。AvatarManager 按 accountId 存储，删除幂等、文件不存在时安全跳过。
         [[AvatarManager sharedManager] removeAvatarForAccount:accountId];
@@ -517,6 +529,56 @@
         [self.accountList removeObjectAtIndex:indexPath.row];
         [tableView deleteRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationFade];
     }
+}
+
+#pragma mark - ★ [AUDIT-DECIDE] E-1 删除账户 → 远端会话失效
+
+// 尽力让被删账户的远端会话失效。口径（需求："尽量调官方失效/登出接口；无公开接口就写清并只做本地失效"）：
+//   ① 第三方(Yggdrasil / authlib-injector)：调用规范中的官方失效端点
+//      `POST <API Root>/authserver/invalidate`，body = { accessToken, clientToken }。
+//      与既有 authenticate/refresh 同一 API Root；ely.by 沿用旧式 `auth/*` 路径保持一致。
+//   ② Microsoft：官方 **没有** 消费级账户 refresh token 的公开撤销端点（无 RFC 7009 /revoke
+//      等价物；identity platform 的 logout/end_session 仅结束浏览器会话、不吊销 refresh token）
+//      ⇒ 不做远端调用，只做本地失效（账户文件删除 + keychain token 清除，均在调用点已完成）。
+//   ③ 非阻塞：网络请求异步发出，删除流程/界面不等待；失败只 NSLog，绝不阻断删除。
+//   ④ 隐私：日志只记 accountId / 端点 / 结果（状态码/域名），★ 绝不含 accessToken / clientToken 明文。
+- (void)ameInvalidateRemoteSessionForAccountData:(NSDictionary *)data accountId:(NSString *)accountId {
+    if (![data isKindOfClass:[NSDictionary class]]) return;
+    NSString *tag = accountId.length > 0 ? accountId : @"(unknown)";
+
+    NSString *clientToken = data[@"clientToken"];
+    if (clientToken.length == 0) {
+        NSLog(@"[ACCT-INVALIDATE] account=%@ kind=msa/local remote=unsupported local=cleared "
+              @"(Microsoft exposes no public refresh-token revoke endpoint; account file + keychain token removed)",
+              tag);
+        return;
+    }
+
+    NSString *accessToken = data[@"accessToken"];
+    if (accessToken.length == 0) {
+        NSLog(@"[ACCT-INVALIDATE] account=%@ kind=3rdparty remote=skipped local=deleted (no access token on record)", tag);
+        return;
+    }
+
+    NSString *serverURL = data[@"authserver"] ?: @"https://authserver.ely.by";
+    if (![serverURL hasSuffix:@"/"]) serverURL = [serverURL stringByAppendingString:@"/"];
+    NSString *invalidateURL = [serverURL isEqualToString:@"https://authserver.ely.by/"]
+        ? [serverURL stringByAppendingString:@"auth/invalidate"]
+        : [serverURL stringByAppendingString:@"authserver/invalidate"];
+
+    NSDictionary *body = @{ @"accessToken": accessToken, @"clientToken": clientToken };
+    AFHTTPSessionManager *manager = AFHTTPSessionManager.manager;
+    manager.requestSerializer = AFJSONRequestSerializer.serializer;
+    // 失效端点常以 204 空体响应：显式容许空响应，避免被误判为「解析失败」。
+    manager.responseSerializer = [AFHTTPResponseSerializer serializer];
+    [manager POST:invalidateURL parameters:body headers:nil progress:nil
+          success:^(NSURLSessionDataTask *task, id responseObject) {
+        NSLog(@"[ACCT-INVALIDATE] account=%@ kind=3rdparty remote=ok url=%@", tag, invalidateURL);
+    } failure:^(NSURLSessionDataTask *task, NSError *error) {
+        NSHTTPURLResponse *http = [task.response isKindOfClass:[NSHTTPURLResponse class]] ? (NSHTTPURLResponse *)task.response : nil;
+        NSLog(@"[ACCT-INVALIDATE] account=%@ kind=3rdparty remote=failed status=%ld domain=%@ (local deletion kept)",
+              tag, (long)http.statusCode, error.domain);
+    }];
 }
 
 - (UITableViewCellEditingStyle)tableView:(UITableView *)tableView editingStyleForRowAtIndexPath:(NSIndexPath *)indexPath
@@ -585,7 +647,8 @@
         [self presentViewController:alert animated:YES completion:nil];
         return;
     }
-    UIAlertController *controller = [UIAlertController alertControllerWithTitle:localize(@"Sign in", nil) message:localize(@"login.option.local", nil) preferredStyle:UIAlertControllerStyleAlert];
+    // ★ [AUDIT-DECIDE] A-11：English 字面量当 key（.strings 无此键）→ 新增键 login.sign_in。
+    UIAlertController *controller = [UIAlertController alertControllerWithTitle:localize(@"login.sign_in", nil) message:localize(@"login.option.local", nil) preferredStyle:UIAlertControllerStyleAlert];
     [controller addTextFieldWithConfigurationHandler:^(UITextField *textField) {
         textField.placeholder = localize(@"login.alert.field.username", nil);
         textField.clearButtonMode = UITextFieldViewModeWhileEditing;
@@ -710,60 +773,101 @@
     cell.accessoryView = nil;
 }
 
-- (void)callbackMicrosoftAuth:(id)status success:(BOOL)success forCell:(UITableViewCell *)cell {
-    if (status != nil) {
-        if (success) {
-            // 登录成功并伴随状态信息
-            if ([status isKindOfClass:[NSError class]]) {
-                showDialog(localize(@"login.title", @"账户"), [status localizedDescription]);
-            } else {
-                if ([status isKindOfClass:[NSString class]] && [status isEqualToString:@"DEMO"]) {
-                    showDialog(localize(@"login.warn.title.demomode", nil), localize(@"login.warn.message.demomode", nil));
-                } else if ([status isKindOfClass:[NSString class]]) {
-                    showDialog(localize(@"login.title", @"账户"), status);
-                }
-            }
-            // 登录成功后刷新列表以显示新账户
-            if (cell) [self removeActivityIndicatorFrom:cell];
-            [self ameSetLoginInFlight:NO];
-            [self reloadAccountList];
-            if (self.whenItemSelected) self.whenItemSelected();
-            [self dismissViewControllerAnimated:YES completion:nil];
-        } else {
-            // 认证失败：恢复交互并展示错误
-            [self ameSetLoginInFlight:NO];
-            if (cell) [self removeActivityIndicatorFrom:cell];
+/// ★ [AUTH-FIX] 把认证失败对象转成**可辨识**的用户可读文案（不再只给 AFNetworking 的
+///   "Request failed: unauthorized (401)" 这类笼统串）：
+///   · NSString  → 原样返回；
+///   · NSError   → 优先解析响应体里的 XErr / Message / errorMessage / error_description / error；
+///                 拿不到再退回 HTTP 状态码 + localizedDescription。
+///   安全性：响应体只含错误码与说明文本，**不含任何 token/凭据**；本方法不回显凭据。
+- (NSString *)ameReadableAuthError:(id)status {
+    if ([status isKindOfClass:[NSString class]]) {
+        return status;
+    }
+    if (![status isKindOfClass:[NSError class]]) {
+        return localize(@"login.error.invalid_response", nil);
+    }
+    NSError *error = (NSError *)status;
+    NSHTTPURLResponse *http = error.userInfo[AFNetworkingOperationFailingURLResponseErrorKey];
+    NSInteger code = ([http isKindOfClass:[NSHTTPURLResponse class]]) ? http.statusCode : 0;
 
-            if ([status isKindOfClass:[NSError class]]) {
-                NSData *errorData = ((NSError *)status).userInfo[AFNetworkingOperationFailingURLResponseDataErrorKey];
-                if (errorData) {
-                    NSString *errorStr = [[NSString alloc] initWithData:errorData encoding:NSUTF8StringEncoding];
-                    NSLog(@"[MSA] Error: %@", errorStr);
-                    showDialog(localize(@"Error", nil), errorStr);
-                } else {
-                    showDialog(localize(@"Error", nil), [status localizedDescription]);
-                }
-            } else if ([status isKindOfClass:[NSString class]]) {
-                showDialog(localize(@"Error", nil), status);
-            } else {
-                showDialog(localize(@"Error", nil), localize(@"login.error.invalid_response", nil));
+    NSString *detail = nil;
+    NSData *errorData = error.userInfo[AFNetworkingOperationFailingURLResponseDataErrorKey];
+    if (errorData.length > 0) {
+        id json = [NSJSONSerialization JSONObjectWithData:errorData options:kNilOptions error:nil];
+        if ([json isKindOfClass:[NSDictionary class]]) {
+            NSDictionary *d = json;
+            id xerr = d[@"XErr"];
+            id msg = d[@"Message"] ?: d[@"errorMessage"] ?: d[@"error_description"] ?: d[@"error"];
+            if (xerr != nil || msg != nil) {
+                NSMutableArray *parts = [NSMutableArray array];
+                if (msg != nil) [parts addObject:[msg description]];
+                if (xerr != nil) [parts addObject:[NSString stringWithFormat:@"XErr=%@", xerr]];
+                detail = [parts componentsJoinedByString:@" "];
             }
+        } else {
+            NSString *raw = [[NSString alloc] initWithData:errorData encoding:NSUTF8StringEncoding];
+            if (raw.length > 0 && raw.length < 512) detail = raw;   // 短非 JSON 正文也带上
         }
-    } else if (success) {
-        // 成功登录，无消息
+    }
+
+    if (detail.length > 0) {
+        return (code > 0) ? [NSString stringWithFormat:@"HTTP %ld — %@", (long)code, detail] : detail;
+    }
+    if (code > 0) {
+        return [NSString stringWithFormat:@"HTTP %ld — %@", (long)code, error.localizedDescription ?: @""];
+    }
+    return error.localizedDescription ?: localize(@"login.error.invalid_response", nil);
+}
+
+- (void)callbackMicrosoftAuth:(id)status success:(BOOL)success forCell:(UITableViewCell *)cell {
+    // ★ [AUTH-FIX] 区分「进度」与「完成」——修微软登录卡在「(2/6) 请求 Xbox Live 令牌」的误判：
+    //   认证器每一步都发 (status != nil, success = YES) 的**进度**回调
+    //   （如 localize(@"login.msa.progress.acquireXBLToken") == "(2/6) 请求 Xbox Live 令牌"）。
+    //   原实现把这种回调当成「登录成功」收尾（弹"账户"对话框 + reload + dismiss + 解锁），于是：
+    //     ① 刚点登录就弹出进度对话框并提前收尾/解锁；
+    //     ② 若紧接着 XBL 步骤失败，用户最后看到的进度文本正是「请求 Xbox Live 令牌」，
+    //        而失败提示又很笼统 ⇒ 用户表现为"无法请求 Xbox 令牌"。
+    //   上游语义：(status != nil, success = YES) = 进度；(status == nil, success = YES) = 完成。
+    //   唯一终态例外：@"DEMO"（Demo 账户已保存）走完成收尾。
+    BOOL isDemo = (success && [status isKindOfClass:[NSString class]] && [status isEqualToString:@"DEMO"]);
+
+    // ① 进度：只更新 UI，绝不 dismiss / reload / 解锁 / whenItemSelected
+    if (status != nil && success && !isDemo) {
+        NSString *progress = [status isKindOfClass:[NSError class]] ? [(NSError *)status localizedDescription]
+                            : ([status isKindOfClass:[NSString class]] ? status : [status description]);
+        NSLog(@"[MSA] progress: %@", progress);
+        if (cell && cell.detailTextLabel) cell.detailTextLabel.text = progress;
+        return;
+    }
+
+    // ② 认证失败：恢复交互并展示**可辨识**错误
+    if (status != nil && !success) {
+        [self ameSetLoginInFlight:NO];
+        if (cell) [self removeActivityIndicatorFrom:cell];
+        NSString *message = [self ameReadableAuthError:status];
+        NSLog(@"[MSA] Error: %@", message);
+        showDialog(localize(@"Error", nil), message);
+        return;
+    }
+
+    // ③ 完成：status == nil（或 DEMO 终态）
+    if (success) {
+        if (isDemo) {
+            showDialog(localize(@"login.warn.title.demomode", nil), localize(@"login.warn.message.demomode", nil));
+        }
         if (cell) [self removeActivityIndicatorFrom:cell];
         [self ameSetLoginInFlight:NO];
         [self reloadAccountList];
         if (self.whenItemSelected) self.whenItemSelected();
         [self dismissViewControllerAnimated:YES completion:nil];
-    } else {
-        // ★ [ACCT-DONE] status==nil 且 success==NO（取消/无内容回调）也必须解锁 ——
-        //   原实现缺这一支 ⇒ 该路径下 in-flight 永久置位、列表与「添加账户」永久禁用(只能杀进程)。
-        //   这里显式释放并给出可读提示，保证"取消"路径同样收敛。
-        if (cell) [self removeActivityIndicatorFrom:cell];
-        [self ameSetLoginInFlight:NO];
-        showDialog(localize(@"Error", nil), localize(@"login.error.invalid_response", nil));
+        return;
     }
+
+    // ④ status == nil 且 success == NO（取消/无内容回调）：同样必须解锁
+    // ★ [ACCT-DONE] 原实现缺这一支 ⇒ in-flight 永久置位、列表与「添加账户」永久禁用(只能杀进程)。
+    if (cell) [self removeActivityIndicatorFrom:cell];
+    [self ameSetLoginInFlight:NO];
+    showDialog(localize(@"Error", nil), localize(@"login.error.invalid_response", nil));
 }
 
 /// 重新加载账户列表并刷新表格（FCL 风格：登录/删除后刷新卡片视图）

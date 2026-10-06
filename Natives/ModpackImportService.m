@@ -1723,7 +1723,9 @@ static NSString * const kImportedModpacksKey = @"ImportedModpacks";
                 //   6=Mods → mods/（默认，含未知类型回退）
                 //   12=Resource Packs → resourcepacks/
                 //   17=Worlds → 保留 mods/（整合包 files 中罕见，无独立语义目录）
-                //   5231=Data Packs → datapacks/
+                //   ★ [MODSRC-CLASS] 6945=Data Packs → datapacks/
+                //     （旧值 5231 不是 CF 分类：v1/categories?gameId=432 无此项、
+                //      mods/search?classId=5231 实测 200 空数组；CF 官方 Data Packs = 6945）
                 //   6552=Shaders → shaderpacks/
                 long long classId = [fileMeta[@"classId"] isKindOfClass:[NSNumber class]]
                     ? [fileMeta[@"classId"] longLongValue] : 6;
@@ -1732,7 +1734,7 @@ static NSString * const kImportedModpacksKey = @"ImportedModpacks";
                     categoryDirName = @"shaderpacks";
                 } else if (classId == 12) {
                     categoryDirName = @"resourcepacks";
-                } else if (classId == 5231) {
+                } else if (classId == 6945) {   // ★ [MODSRC-CLASS] CF Data Packs 分类 id（5231 非 CF 分类）
                     categoryDirName = @"datapacks";
                 }
                 NSString *categoryDir = [modsDir.stringByDeletingLastPathComponent stringByAppendingPathComponent:categoryDirName];
@@ -2165,7 +2167,7 @@ static NSString * const kImportedModpacksKey = @"ImportedModpacks";
 ///   - sha1：写入 PLDownloadRequest.expectedSHA1 做流式校验（修复 P0-2：
 ///     CurseForge manifest 不含哈希，此前仅 zip EOCD 兜底，静默损坏文件无法拦截）
 ///   - classId：按项目类型分发目录（修复 P0-3：shader/resource/datapack 不再全塞 mods/）
-///     6=Mods, 12=Resource Packs, 17=Worlds, 5231=Data Packs, 6552=Shaders
+///     6=Mods, 12=Resource Packs, 17=Worlds, 6945=Data Packs, 6552=Shaders   ★ [MODSRC-CLASS]
 - (nullable NSDictionary *)fetchCurseForgeFileMetadata:(long long)projectID fileID:(long long)fileID {
     NSString *apiURL = [NSString stringWithFormat:@"%@/cf/v1/mods/files/%lld", PLMirrorBMCLAPIRootURL, fileID];
     NSURL *url = [NSURL URLWithString:apiURL];
@@ -2707,7 +2709,12 @@ static NSString * const kImportedModpacksKey = @"ImportedModpacks";
         @"lastVersionId": versionId ?: @"",
         @"gameDir": gameDirRelative,
         @"created": [self iso8601StringFromDate:[NSDate date]],
-        @"type": @"modpack"
+        @"type": @"modpack",
+        // ★ [VI-FLOW]（用户修正 2）：整合包来源的实例【默认开版本隔离】——显式落 versionIsolation="1"，
+        //   而不是跟随全局默认（全局默认仍为关，仅在整合包实例上例外）。
+        //   整合包数据本来就落在它自己的 gameDir（./custom_gamedir/<id>）里；显式落键只是让
+        //   「实例设置 → 版本隔离」把它显示为「隔离」，用户之后可自行改成共享/自动。
+        @"versionIsolation": @"1"
     } mutableCopy];
 
     // 修复（参照 FCL/HMCL）：写入 javaVersion 字段

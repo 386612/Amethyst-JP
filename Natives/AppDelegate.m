@@ -62,6 +62,9 @@ extern dispatch_group_t fatalExitGroup;
 #pragma mark - Orientation Support
 
 - (UIInterfaceOrientationMask)application:(UIApplication *)application supportedInterfaceOrientationsForWindow:(UIWindow *)window {
+    // ★ [GAME-LANDSCAPE] 启动中/游戏中本层也收窄为仅横屏（与根 VC 层取交集 ⇒ 双保险；
+    //   未锁时返回值与改动前逐字一致）。
+    if (AmeGameLandscapeLockActive()) return UIInterfaceOrientationMaskLandscape;
     // Force landscape only
     return UIInterfaceOrientationMaskAllButUpsideDown;   // ★ [PORTRAIT] 窗口层放开(游戏页单独锁横屏)
 }

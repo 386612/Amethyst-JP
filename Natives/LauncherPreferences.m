@@ -388,11 +388,9 @@ static NSArray<NSDictionary *> *rendererCandidates(void) {
         @{@"key": @ RENDERER_NAME_GL4ES,
           @"name": localize(@"preference.title.renderer.debug.gl4es", nil),
           @"file": @ RENDERER_NAME_GL4ES},
-        // ★ [DROP-ANGLE] 原 RENDERER_NAME_MTL_ANGLE 候选表项（preference.title.renderer.debug.angle）
-        //   已随 Angle 渲染器一并移除 —— Angle 渲染器本身存在已知问题，不再提供选择入口。
-        //   其余候选（GL4ES/MobileGlues/Zink/LTW/Vulkan/MobileGL/SFPEW/Metal/VGPU/VirGL/GL4ESZL2）
-        //   原样保留；已存有 angle 值的 profile 由 availableRendererCandidates() 的
-        //   "当前值永远保留" 规则兜底，不会因下标错位而显示错选。
+        @{@"key": @ RENDERER_NAME_MTL_ANGLE,
+          @"name": localize(@"preference.title.renderer.debug.angle", nil),
+          @"file": @ RENDERER_NAME_MTL_ANGLE},
         @{@"key": @ RENDERER_NAME_MOBILEGLUES,
           @"name": localize(@"preference.title.renderer.debug.mg", nil),
           @"file": @ RENDERER_NAME_MOBILEGLUES},

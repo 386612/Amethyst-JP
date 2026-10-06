@@ -954,7 +954,14 @@ static BOOL gAmeGlassRimApplyScheduled = NO;
         // 毛玻璃效果 - 复用静态单例
         if (@available(iOS 13.0, *)) {
             toolbar.standardAppearance = blurToolbarAppearance;
-            toolbar.scrollEdgeAppearance = blurToolbarAppearance;
+            // ★ [API-GUARD] UIToolbar.scrollEdgeAppearance 是 iOS 15+ 才有的属性
+            //   （UINavigationBar.scrollEdgeAppearance 的 iOS 13 就有 ⇒ 易被上面 @available(iOS 13.0) 误放行）。
+            //   老系统（iOS 14）直接赋值 ⇒ unrecognized selector 闪退。双重守门：版本 + respondsToSelector。
+            if (@available(iOS 15.0, *)) {
+                if ([toolbar respondsToSelector:@selector(setScrollEdgeAppearance:)]) {
+                    toolbar.scrollEdgeAppearance = blurToolbarAppearance;
+                }
+            }
             toolbar.compactAppearance = blurToolbarAppearance;
         }
         toolbar.barTintColor = [UIColor clearColor];
@@ -976,7 +983,12 @@ static BOOL gAmeGlassRimApplyScheduled = NO;
                 translucentToolbarColor = barColor;
             }
             toolbar.standardAppearance = translucentToolbarAppearance;
-            toolbar.scrollEdgeAppearance = translucentToolbarAppearance;
+            // ★ [API-GUARD] 同上一处：UIToolbar.scrollEdgeAppearance 仅 iOS 15+（老系统赋值 = 闪退）。
+            if (@available(iOS 15.0, *)) {
+                if ([toolbar respondsToSelector:@selector(setScrollEdgeAppearance:)]) {
+                    toolbar.scrollEdgeAppearance = translucentToolbarAppearance;
+                }
+            }
             toolbar.compactAppearance = translucentToolbarAppearance;
         } else {
             toolbar.barTintColor = [UIColor colorWithWhite:0.1 alpha:self.uiOpacity];
@@ -1329,7 +1341,20 @@ static BOOL gAmeGlassRimApplyScheduled = NO;
 }
 
 - (void)setVideoBackgroundWithURL:(NSURL *)videoURL completion:(void (^)(BOOL success, NSError * _Nullable error))completion {
-    if (!videoURL || ![[NSFileManager defaultManager] fileExistsAtPath:videoURL.path]) {
+    if (!videoURL) {
+        if (completion) {
+            completion(NO, [NSError errorWithDomain:@"BackgroundManager" code:4 userInfo:@{NSLocalizedDescriptionKey: localize(@"i18n_str_51", nil)}]);
+        }
+        return;
+    }
+    // ★ [ISSUE-FIX] #92：从「文件」App（UIDocumentPickerViewController）选出的视频是
+    //   security-scoped URL，未 startAccessingSecurityScopedResource 时
+    //   fileExistsAtPath: / copyItemAtURL: 都会失败 ⇒ 用户看到「视频文件不存在」
+    //   （i18n_str_51）。这里在读取/复制期间持有安全作用域，复制完成后立即释放；
+    //   相册(UIImagePickerController)返回的临时 URL 无作用域：start 返回 NO，无需释放。
+    BOOL ame92Scoped = videoURL.isFileURL ? [videoURL startAccessingSecurityScopedResource] : NO;
+    if (![[NSFileManager defaultManager] fileExistsAtPath:videoURL.path]) {
+        if (ame92Scoped) [videoURL stopAccessingSecurityScopedResource];
         if (completion) {
             completion(NO, [NSError errorWithDomain:@"BackgroundManager" code:4 userInfo:@{NSLocalizedDescriptionKey: localize(@"i18n_str_51", nil)}]);
         }
@@ -1346,6 +1371,8 @@ static BOOL gAmeGlassRimApplyScheduled = NO;
         
         NSError *copyError = nil;
         BOOL copied = [[NSFileManager defaultManager] copyItemAtURL:videoURL toURL:[NSURL fileURLWithPath:filePath] error:&copyError];
+        // ★ [ISSUE-FIX] #92：复制完成，安全作用域即可释放（后续只操作已复制到沙盒的副本）。
+        if (ame92Scoped) [videoURL stopAccessingSecurityScopedResource];
         
         if (copied) {
             self.currentType = BackgroundTypeVideo;

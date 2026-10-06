@@ -14,7 +14,12 @@
         }
 
         // CurseForge file 格式适配（识别 gameVersions/downloadUrl/fileLength/fileDate/id/modId 字段）
-        if (dictionary[@"gameVersions"] != nil && dictionary[@"downloadUrl"] != nil) {
+        // ★ [MODSRC-FIX] CurseForge 对部分文件返回 downloadUrl:null（JSON null → NSNull，非 nil），
+        //   旧判据 `downloadUrl != nil` 对 NSNull 仍为真，靠不住的键存在性；改为以 gameVersions
+        //   + CurseForge 专有字段（modId/fileDate/releaseType）共同识别，避免漏判或误判。
+        if (dictionary[@"gameVersions"] != nil &&
+            (dictionary[@"downloadUrl"] != nil || dictionary[@"modId"] != nil ||
+             dictionary[@"fileDate"] != nil || dictionary[@"releaseType"] != nil)) {
             return [self parseCurseForgeDictionary:dictionary];
         }
 
@@ -86,8 +91,12 @@
     }
     // 构造 primaryFile 以兼容 Modrinth 格式读取（url/filename/hashes）
     NSMutableDictionary *pf = [NSMutableDictionary dictionary];
-    if (dictionary[@"downloadUrl"]) {
-        pf[@"url"] = dictionary[@"downloadUrl"];
+    // ★ [MODSRC-FIX] 只接受非空字符串 url。旧实现 `if (dictionary[@"downloadUrl"])` 对
+    //   JSON null（NSNull 对象）为真，会把 NSNull 写进 pf["url"]，导致下载页
+    //   `[primaryFile[@"url"] isKindOfClass:NSString.class]` 判定失败并弹 i18n_str_265。
+    id downloadURLValue = dictionary[@"downloadUrl"];
+    if ([downloadURLValue isKindOfClass:[NSString class]] && [(NSString *)downloadURLValue length] > 0) {
+        pf[@"url"] = downloadURLValue;
     }
     if (fileName) {
         pf[@"filename"] = fileName;

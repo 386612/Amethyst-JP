@@ -794,6 +794,24 @@ static NSString *festivalGreeting(void) {
 @property (nonatomic, strong) UILabel *welcomeLabel;
 @property (nonatomic, strong) UILabel *greetingLabel;
 @property (nonatomic, strong) UILabel *versionLabel;   // ★ [NORIGHT] 右栏版本号搬进本卡
+
+// ★ [ISSUE-90] 小屏（≤375×667 / SE 320×568）窄卡自适应 —— 欢迎卡横向链：
+//   原实现 `18 + 皮肤(0.55·h) + 18 + 头像 52 + 14 + 文字 + 18` 的**固定部分已 ≥178pt**，
+//   一旦本卡被压到 1 列（用户可在「自定义」里把欢迎卡设成 1×1，iPhone 6s 2 列下单卡
+//   ≈167.5pt；iPad 4 列下更窄）或 SE 320 屏，固定链就会超过卡宽 ⇒ 约束被 auto layout
+//   打断、文字/头像互相压叠（issue #90「小屏 UI 重叠」）。
+//   修法：把这几条的 constant 按【卡实时宽度】分档（base ≥260 / mid 200–260 / narrow <200）
+//   在 layoutSubviews 里更新；皮肤宽度改为「按高 0.55 倍（999）+ 不超过窄档上限（required）」，
+//   保证文字至少留 64pt。只调间距/尺寸，不隐藏任何控件（不降级功能）。
+@property (nonatomic, strong) NSLayoutConstraint *i90SkinLead;
+@property (nonatomic, strong) NSLayoutConstraint *i90AvatarLead;     // skin.trailing → avatar.leading
+@property (nonatomic, strong) NSLayoutConstraint *i90TextLead;       // avatar.trailing → welcome.leading
+@property (nonatomic, strong) NSLayoutConstraint *i90SkinWidthProp;  // = height × 0.55（999）
+@property (nonatomic, strong) NSLayoutConstraint *i90SkinWidthCap;   // ≤ cap（required，窄卡时赢）
+@property (nonatomic, strong) NSLayoutConstraint *i90AvatarW;
+@property (nonatomic, strong) NSLayoutConstraint *i90AvatarH;
+@property (nonatomic, strong) NSArray<NSLayoutConstraint *> *i90TextTrail;   // welcome/greeting 右贴边
+@property (nonatomic, assign) CGFloat i90LastTierWidth;              // 去重，避免每帧改常量
 @end
 
 @implementation HomeProfileTileCell
@@ -869,28 +887,45 @@ static NSString *festivalGreeting(void) {
     self.versionLabel.hidden = YES;   // 未拿到版本号前不占视觉
     [self.contentContainer addSubview:self.versionLabel];
 
+    // ★ [ISSUE-90] 把「会被窄卡压爆」的横向链约束**单独持有**，constant 在 layoutSubviews 分档更新。
+    self.i90SkinLead       = [self.skinImageView.leadingAnchor constraintEqualToAnchor:self.contentContainer.leadingAnchor constant:18];
+    self.i90AvatarLead     = [self.avatarImageView.leadingAnchor constraintEqualToAnchor:self.skinImageView.trailingAnchor constant:18];
+    self.i90TextLead       = [self.welcomeLabel.leadingAnchor constraintEqualToAnchor:self.avatarImageView.trailingAnchor constant:14];
+    self.i90AvatarW        = [self.avatarImageView.widthAnchor constraintEqualToConstant:52];
+    self.i90AvatarH        = [self.avatarImageView.heightAnchor constraintEqualToConstant:52];
+    self.i90TextTrail      = @[
+        [self.welcomeLabel.trailingAnchor constraintEqualToAnchor:self.contentContainer.trailingAnchor constant:-18],
+        [self.greetingLabel.trailingAnchor constraintEqualToAnchor:self.contentContainer.trailingAnchor constant:-18],
+    ];
+    // 皮肤宽：原「= 高 × 0.55」保持设计比例，但降为 999；再叠一条 required 的「≤ 上限」，
+    // 窄卡时上限赢 ⇒ 皮肤自动收窄、把空间让给文字（不隐藏皮肤，不降级功能）。
+    self.i90SkinWidthProp = [self.skinImageView.widthAnchor constraintEqualToAnchor:self.skinImageView.heightAnchor multiplier:0.55];
+    self.i90SkinWidthProp.priority = UILayoutPriorityRequired - 1;
+    self.i90SkinWidthCap  = [self.skinImageView.widthAnchor constraintLessThanOrEqualToConstant:9999.0];
+
     [NSLayoutConstraint activateConstraints:@[
         // 皮肤预览 (左侧)
-        [self.skinImageView.leadingAnchor constraintEqualToAnchor:self.contentContainer.leadingAnchor constant:18],
+        self.i90SkinLead,
+        self.i90SkinWidthProp,
+        self.i90SkinWidthCap,
         [self.skinImageView.topAnchor constraintEqualToAnchor:self.contentContainer.topAnchor constant:10],
         [self.skinImageView.bottomAnchor constraintEqualToAnchor:self.contentContainer.bottomAnchor constant:-8],
-        [self.skinImageView.widthAnchor constraintEqualToAnchor:self.skinImageView.heightAnchor multiplier:0.55],
-        
+
         // 头像 (皮肤右侧)
-        [self.avatarImageView.leadingAnchor constraintEqualToAnchor:self.skinImageView.trailingAnchor constant:18],
+        self.i90AvatarLead,
         [self.avatarImageView.centerYAnchor constraintEqualToAnchor:self.contentContainer.centerYAnchor constant:-14],
-        [self.avatarImageView.widthAnchor constraintEqualToConstant:52],
-        [self.avatarImageView.heightAnchor constraintEqualToConstant:52],
-        
+        self.i90AvatarW,
+        self.i90AvatarH,
+
         // 欢迎文本
-        [self.welcomeLabel.leadingAnchor constraintEqualToAnchor:self.avatarImageView.trailingAnchor constant:14],
+        self.i90TextLead,
         [self.welcomeLabel.centerYAnchor constraintEqualToAnchor:self.avatarImageView.centerYAnchor constant:-10],
-        [self.welcomeLabel.trailingAnchor constraintEqualToAnchor:self.contentContainer.trailingAnchor constant:-18],
-        
+        self.i90TextTrail[0],
+
         // 问候语
         [self.greetingLabel.leadingAnchor constraintEqualToAnchor:self.welcomeLabel.leadingAnchor],
         [self.greetingLabel.topAnchor constraintEqualToAnchor:self.welcomeLabel.bottomAnchor constant:4],
-        [self.greetingLabel.trailingAnchor constraintEqualToAnchor:self.contentContainer.trailingAnchor constant:-18],
+        self.i90TextTrail[1],
 
         // ★ [NORIGHT] 版本号 pill(欢迎卡内、问候语下方;左对齐欢迎语、高度 20)
         [self.versionLabel.leadingAnchor constraintEqualToAnchor:self.welcomeLabel.leadingAnchor],
@@ -898,6 +933,56 @@ static NSString *festivalGreeting(void) {
         [self.versionLabel.heightAnchor constraintEqualToConstant:20],
         [self.versionLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.contentContainer.trailingAnchor constant:-18],
     ]];
+    [self i90ApplyWidthTierIfNeeded];   // ★ [ISSUE-90] 首帧即按当前宽度分档
+}
+
+// MARK: - ★ [ISSUE-90] 窄卡宽度分档
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    [self i90ApplyWidthTierIfNeeded];
+}
+
+/// ★ [ISSUE-90] 更早的介入点：复用/首次出场时 `applyLayoutAttributes:` 已拿到目标 frame，
+/// 在真正的 layoutSubviews 之前就把窄档常量落好，避免宽卡→窄卡复用时「第一趟用旧常量解算」
+/// 产生的瞬时约束告警。
+- (void)applyLayoutAttributes:(UICollectionViewLayoutAttributes *)layoutAttributes {
+    [super applyLayoutAttributes:layoutAttributes];
+    [self i90ApplyWidthTierIfNeeded];
+}
+
+/// 按卡实时宽度分三档更新横向链 constant：
+///   base  (w ≥ 260)：保留原设计值（18/18/14/52/18）
+///   mid   (200 ≤ w < 260)：小幅收紧
+///   narrow(w < 200)：收紧 + 皮肤上限压到「给文字留 64pt」⇒ 1 列小卡/SE 320 不再重叠
+- (void)i90ApplyWidthTierIfNeeded {
+    CGFloat w = CGRectGetWidth(self.contentContainer.bounds);
+    if (w <= 0) w = CGRectGetWidth(self.bounds);
+    if (w <= 0) return;
+    if (fabs(w - self.i90LastTierWidth) < 0.5) return;   // 幂等：宽度没变就不动常量
+    self.i90LastTierWidth = w;
+
+    BOOL narrow = (w < 200.0);
+    BOOL mid    = (w >= 200.0 && w < 260.0);
+    CGFloat lead    = narrow ? 10.0 : (mid ? 14.0 : 18.0);
+    CGFloat gapSV   = narrow ? 10.0 : (mid ? 14.0 : 18.0);
+    CGFloat gapText = narrow ? 10.0 : (mid ? 12.0 : 14.0);
+    CGFloat trail   = narrow ? 12.0 : (mid ? 16.0 : 18.0);
+    CGFloat avatar  = narrow ? 38.0 : (mid ? 46.0 : 52.0);
+
+    self.i90SkinLead.constant   = lead;
+    self.i90AvatarLead.constant = gapSV;
+    self.i90TextLead.constant   = gapText;
+    self.i90AvatarW.constant    = avatar;
+    self.i90AvatarH.constant    = avatar;
+    self.avatarImageView.layer.cornerRadius = avatar / 2.0;
+    for (NSLayoutConstraint *c in self.i90TextTrail) c.constant = -trail;
+
+    // 皮肤宽上限：保证欢迎文字至少 64pt；下限 26pt 以免皮肤被压没。
+    CGFloat textNeed = 64.0;
+    CGFloat cap = w - (lead + gapSV + avatar + gapText + trail + textNeed);
+    if (cap < 26.0) cap = 26.0;
+    self.i90SkinWidthCap.constant = cap;
 }
 
 // ★ [NORIGHT] 头像单击 ⇒ 账户管理(转发右栏原实现)
@@ -1025,6 +1110,14 @@ static NSString *festivalGreeting(void) {
 @property (nonatomic, strong) UILabel *titleLabel;
 @property (nonatomic, strong) UILabel *summaryLabel;
 @property (nonatomic, strong) UILabel *placeholderLabel;
+// ★ [ISSUE-90] 窄卡自适应：原固定链 14 + 缩略图 80 + 14 + 文字 + 14 = 122pt 固定，
+//   卡被压到 1 列（6s 167.5 / iPad 4 列更窄）时文字区仅剩 ~45pt、SE 320(140pt) 时几乎为 0
+//   ⇒ 文字与缩略图互相压叠。按卡实时宽度分档收紧（保留缩略图，不隐藏）。
+@property (nonatomic, strong) NSLayoutConstraint *i90ThumbLead;
+@property (nonatomic, strong) NSLayoutConstraint *i90ThumbTextGap;
+@property (nonatomic, strong) NSLayoutConstraint *i90ThumbW;
+@property (nonatomic, strong) NSArray<NSLayoutConstraint *> *i90NewsTextTrail;   // title/summary/placeholder 右贴边
+@property (nonatomic, assign) CGFloat i90LastTierWidth;
 @end
 
 @implementation HomeNewsTileCell
@@ -1068,23 +1161,67 @@ static NSString *festivalGreeting(void) {
     self.placeholderLabel.text = localize(@"i18n_str_346", nil);
     [self.contentContainer addSubview:self.placeholderLabel];
     
-    [NSLayoutConstraint activateConstraints:@[
-        [self.thumbnailView.leadingAnchor constraintEqualToAnchor:self.contentContainer.leadingAnchor constant:14],
-        [self.thumbnailView.centerYAnchor constraintEqualToAnchor:self.contentContainer.centerYAnchor],
-        [self.thumbnailView.widthAnchor constraintEqualToConstant:80],
-        [self.thumbnailView.heightAnchor constraintEqualToConstant:60],
-        
-        [self.titleLabel.topAnchor constraintEqualToAnchor:self.thumbnailView.topAnchor],
-        [self.titleLabel.leadingAnchor constraintEqualToAnchor:self.thumbnailView.trailingAnchor constant:14],
+    // ★ [ISSUE-90] 横向链约束单独持有，constant 在 layoutSubviews 按卡宽分档更新。
+    self.i90ThumbLead    = [self.thumbnailView.leadingAnchor constraintEqualToAnchor:self.contentContainer.leadingAnchor constant:14];
+    self.i90ThumbTextGap = [self.titleLabel.leadingAnchor constraintEqualToAnchor:self.thumbnailView.trailingAnchor constant:14];
+    self.i90ThumbW       = [self.thumbnailView.widthAnchor constraintEqualToConstant:80];
+    self.i90NewsTextTrail = @[
         [self.titleLabel.trailingAnchor constraintEqualToAnchor:self.contentContainer.trailingAnchor constant:-14],
-        
+        [self.placeholderLabel.trailingAnchor constraintEqualToAnchor:self.contentContainer.trailingAnchor constant:-14],
+    ];
+
+    [NSLayoutConstraint activateConstraints:@[
+        self.i90ThumbLead,
+        [self.thumbnailView.centerYAnchor constraintEqualToAnchor:self.contentContainer.centerYAnchor],
+        self.i90ThumbW,
+        [self.thumbnailView.heightAnchor constraintEqualToConstant:60],
+
+        [self.titleLabel.topAnchor constraintEqualToAnchor:self.thumbnailView.topAnchor],
+        self.i90ThumbTextGap,
+        self.i90NewsTextTrail[0],
+
         [self.summaryLabel.topAnchor constraintEqualToAnchor:self.titleLabel.bottomAnchor constant:4],
         [self.summaryLabel.leadingAnchor constraintEqualToAnchor:self.titleLabel.leadingAnchor],
         [self.summaryLabel.trailingAnchor constraintEqualToAnchor:self.titleLabel.trailingAnchor],
-        
+
         [self.placeholderLabel.bottomAnchor constraintEqualToAnchor:self.thumbnailView.bottomAnchor],
-        [self.placeholderLabel.trailingAnchor constraintEqualToAnchor:self.contentContainer.trailingAnchor constant:-14],
+        self.i90NewsTextTrail[1],
     ]];
+    [self i90ApplyWidthTierIfNeeded];   // ★ [ISSUE-90]
+}
+
+// MARK: - ★ [ISSUE-90] 窄卡宽度分档（新闻卡）
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    [self i90ApplyWidthTierIfNeeded];
+}
+
+/// ★ [ISSUE-90] 更早介入（见欢迎卡同名说明）：复用出场时先把窄档常量落好。
+- (void)applyLayoutAttributes:(UICollectionViewLayoutAttributes *)layoutAttributes {
+    [super applyLayoutAttributes:layoutAttributes];
+    [self i90ApplyWidthTierIfNeeded];
+}
+
+/// base(≥200) 14/14/80/14 · mid(150–200) 12/12/68/12 · narrow(<150) 10/10/56/10。
+- (void)i90ApplyWidthTierIfNeeded {
+    CGFloat w = CGRectGetWidth(self.contentContainer.bounds);
+    if (w <= 0) w = CGRectGetWidth(self.bounds);
+    if (w <= 0) return;
+    if (fabs(w - self.i90LastTierWidth) < 0.5) return;
+    self.i90LastTierWidth = w;
+
+    BOOL narrow = (w < 150.0);
+    BOOL mid    = (w >= 150.0 && w < 200.0);
+    CGFloat lead  = narrow ? 10.0 : (mid ? 12.0 : 14.0);
+    CGFloat gap   = narrow ? 10.0 : (mid ? 12.0 : 14.0);
+    CGFloat trail = narrow ? 10.0 : (mid ? 12.0 : 14.0);
+    CGFloat thumb = narrow ? 56.0 : (mid ? 68.0 : 80.0);
+
+    self.i90ThumbLead.constant    = lead;
+    self.i90ThumbTextGap.constant = gap;
+    self.i90ThumbW.constant       = thumb;
+    for (NSLayoutConstraint *c in self.i90NewsTextTrail) c.constant = -trail;
 }
 
 @end

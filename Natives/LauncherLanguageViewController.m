@@ -118,19 +118,28 @@ NSString * const AmeLauncherLanguageChangedNotification = @"AmeLauncherLanguageC
         // ★ [I18N]「跟随系统」：副标题给出"跟随系统时实际生效的语言"，含义明确，
         // 直接回答"系统英文→英文、系统中文→中文"。显示与实际渲染同一事实源。
         cell.textLabel.text = localize(@"preference.lang.follow_system", @"跟随系统");
-        cell.detailTextLabel.text = AmeLauncherDisplayNameForLanguageCode(AmeLauncherEffectiveLanguageCode());
+        // ★ [I18N-PARTIAL] 生效语言若是"部分翻译"语言（如日语），这里同样带「部分翻译」标注。
+        cell.detailTextLabel.text = AmeLauncherDisplayNameAnnotatedForLanguageCode(AmeLauncherEffectiveLanguageCode());
         cell.accessoryType = (currentOverride.length == 0) ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
     } else {
         NSString *code = [self codeForRowAtIndexPath:indexPath];
-        cell.textLabel.text = AmeLauncherDisplayNameForLanguageCode(code);
-        // ★ [I18N] 副标题：原始代码 +（部分翻译时）人工翻译率百分比 —— 一眼看出
-        // "哪些完整、哪些只译了一部分"，杜绝"选了才发现大半是英文"。
+        // ★ [I18N-PARTIAL] 部分翻译语言（单一事实源）显示为「日本語（部分翻译）」。
+        cell.textLabel.text = AmeLauncherDisplayNameAnnotatedForLanguageCode(code);
         NSString *subtitle = code;
-        // ★ [I18N-ORDER] 阈值放宽到 0.85:完整语言里"AI/%d"等与英文同形的值会拉低比例,
-        // 只对"大面积未翻译"的壳子语言标百分比,避免完整语言也显示 ·98% 之类噪音。
-        double ratio = AmeLauncherLanguageTranslatedRatio(code);
-        if (ratio > 0.0 && ratio < 0.85) {
-            subtitle = [NSString stringWithFormat:@"%@ · %.0f%%", code, ratio * 100.0];
+        // ★ [I18N-PARTIAL] 部分翻译语言：副标题一律给出说明行（如「部分界面仍为中文」），
+        // 比只报翻译率百分比更直接地回答"选了会怎样"，杜绝"选了才发现大半是中文"。
+        NSString *partialNote = AmeLauncherPartiallyTranslatedNoteForLanguageCode(code);
+        if (partialNote.length > 0) {
+            subtitle = [NSString stringWithFormat:@"%@ · %@", code, partialNote];
+        } else {
+            // ★ [I18N] 副标题：原始代码 +（部分翻译时）人工翻译率百分比 —— 一眼看出
+            // "哪些完整、哪些只译了一部分"，杜绝"选了才发现大半是英文"。
+            // ★ [I18N-ORDER] 阈值放宽到 0.85:完整语言里"AI/%d"等与英文同形的值会拉低比例,
+            // 只对"大面积未翻译"的壳子语言标百分比,避免完整语言也显示 ·98% 之类噪音。
+            double ratio = AmeLauncherLanguageTranslatedRatio(code);
+            if (ratio > 0.0 && ratio < 0.85) {
+                subtitle = [NSString stringWithFormat:@"%@ · %.0f%%", code, ratio * 100.0];
+            }
         }
         cell.detailTextLabel.text = subtitle;
         cell.accessoryType = (code && [code isEqualToString:currentOverride])
