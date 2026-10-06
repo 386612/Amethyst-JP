@@ -277,15 +277,7 @@ static bool ame_sdlGlesCompatEnabled(void) {
         return false;
     }
     if (strstr(renderer, "libmithril") != NULL) return true;      // Mithril
-    // MobileGlues：iOS 的 dylib 名是全小写（RENDERER_NAME_MOBILEGLUES =
-    // "libmobileglues.dylib"），上面 "libMobileGL" 是大小写敏感的 strstr，
-    // 对它不命中。26.3 实测（构建 f6adca3）：此函数因此对 MG 返回 false，
-    // ES profile 强制与主窗口复用全部未启用 —— 第二个 SDL_CreateWindow 被
-    // SDL UIKit 后端以 "Only one window allowed per display." 拒绝（SDL3.4.0
-    // SDL_uikitwindow.m：iOS 每个显示器只允许一个窗口），MC 抛
-    // "Failed to create window" 崩溃。故必须显式识别小写名字。
-    if (strstr(renderer, "mobileglues") != NULL) return true;     // MobileGlues
-    return ame_isMobileGluesEgl();                                // POJAVEXEC_EGL 兜底
+    return ame_isMobileGluesEgl();                                // MobileGlues
 }
 
 #pragma mark - 1) 强制 ES profile
@@ -2132,6 +2124,15 @@ static void ame_noteVulkanWindowFlags(uint32_t flags);
 static void ame_clearVulkanPathForGl(void);
 
 static void *ame_SDL_CreateWindow(const char *title, int w, int h, uint32_t flags) {
+    // ★ [GLFW-FLOW] SDL3 窗口链在跑的判据行：本函数被调用 ⇒ MC 走的是 SDL3 路径
+    //   （MC 26.3+），此时不会调用 glfwCreateWindow / pojavSetWindowHint。反过来
+    //   egl_bridge.m 的 pojavSetWindowHint 一旦被调用即证明走 GLFW 链。两条链互斥，
+    //   本行与 [GLFW-FLOW] GLFW path active 行一起用可在日志里一眼分清用了哪条。
+    static dispatch_once_t ameSdlPathLogged;
+    dispatch_once(&ameSdlPathLogged, ^{
+        NSLog(@"[GLFW-FLOW] SDL3 path active: ame_SDL_CreateWindow hooked & called (first title=%s %dx%d flags=0x%x) -- GLFW windowing API NOT used",
+              title ? title : "(null)", w, h, flags);
+    });
     ame_forceEglProfileEs();
     NSDebugLog(@"[SDLHook] SDL_CreateWindow title=%s %dx%d flags=0x%x",
                title ? title : "(null)", w, h, flags);
@@ -2279,7 +2280,13 @@ static void ame_SDL_UnloadObject(void *handle) {
 //
 // pojavIsActualVulkanPath() 此前只看 clientAPI，而 clientAPI 是 GLFW 专用信号：
 // MC 走 GLFW 时用 glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API) 声明 Vulkan 路径。
-// SDL3 路径（26.2+）下 MC 从不调用 glfwWindowHint，clientAPI 停留在 pojavInit()
+// SDL3 路径（26.3+）下 MC 从不调用 glfwWindowHint，clientAPI 停留在 pojavInit()
+// ★ [SDL-FIRSTFRAME] 版本更正：SDL3 窗口链是 **26.3 起**，不是 26.2。硬证据：
+//   MC 26.2 的版本 JSON（id=26.2）库表 = lwjgl 3.4.1 + lwjgl-glfw，**无 lwjgl-sdl**；
+//   MC 26.3 的版本 JSON（id=26.3）库表 = lwjgl 3.4.3 + lwjgl-sdl。因此 26.2 场次
+//   根本没法调用 SDL_*（classpath 上没有该绑定），[SDLHook] 与 sdlWin 必然为零/空，
+//   那是版本属性而非钩子故障。本文件末尾 amethyst_sdl3_wants_gles_context() 的
+//   注释「GLFW 老路径（MC 26.2 及以下）」才是正确版本边界。
 // 的默认值 GLFW_OPENGL_API，于是**纯 Vulkan 运行时**该函数恒为 false，
 // FPS 计数器的 CADisplayLink fallback 永不启用 —— 即「Vulkan 模式 FPS 恒为 0」。
 //
@@ -3182,9 +3189,19 @@ static void *ame_resolveGlEntry(void *handle, const char *name) {
     return NULL;
 }
 
+// ★ [SDL-FIRSTFRAME] 兼容层「被咨询 / 真接管」计数（读取见文件尾 amethyst_sdl3_hook_stats
+//   与 main_hook.m 的 ame_sdlhook_probe）。这两个计数 + main_hook 的启动期自证行共同
+//   回答「日志里零 [SDLHook] 到底是钩子没装上，还是这条链根本没被走到」：
+//     · 零 CONSULTED 行 ⇒ 本场没走 SDL3 链路（GLFW/Metal，MC ≤26.2），零 [SDLHook] 正常；
+//     · 有 CONSULTED 但 takenOver 恒 0 ⇒ 真·接管失败（符号名/句柄形态不匹配）。
+static _Atomic unsigned long g_ameSdlNamesConsulted = 0;
+static _Atomic unsigned long g_ameSdlNamesTakenOver = 0;
+static int g_ameSdlFirstConsultLogged = 0;
+
 /// 由 hooked_dlsym 在返回 orig_dlsym 之前调用。
 /// 返回非 NULL 表示本模块接管了该符号；否则返回 NULL 让调用方走原路径。
-void *amethyst_sdl3_hook_resolve(void *handle, const char *name) {
+/// ★ [SDL-FIRSTFRAME] 原实现改名 _impl，公开入口改为下方带计数的包装（行为不变）。
+static void *amethyst_sdl3_hook_resolve_impl(void *handle, const char *name) {
     if (name == NULL) return NULL;
     // 本模块自身解析真实 GL 入口时不接管，否则会把包装版本当成真实实现缓存。
     if (ame_dlsymBypassDepth > 0) return NULL;
@@ -3573,6 +3590,48 @@ void *amethyst_sdl3_hook_resolve(void *handle, const char *name) {
     }
 
     return NULL;
+}
+
+// ============================================================================
+// ★ [SDL-FIRSTFRAME] 公开入口（hooked_dlsym 调用的就是它）
+//
+// 只包一层计数器，行为与 _impl 完全一致。包这一层是为了让「零 [SDLHook] 行」可判读：
+// 本包装只在**有人按名字查 SDL***时才会有第一条 CONSULTED 行，而 SDL 名字只可能来自
+// SDL3 窗口链（MC 26.3+ 的 LWJGL 3.4.3 + lwjgl-sdl）。因此：
+//   · 日志里没有 CONSULTED 行 ⇒ 本场根本没走 SDL3 链（MC 26.2 及以下走 GLFW：
+//     LWJGL 3.4.1 库表有 lwjgl-glfw、无 lwjgl-sdl；Metal 直渲路径同理），
+//     零 [SDLHook] 是设计内行为，**不能**据此判定「SDL 钩子没装上」；
+//   · 有 CONSULTED 行但 takenOver 恒 0 ⇒ 走了 SDL3 链却一个符号都没接管，
+//     这才是真正的「SDL 钩子没生效」，且此时日志里必然有 [SDLHook] 相关行可查。
+// 与 main_hook.m 的 `dlsym hook self-test=YES/NO` 合起来即可把三种形态彻底分开。
+// ============================================================================
+void *amethyst_sdl3_hook_resolve(void *handle, const char *name) {
+    if (name != NULL && strncmp(name, "SDL", 3) == 0) {
+        unsigned long ameConsultN = atomic_fetch_add(&g_ameSdlNamesConsulted, 1) + 1;
+        if (ameConsultN == 1 && !g_ameSdlFirstConsultLogged) {
+            g_ameSdlFirstConsultLogged = 1;
+            NSLog(@"[SDL-FIRSTFRAME] SDL3 compat layer CONSULTED: first SDL name=%s handle=%s "
+                  @"-- this line appears only on the SDL3 windowing path (MC 26.3+ / LWJGL 3.4.3 "
+                  @"lwjgl-sdl); its absence on a MC 26.2 session is by design, not a hook failure",
+                  name,
+                  (handle == RTLD_DEFAULT || handle == NULL) ? "RTLD_DEFAULT/NULL" : "explicit");
+        }
+    }
+    void *ameResolved = amethyst_sdl3_hook_resolve_impl(handle, name);
+    if (ameResolved != NULL && name != NULL && strncmp(name, "SDL", 3) == 0) {
+        unsigned long ameTakeN = atomic_fetch_add(&g_ameSdlNamesTakenOver, 1) + 1;
+        if (ameTakeN == 1) {
+            NSLog(@"[SDL-FIRSTFRAME] SDL3 compat layer TAKEOVER armed: first SDL name=%s", name);
+        }
+    }
+    return ameResolved;
+}
+
+/// ★ [SDL-FIRSTFRAME] 供 SurfaceViewController 的 45s 超时证据行读取。
+/// consulted==0 ⇒ 本场没走 SDL3 链；consulted>0 且 takenOver==0 ⇒ 走了却没接管。
+void amethyst_sdl3_hook_stats(unsigned long *consulted, unsigned long *takenOver) {
+    if (consulted) *consulted = atomic_load(&g_ameSdlNamesConsulted);
+    if (takenOver) *takenOver = atomic_load(&g_ameSdlNamesTakenOver);
 }
 
 #pragma mark - 供 EGL bridge 查询的上下文语义

@@ -92,7 +92,13 @@ bool pojavIsActualVulkanPath() {
     // 切换到 Vulkan 路径。
     if (clientAPI == GLFW_NO_API) return true;
 
-    // SDL3 模式（26.2+）：MC 不调用 glfwWindowHint，clientAPI 永远停在
+    // SDL3 模式（26.3+）：MC 不调用 glfwWindowHint，clientAPI 永远停在
+    // ★ [SDL-FIRSTFRAME] 版本更正：26.2 及以下走 **GLFW**（MC 26.2 的版本
+    //   JSON 里是 lwjgl 3.4.1 + lwjgl-glfw、**没有** lwjgl-sdl；26.3 才是
+    //   3.4.3 + lwjgl-sdl）。此前写成「26.2+」会把 26.2 场次误判成 SDL3 链，
+    //   进而把该场次里必然为零的 [SDLHook]/sdlWin 当成故障证据。判据见
+    //   main_hook.m / sdl3_hook.m 的 [SDL-FIRSTFRAME] 三件套（启动期 self-test、
+    //   hooked_dlsym LIVE、SDL3 compat layer CONSULTED）。
     // GLFW_OPENGL_API，纯 Vulkan 运行时上面的判定恒为 false，导致
     // FPS 的 CADisplayLink fallback 不启用（Vulkan 模式 FPS 恒为 0）。
     // 改以「MC 是否创建了 Vulkan 窗口」为信号：
@@ -449,9 +455,22 @@ int pojavInitOpenGLForSDL3(void) {
 }
 
 void pojavSetWindowHint(int hint, int value) {
+    // ★ [GLFW-FLOW] 这是 MC 经 GLFW 调进来的入口 ⇒ 命中即证明【GLFW 窗口链在跑】。
+    //   一次性打出可辨识标记，便于把「GLFW 链」与「SDL3 链」在日志里分开
+    //   （SDL3 链的对应标记在 sdl3_hook.m 的 ame_SDL_CreateWindow）。
+    static dispatch_once_t ameGlfwPathLogged;
+    dispatch_once(&ameGlfwPathLogged, ^{
+        NSLog(@"[GLFW-FLOW] GLFW path active: first pojavSetWindowHint reached (hint=0x%X value=%d) -- SDL3 window hook will NOT be used",
+              hint, value);
+    });
     if (hint == GLFW_CLIENT_API) {
         clientAPI = value;
-    } else if (strcmp(getenv("AMETHYST_RENDERER"), "auto")==0 && hint == GLFW_CONTEXT_VERSION_MAJOR) {
+    } else if (({
+        // ★ [GLFW-FLOW] NULL 兜底：原来直接 strcmp(getenv("AMETHYST_RENDERER"), "auto")，
+        //   若该环境变量尚未设置则 getenv 返回 NULL ⇒ strcmp(NULL, ...) 未定义行为/崩溃。
+        const char *ameRenderer = getenv("AMETHYST_RENDERER");
+        ameRenderer != NULL;
+    }) && strcmp(getenv("AMETHYST_RENDERER"), "auto") == 0 && hint == GLFW_CONTEXT_VERSION_MAJOR) {
         switch (value) {
             case 1:
             case 2:
@@ -863,9 +882,7 @@ void pojavSwapBuffers() {
         s_firstFrameRendered = YES;
         dispatch_async(dispatch_get_main_queue(), ^{
             [[NSNotificationCenter defaultCenter] postNotificationName:@"PojavFirstFrameRendered" object:nil];
-    // Task 32 澄清：此处在 eglSwapBuffers 之前触发，只能证明"首次 swap 尝试"，
-    // 真实上屏确认看 gl_bridge.m 的 "[RenderDiag] first eglSwapBuffers OK"。
-            NSLog(@"[egl_bridge] First swap attempted, removing launch overlay (present confirmation: [RenderDiag] first eglSwapBuffers OK)");
+            NSLog(@"[egl_bridge] First frame rendered, game is ready");
         });
     }
 

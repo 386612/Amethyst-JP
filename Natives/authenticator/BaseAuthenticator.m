@@ -467,12 +467,22 @@ static NSInteger ameFindRoot(NSMutableArray<NSNumber *> *parent, NSInteger x) {
     }
 
     // 根据账户数据创建对应类型的 authenticator（initWithData 会设置 current 单例）
+    // ★ [AUTH-FIX] 分类顺序修正（修「第三方账户被识别成离线/本地」的根因）：
+    //   旧码先判 `expiresAt == 0` 就归 LocalAuthenticator —— 但第三方账户的 expiresAt 可能缺失
+    //   （多角色登录路径 refreshToBindProfile 历史上不写 expiresAt），于是带 clientToken/authserver
+    //   的第三方账户被 loadSavedName 判成 Local(离线) ⇒ BaseAuthenticator.current 不是
+    //   ThirdPartyAuthenticator ⇒ 启动时不再注入 authlib-injector ⇒ 游戏内按离线处理。
+    //   现改为先按【账户类型标识字段】判定，最后才用 expiresAt==0 兜底判本地；
+    //   标识字段缺失的旧档行为不变（仍回落到 expiresAt 判据，兼容读取）。
     BaseAuthenticator *auth = nil;
-    if ([authData[@"expiresAt"] longValue] == 0) {
-        auth = [[LocalAuthenticator alloc] initWithData:authData];
-    } else if (authData[@"clientToken"] != nil) {
-        // If there is a clientToken, this is a third-party account
+    if (authData[@"clientToken"] != nil) {
+        // 有 clientToken = 第三方(Yggdrasil / authlib-injector)账户
         auth = [[ThirdPartyAuthenticator alloc] initWithData:authData];
+    } else if (authData[@"xboxGamertag"] != nil || authData[@"xuid"] != nil) {
+        // 有 Xbox 标识 = 微软账户（即便 expiresAt 缺失也不该被当成离线本地账户）
+        auth = [[MicrosoftAuthenticator alloc] initWithData:authData];
+    } else if ([authData[@"expiresAt"] longValue] == 0) {
+        auth = [[LocalAuthenticator alloc] initWithData:authData];
     } else {
         auth = [[MicrosoftAuthenticator alloc] initWithData:authData];
     }

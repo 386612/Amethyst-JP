@@ -6,6 +6,36 @@
 
 typedef void(^XSTSCallback)(NSString *xsts, NSString *uhs);
 
+// ★ [AUTH-FIX] 把「某一步失败」的 NSError 转成**可辨识**的用户可读文案。
+//   实测 user.auth.xboxlive.com / xsts.auth.xboxlive.com / api.minecraftservices.com 在令牌失败时
+//   常返回**空或不含 XErr 的正文**，AFNetworking 只能给出 "Request failed: unauthorized (401)" 这类
+//   笼统串，用户无法区分「网络/地区不可达」与「令牌被服务端拒绝」。这里统一附上
+//   【步骤名 + HTTP 状态码 +（若有）XErr/正文摘要】。
+//   安全性：正文只含错误码/说明，**不含任何凭据**；本函数绝不回显 token。
+static NSError *AmeStepError(NSString *stepName, NSString *hint, NSInteger code, NSError *error) {
+    NSHTTPURLResponse *http = error.userInfo[AFNetworkingOperationFailingURLResponseErrorKey];
+    NSInteger httpCode = ([http isKindOfClass:[NSHTTPURLResponse class]]) ? http.statusCode : 0;
+    NSString *detail = error.localizedDescription ?: @"";
+    NSData *body = error.userInfo[AFNetworkingOperationFailingURLResponseDataErrorKey];
+    if (body.length > 0) {
+        id json = [NSJSONSerialization JSONObjectWithData:body options:kNilOptions error:nil];
+        if ([json isKindOfClass:[NSDictionary class]]) {
+            id xerr = json[@"XErr"];
+            id msg = json[@"Message"] ?: json[@"errorMessage"] ?: json[@"error_description"] ?: json[@"error"];
+            if (xerr != nil || msg != nil) {
+                detail = [NSString stringWithFormat:@"XErr=%@ %@", xerr ?: @"-", msg ?: @""];
+            }
+        }
+    }
+    NSString *core = (httpCode > 0)
+        ? [NSString stringWithFormat:@"%@ (HTTP %ld): %@", stepName, (long)httpCode, detail]
+        : [NSString stringWithFormat:@"%@: %@", stepName, detail];
+    NSString *message = (hint.length > 0) ? [NSString stringWithFormat:@"%@\n%@", hint, core] : core;
+    return [NSError errorWithDomain:@"MicrosoftAuthenticator" code:code
+                           userInfo:@{NSLocalizedDescriptionKey: message}];
+}
+
+
 @implementation MicrosoftAuthenticator
 
 - (void)acquireAccessToken:(NSString *)authcode refresh:(BOOL)refresh callback:(Callback)callback {
@@ -25,11 +55,23 @@ typedef void(^XSTSCallback)(NSString *xsts, NSString *uhs);
         [self acquireXBLToken:response[@"access_token"] callback:callback];
     } failure:^(NSURLSessionDataTask *task, NSError *error) {
         if (isConnectivityError(error)) {
-            // 无可用网络时刷新不了 token，但启动器有离线路径，直接走离线
-            // 而不是拒绝启动。旧代码只认 NSURLErrorDataNotAllowed（应用被关蜂窝
-            // 数据），飞行模式/无 Wi-Fi 的 NotConnectedToInternet 反而进失败分支。
-            self.authData[@"accessToken"] = @"offline";
-            callback(nil, YES);
+            // ★ [AUTH-FIX] 区分两条语义，避免「登录失败被静默当成本地/离线账户」：
+            //   · refresh = YES（已有账户的 token 刷新）：无网时保持旧行为——置离线标记并放行，
+            //     不阻塞启动；只记可辨识日志。
+            //   · refresh = NO（用户刚完成网页授权的**首次登录**）：此时拿不到令牌就不可能登录成功，
+            //     必须给出**可辨识错误**，绝不能 callback(nil,YES) 假装成功
+            //     （旧行为会让微软登录"看起来成功"，实际账户按离线处理）。
+            NSString *reason = [NSString stringWithFormat:@"%@ (%ld)", error.localizedDescription, (long)error.code];
+            if (refresh) {
+                NSLog(@"[MSA] refresh failed due to connectivity error, falling back to offline: %@", reason);
+                self.authData[@"accessToken"] = @"offline";
+                callback(nil, YES);
+            } else {
+                NSLog(@"[MSA] login failed: no reachable token endpoint (%@)", reason);
+                callback([NSError errorWithDomain:@"MicrosoftAuthenticator" code:2001
+                                        userInfo:@{NSLocalizedDescriptionKey:
+                    [NSString stringWithFormat:localize(@"login.msa.error.network.token", nil), reason]}], NO);
+            }
         } else {
             callback(error, NO);
         }
@@ -79,7 +121,10 @@ typedef void(^XSTSCallback)(NSString *xsts, NSString *uhs);
             [self acquireXboxProfile:uhs xstsToken:xsts callback:innerCallback];
         } callback:callback];
     } failure:^(NSURLSessionDataTask *task, NSError *error) {
-        callback(error, NO);
+        // ★ [AUTH-FIX] 可辨识错误：不再只把裸 NSError 传上去（那会显示成
+        //   "Request failed: unauthorized (401)"）。
+        callback(AmeStepError(localize(@"login.msa.progress.acquireXBLToken", nil),
+                              localize(@"login.msa.error.xbl.rejected", nil), 2002, error), NO);
     }];
 }
 
@@ -106,13 +151,17 @@ typedef void(^XSTSCallback)(NSString *xsts, NSString *uhs);
         NSString *uhs = ([xui isKindOfClass:NSArray.class] && xui.count > 0) ? xui[0][@"uhs"] : nil;
         xstsCallback(response[@"Token"], uhs);
     } failure:^(NSURLSessionDataTask *task, NSError *error) {
-        NSString *errorString;
+        // ★ [AUTH-FIX] 无 XErr（空响应体 / 网络层错误）时给**可辨识**错误，而不是打印
+        //   "Unknown XErr code, response: (null)"。实测 xsts.auth.xboxlive.com 对无效用户令牌
+        //   也可能返回空正文(HTTP 400/401)。
         NSData *errorData = error.userInfo[AFNetworkingOperationFailingURLResponseDataErrorKey];
-        if (errorData == nil) {
-            callback(error, NO);
+        NSDictionary *errorDict = (errorData.length > 0)
+            ? [NSJSONSerialization JSONObjectWithData:errorData options:kNilOptions error:nil] : nil;
+        if (![errorDict isKindOfClass:[NSDictionary class]] || errorDict[@"XErr"] == nil) {
+            callback(AmeStepError(localize(@"login.msa.progress.acquireXSTS", nil), nil, 2003, error), NO);
             return;
         }
-        NSDictionary *errorDict = [NSJSONSerialization JSONObjectWithData:errorData options:kNilOptions error:nil];
+        NSString *errorString;
         switch ((int)([errorDict[@"XErr"] longValue]-2148916230l)) {
             case 3:
                 errorString = @"login.msa.error.xsts.noxboxacc";
@@ -183,7 +232,10 @@ typedef void(^XSTSCallback)(NSString *xsts, NSString *uhs);
         self.authData[@"accessToken"] = response[@"access_token"];
         [self checkMCProfile:response[@"access_token"] callback:callback];
     } failure:^(NSURLSessionDataTask *task, NSError *error) {
-        callback(error, NO);
+        // ★ [AUTH-FIX] 可辨识错误：login_with_xbox 失败会带 JSON 正文（error/errorMessage），
+        //   旧实现只回传裸 NSError ⇒ 用户只看到 "Request failed: unauthorized (401)"。
+        callback(AmeStepError(localize(@"login.msa.progress.acquireMCToken", nil),
+                              localize(@"login.msa.error.mc.token", nil), 2004, error), NO);
     }];
 }
 

@@ -2017,6 +2017,23 @@ void gl_swap_buffers() {
     if (oks == 1) {
         NSLog(@"[RenderDiag] first eglSwapBuffers OK surface=%p (presentation path confirmed)",
               (void *)currentBundle->gl.surface);
+        // ★ [SDL-FIRSTFRAME] 首帧信号兜底：本计数器是「确实有一帧上屏了」的硬证据。
+        //   egl_bridge 的 PojavFirstFrameRendered 只在 pojavSwapBuffers 入口发；若
+        //   MC/渲染器直接经渲染器自己的 eglSwapBuffers 走到本桥（不经过
+        //   pojavSwapBuffers —— 旧日志里那句 "egl_bridge swap is not used" 描述的正是
+        //   这种形态），首帧通知就永远不会发，遮罩只能干等到 45s 超时并被误记成
+        //   「启动失败」。这里用一次性通知补上该信号：两条路都发也只撤一次遮罩
+        //   （onFirstFrameRendered / dismiss 路径内都有 launchOverlayDismissed 守卫）。
+        static dispatch_once_t ameFirstSwapNotifyOnce;
+        dispatch_once(&ameFirstSwapNotifyOnce, ^{
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [[NSNotificationCenter defaultCenter] postNotificationName:@"PojavFirstFrameRendered"
+                                                                    object:nil];
+                NSLog(@"[SDL-FIRSTFRAME] first frame signalled from gl_bridge swap #1 "
+                      @"(pojavSwapBuffers-independent present path) -- launch overlay may now be "
+                      @"dismissed early instead of waiting for the 45s timeout");
+            });
+        });
     }
     // Task 76：帧间隔尖峰跟踪（见文件头计数器块注释）。
     ame76_record_swap(ame53_now_ms());
