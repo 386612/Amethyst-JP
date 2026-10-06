@@ -210,6 +210,18 @@ def read_entries(jar):
     return order, data
 
 
+def present_jars():
+    """★ [FABRIC-AGENT] 参与打包的 jar: agent jar 永远在; 官方 mod jar 已下线即缺席(<可选>)。
+    原实现无条件 read_entries(MOD_JAR) ⇒ mod 被下线后直接 FileNotFoundError 断构建。"""
+    js = [AGENT_JAR]
+    if os.path.isfile(MOD_JAR):
+        js.append(MOD_JAR)
+    else:
+        print("[glslang] NOTE: mod jar absent (%s) -- agent-only channel (mod 下线模式)"
+              % os.path.basename(MOD_JAR))
+    return js
+
+
 def write_entries(jar, order, data):
     tmp = jar + ".tmp"
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zo:
@@ -289,7 +301,7 @@ def main():
 
     if check_only:
         n_ent = len(GLSLANG_IFACE_PREFIXES) * len(group)
-        for jar in (AGENT_JAR, MOD_JAR):
+        for jar in present_jars():
             _o, data = read_entries(jar)
             pres = [n for n in JAR_GLSLANG_NATIVE if n in data]
             n_cls = {}
@@ -348,13 +360,16 @@ def main():
           "-%d jar-root blaze3d (shadow), entries=%d"
           % (added, replaced, len(removed), removed or "(none)", len(root_removed), len(order)))
 
-    # ---- 4. mod jar：★ [SHADER-SIGBUS] 只移除 glslang native（不注入任何类）----
-    n_rem, n_left = strip_jar_glslang(MOD_JAR)
-    print("[glslang] mod jar  : -%d glslang-native, entries=%d" % (n_rem, n_left))
+    # ---- 4. mod jar（★ [FABRIC-AGENT] 可选）：★ [SHADER-SIGBUS] 只移除 glslang native（不注入任何类）----
+    if os.path.isfile(MOD_JAR):
+        n_rem, n_left = strip_jar_glslang(MOD_JAR)
+        print("[glslang] mod jar  : -%d glslang-native, entries=%d" % (n_rem, n_left))
+    else:
+        print("[glslang] mod jar  : absent -- skip (agent-only channel)")
 
     # ---- 5. ★ 静态自检（打包与资源名一致 = 硬约束）----
     ok = True
-    for jar in (AGENT_JAR, MOD_JAR):
+    for jar in present_jars():
         pres = jar_glslang_present(jar)
         print("[glslang] VERIFY %-40s glslang-native-in-jar = %s"
               % (os.path.basename(jar), pres or "NONE ✓"))

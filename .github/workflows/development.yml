@@ -128,6 +128,61 @@ jobs:
           GIT_LFS_SKIP_SMUDGE: "1"
         run: git submodule update --init --recursive
 
+      # ===== 以下 4 步由协作者贡献（吸收其缓存/校验优化）=====
+      # ★ 合并顺序修正：先「清 CMake 缓存」，再「恢复依赖缓存」。
+      #   （协作者原版把 Purge 放在 Cache 之后，会把刚恢复的
+      #    Natives/build/mobileglues 与 Natives/build/sfpew 立刻删掉，
+      #    与缓存步骤互斥 —— 此处修正。）
+      - name: Purge stale CMake/build caches (force re-resolve with the selected SDK)
+        run: |
+          # ★ 旧构建缓存会记住 CMAKE_OSX_SYSROOT。换 Xcode/SDK 后必须让它重新解析,
+          #   否则 CMake 继续沿用旧 SDK 编译 —— 产物就不会采用 iOS 26 的外观
+          #   (证据:上一版产物 LC_BUILD_VERSION 里 SDK=16.0,而选中的是 26.3)。
+          # 注意：只清纯 CMake 产物目录，保留 Natives/build 下的依赖产物
+          #       （mobileglues / sfpew / java_runtimes / assets 由缓存提供）。
+          rm -rf build JavaApp/build 2>/dev/null || true
+          rm -rf Natives/build/CMakeCache.txt Natives/build/CMakeFiles 2>/dev/null || true
+          echo "★ 已清理 build 目录 ⇒ 下次 configure 会按当前 Xcode 重新探测 SDK"
+          echo "★ 当前 SDKPATH=${SDKPATH:-未设置}"
+          echo "★ DEVELOPER_DIR=${DEVELOPER_DIR:-未设置}"
+
+      - name: Cache heavy 3rd-party builds (MobileGlues / glslang / SPIRV-Cross / LTW / SFPEW)
+        uses: actions/cache@v4
+        with:
+          path: |
+            Natives/build/mobileglues
+            Natives/build/mobileglues/3rdparty
+            Natives/build/sfpew
+            Natives/external/LTW/ltw/src/main/tinywrapper
+          key: dep3rd-${{ runner.os }}-xcodeauto-${{ hashFiles('Makefile') }}
+          restore-keys: |
+            dep3rd-${{ runner.os }}-
+
+      - name: Cache JRE and game assets downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            Natives/build/java_runtimes
+            Natives/build/assets
+            ~/Library/Caches/Amethyst
+          key: jre-assets-${{ runner.os }}-xcodeauto-${{ hashFiles('Makefile') }}
+          restore-keys: |
+            jre-assets-${{ runner.os }}-
+
+      # ==== [cache-proof] 缓存命中证据(每次打印)====
+      - name: Cache evidence
+        run: |
+          echo "==== cache state ===="
+          for d in Natives/build/mobileglues Natives/build/sfpew Natives/build/java_runtimes Natives/build/assets; do
+            if [ -d "$d" ]; then
+              echo "HIT  $d : $(find "$d" -type f 2>/dev/null | wc -l) files, $(du -sh "$d" 2>/dev/null | cut -f1)"
+              echo "     newest: $(find "$d" -type f -newermt '-10 minutes' 2>/dev/null | wc -l) files touched in last 10min"
+            else
+              echo "MISS $d (absent)"
+            fi
+          done
+          echo "====================="
+
       # 注意：不要在 `if:` 条件里引用 secrets / vars。
       # GitHub Actions 的表达式求值器在编译 workflow 时处理这些 context，
       # vars 在仓库尚未创建任何 variable 时求值也会失败，导致整个 workflow
@@ -320,6 +375,31 @@ jobs:
           if git diff --cached --quiet; then exit 0; fi
           git commit -m "ci(sfpew): 提交构建日志用于定位 [skip ci]"
           git push origin HEAD:"$BRANCH_NAME" || { git pull --rebase origin "$BRANCH_NAME"; git push origin HEAD:"$BRANCH_NAME"; }
+
+      - name: Verify the built binary really used the iOS 26 SDK
+        run: |
+          # ★ 自证:读主二进制 LC_BUILD_VERSION 的 sdk 字段。26.x ⇒ 真用了 26 SDK。
+          BIN=$(find . -path '*Payload/*.app' -type d 2>/dev/null | head -1)
+          APP=$(find . -name 'AngelAuraAmethyst' -type f 2>/dev/null | head -1)
+          echo "★ app=$BIN bin=$APP"
+          if [ -n "$APP" ]; then
+            python3 - "$APP" <<'PY'
+          import struct, sys
+          b = open(sys.argv[1], 'rb').read()
+          if b[:4] != b'\xcf\xfa\xed\xfe':
+              print('★ 不是 Mach-O'); raise SystemExit
+          n = struct.unpack_from('<I', b, 16)[0]; off = 32
+          for _ in range(n):
+              cmd, cs = struct.unpack_from('<II', b, off)
+              if cmd == 0x32:
+                  plat, minos, sdk = struct.unpack_from('<III', b, off+8)
+                  f = lambda v: '%d.%d.%d' % (v>>16&0xff, v>>8&0xff, v&0xff)
+                  print('★★ LC_BUILD_VERSION: minOS=%s  SDK=%s' % (f(minos), f(sdk)))
+                  print('★★ SDK>=26 ⇒ 液态玻璃生效; 若显示 16/18 ⇒ SDK 没用上 26,需修构建')
+                  break
+              off += cs
+          PY
+          fi
 
       - name: Upload regular ipa
         uses: actions/upload-artifact@v4

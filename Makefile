@@ -72,7 +72,14 @@ IOS         := 1
 SDKPATH     ?= /usr/share/SDKs/iPhoneOS.sdk
 BOOTJDK     ?= /usr/lib/jvm/java-8-openjdk/bin
 ifeq ($(shell test "$(OSVER)" -gt 14; echo $$?),0)
-PREFIX      ?= /var/jb/
+# ★ [ROOTHIDE] 在 iOS 上就地构建时的安装前缀。
+#   · 普通 rootless：固定 /var/jb/（上一版行为，保持不变）。
+#   · RootHide（Dopamine-roothide/palera1n-roothide）：越狱根【随机化】到
+#     /var/containers/Bundle/Application/.jbroot-<16hex>/，不存在 /var/jb
+#     ⇒ 旧默认会把 App 装到空路径。这里自动探测随机 jbroot（优先）并加尾斜杠
+#     （deploy 用 $(PREFIX)Applications/... 拼接）。显式传 PREFIX=... 仍覆盖（?=）。
+#   注：.ipa/.tipa 打包路径（package target）不使用 PREFIX，不受影响。
+PREFIX      ?= $(shell d=$$(ls -d /var/containers/Bundle/Application/.jbroot-*/ 2>/dev/null | head -1); if [ -n "$$d" ]; then printf '%s' "$$d"; else echo "/var/jb/"; fi)
 else
 PREFIX      ?= /
 endif

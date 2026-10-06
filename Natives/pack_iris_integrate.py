@@ -106,7 +106,14 @@ def main():
           % (os.path.getsize(IRIS_DYLIB), m))
 
     a_order, a_data = read_entries(AGENT)
-    m_order, m_data = read_entries(MOD)
+    # ★ [FABRIC-AGENT] mod jar 可选：官方 mod 下线后只剩 agent 通道，脚本不得因此中断。
+    mod_present = os.path.isfile(MOD)
+    if mod_present:
+        m_order, m_data = read_entries(MOD)
+    else:
+        print("[iris-integrate] NOTE: mod jar absent (%s) -- agent-only channel (mod 下线模式)"
+              % os.path.basename(MOD))
+        m_order, m_data = [], {}
 
     if r10:
         print("=" * 78)
@@ -129,9 +136,12 @@ def main():
     if check_only:
         print("[iris-integrate] wiring already correct: agent_wired=%s mod_wired=%s"
               % (b"\x00\x0dmetallum_iris" in a_data[PREFIX + MNB],
-                 b"\x00\x0dmetallum_iris" in m_data[MNB]))
+                 (b"\x00\x0dmetallum_iris" in m_data[MNB]) if mod_present else "n/a(mod absent)"))
     a_data[PREFIX + MNB], w1 = wire(a_data[PREFIX + MNB])
-    m_data[MNB], w2 = wire(m_data[MNB])
+    if mod_present:
+        m_data[MNB], w2 = wire(m_data[MNB])
+    else:
+        w2 = "n/a"
     print("[iris-integrate] loadLibrary(\"metallum\") -> \"metallum_iris\": changed(agent=%s mod=%s)" % (w1, w2))
 
     ev = {
@@ -146,8 +156,11 @@ def main():
     if check_only:
         return 0
     write_entries(AGENT, a_order, a_data)
-    write_entries(MOD, m_order, m_data)
-    print("[iris-integrate] written: agent entries=%d  mod entries=%d" % (len(a_order), len(m_order)))
+    # ★ [FABRIC-AGENT] mod jar 缺席时只写 agent 通道（mod 下线模式）。
+    if mod_present:
+        write_entries(MOD, m_order, m_data)
+    print("[iris-integrate] written: agent entries=%d  mod entries=%s"
+          % (len(a_order), len(m_order) if mod_present else "n/a(mod absent)"))
     return 0
 
 

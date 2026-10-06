@@ -81,21 +81,28 @@ def macho_exported_metallum(path):
 
 def main():
     bad = []
-    za = zipfile.ZipFile(AGENT); zm = zipfile.ZipFile(MOD)
-    an = set(za.namelist()); mn = set(zm.namelist())
+    za = zipfile.ZipFile(AGENT)
+    an = set(za.namelist())
+    # ★ [FABRIC-AGENT] mod jar 可选：官方 mod 下线后只校验 agent 通道。
+    mod_present = os.path.isfile(MOD)
+    zm = zipfile.ZipFile(MOD) if mod_present else None
+    mn = set(zm.namelist()) if mod_present else set()
 
     # 1. mod jar 身份（信息项；不强制 r10）
-    try:
-        ver = json.loads(zm.read("fabric.mod.json").decode("utf-8")).get("version", "")
-    except Exception as e:
-        ver = "?"; bad.append("mod fabric.mod.json unreadable: %s" % e)
-    print("[1] mod jar version                : %s   (r10 = 1.0.4-irisuniform-r10；当前应保持更新那份)" % ver)
+    if mod_present:
+        try:
+            ver = json.loads(zm.read("fabric.mod.json").decode("utf-8")).get("version", "")
+        except Exception as e:
+            ver = "?"; bad.append("mod fabric.mod.json unreadable: %s" % e)
+        print("[1] mod jar version                : %s   (r10 = 1.0.4-irisuniform-r10；当前应保持更新那份)" % ver)
+    else:
+        print("[1] mod jar version                : absent -- agent-only mode (mod 下线)")
 
-    # 2. 两条通道都接线
+    # 2. 两条通道都接线（mod 缺席时只要求 agent 通道）
     wire_a = b"metallum_iris" in za.read(PREFIX + MNB)
-    wire_m = b"metallum_iris" in zm.read(MNB)
-    print("[2] loadLibrary(\"metallum_iris\")     : agent=%s mod=%s" % (wire_a, wire_m))
-    if not (wire_a and wire_m):
+    wire_m = (b"metallum_iris" in zm.read(MNB)) if mod_present else None
+    print("[2] loadLibrary(\"metallum_iris\")     : agent=%s mod=%s" % (wire_a, wire_m if mod_present else "n/a"))
+    if not wire_a or (mod_present and not wire_m):
         bad.append("metallum_iris wiring missing (agent=%s mod=%s)" % (wire_a, wire_m))
 
     # 3. 91 符号 native 在 Frameworks（接线目标必须存在）

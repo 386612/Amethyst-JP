@@ -54,6 +54,10 @@ SPVC_NAMES = ("libspvc.dylib", "libspirv-cross-c-shared.0.dylib",
               "libspirv-cross-c-shared.dylib", "libspirv-cross.dylib")
 METALLUM_NAMES = ("libmetallum.dylib",)
 # 扫描范围（有界，避免全库遍历）
+# ★ [FABRIC-AGENT] mods_preload/ 现在【可选】：官方 MetalUniversal mod 下线后，
+#   agent jar(JavaApp/libs/others/metallum_agent.jar) 是唯一且强制的 natives 通道 ——
+#   它带 natives/ios|ir1/libspvc.dylib，found_any 由它满足；mods_preload 缺席不报错
+#   (iter_jars 对不存在的目录直接 return)。无需把这块"改指 agent"，两处都扫即是。
 JAR_ROOTS = (
     os.path.join("Natives", "resources", "mods_preload"),
     os.path.join("JavaApp", "libs", "others"),
