@@ -2,6 +2,7 @@
 
 #include "jni.h"
 #include <dlfcn.h>
+#include <mach-o/dyld.h>
 #include <mach/mach.h>
 #include <math.h>
 #include <os/lock.h>
@@ -16,22 +17,258 @@
 
 #include "utils.h"
 
+// ★ [VER-ISOLATE-PCL] 版本隔离解析需要读全局偏好键 general.version_isolation，
+// 故引入偏好访问层（LauncherPreferences.h 不反向包含 utils.h，无循环依赖风险）。
+#import "LauncherPreferences.h"
+
 CFTypeRef SecTaskCopyValueForEntitlement(void* task, NSString* entitlement, CFErrorRef  _Nullable *error);
 void* SecTaskCreateFromSelf(CFAllocatorRef allocator);
 
 BOOL getEntitlementValue(NSString *key) {
+    // ★ [JIT-FLOW] 本函数修两个缺陷（原实现见 git 历史）：
+    //  (1) use-after-free：原实现先 CFRelease(value) 再对同一个 value 发
+    //      isKindOfClass:/boolValue ⇒ 悬垂读（可能崩，也可能取到垃圾值 ⇒
+    //      hasTrollStoreJIT 之类的判定时真时假，排查时无法复现）。改为先算后放。
+    //  (2) 恒真口径：原实现把任何非 NSNumber 值（含字符串）一律当 YES。侧载
+    //      模板 entitlements.sideload.xml 预写了
+    //      jb.pmap_cs.custom_trust="PMAP_CS_APP_STORE" ⇒ 每个侧载包都恒真，
+    //      被送进 apple-magnifier:// 那条无校验分支。字符串改为按真值判定
+    //      （非空且非 false/0/no 才算 YES），并把 TrollStore 判定收到
+    //      isTrollStoreInstall()（entitlement AND 磁盘标记）里。
     void *secTask = SecTaskCreateFromSelf(NULL);
-    CFTypeRef value = SecTaskCopyValueForEntitlement(SecTaskCreateFromSelf(NULL), key, nil);
+    if (secTask == NULL) {
+        return NO;
+    }
+    // 注意：只创建一次 SecTask，并以它做查询（原实现另建一个 task 查询、
+    // 却释放了第一个 ⇒ 查询用的 task 泄漏）。
+    CFTypeRef value = SecTaskCopyValueForEntitlement(secTask, key, nil);
     CFRelease(secTask);
     if (value == nil) {
         return NO;
     }
+    BOOL result = NO;
+    id obj = (__bridge id)value;
+    if ([obj isKindOfClass:NSNumber.class]) {
+        result = [obj boolValue];
+    } else if ([obj isKindOfClass:NSString.class]) {
+        NSString *s = [(NSString *)obj lowercaseString];
+        result = (s.length > 0) &&
+                 ![s isEqualToString:@"false"] &&
+                 ![s isEqualToString:@"0"] &&
+                 ![s isEqualToString:@"no"];
+    } else {
+        // 其余非空非布尔值（数组/字典/日期…）保持旧口径：视为已授予。
+        result = YES;
+    }
     CFRelease(value);
-    return ![(__bridge id)value isKindOfClass:NSNumber.class] || [(__bridge id)value boolValue];
+    return result;
+}
+
+// ★ [JIT-FLOW] TrollStore 装机判定：entitlement 标记【且】磁盘标记。
+//   侧载模板给每个包都预写了 jb.pmap_cs.custom_trust，所以单看 entitlement
+//   会让【每个侧载包】都被判成 TrollStore 机，被送进 apple-magnifier:// 这条
+//   【没有 urlOK 校验】的分支（未装对应工具时静默失败）。加磁盘标记后只有真
+//   TrollStore 安装才为真，普通侧载包走 stikjit:// + urlOK 校验那条可靠分支。
+BOOL isTrollStoreInstall(void) {
+    if (!getEntitlementValue(@"jb.pmap_cs.custom_trust")) {
+        return NO;
+    }
+    // TrollStore 把 App 放在 <...>/Application/<uuid>/ 下，并在同一层放一个
+    // _TrollStore 标记文件 ⇒ 相对 bundle 即 "../_TrollStore"。
+    NSString *marker = [[[NSBundle.mainBundle.bundlePath
+                          stringByAppendingPathComponent:@".."]
+                         stringByAppendingPathComponent:@"_TrollStore"]
+                        stringByStandardizingPath];
+    if ([NSFileManager.defaultManager fileExistsAtPath:marker]) {
+        return YES;
+    }
+    // 兼容：部分 TrollStore/变体把标记放在 bundle 内或上一层的 _TrollStore。
+    NSString *markerInBundle = [NSBundle.mainBundle.bundlePath
+                                stringByAppendingPathComponent:@"_TrollStore"];
+    return [NSFileManager.defaultManager fileExistsAtPath:markerInBundle];
+}
+
+// ★ [JB-ADAPT] ============================================================
+// 越狱环境多证据探测（实现与设计约束见 utils.h 顶部 [JB-ADAPT] 注释块）。
+// 只读、一次性（dispatch_once）、结果缓存；不做任何写操作、不改进程状态。
+//
+// 证据优先级：dyld 镜像（沙盒下最可靠） > 磁盘标记（沙盒下多为不可达，尽力而为）
+//   > CS 平台位（rootful 越狱 App 常见） 。
+// ⚠ 本探测**绝不**参与 isJITEnabled 判定：越狱 ≠ 本 App 被授予 JIT。
+// ============================================================================
+#ifndef CS_OPS_STATUS
+#define CS_OPS_STATUS 0
+#endif
+#ifndef CS_PLATFORM_BINARY
+#define CS_PLATFORM_BINARY 0x4000000
+#endif
+
+static AMEJBEnvironment gAmeJBEnvironment = AMEJBEnvironmentUnknown;
+static NSString *gAmeJBRootTag = nil;       // rootful / rootless / roothide
+static NSString *gAmeJBFrameworkTag = nil;  // ElleKit / libhooker / Substitute / CydiaSubstrate
+static NSString *gAmeJBFamilyTag = nil;     // Dopamine / palera1n / unc0ver / checkra1n / …
+static NSString *gAmeJBSummary = nil;
+static dispatch_once_t gAmeJBDetectOnce = 0;
+
+// dyld 已加载镜像名（小写全路径）是否包含任一 needle。镜像注入是沙盒下最可靠的越狱证据：
+// 越狱的 tweak 注入库一定出现在本进程镜像表里（RootHide 隐藏名单里的 App 除外）。
+static BOOL ameJBAnyLoadedImageContains(NSArray<NSString *> *needles) {
+    for (uint32_t i = 0; i < _dyld_image_count(); i++) {
+        const char *ip = _dyld_get_image_name(i);
+        if (ip == NULL) continue;
+        NSString *full = [@(ip) lowercaseString];
+        for (NSString *nd in needles) {
+            if ([full containsString:nd]) return YES;
+        }
+    }
+    return NO;
+}
+
+static BOOL ameJBFileExists(NSString *path) {
+    return path.length > 0 && access(path.fileSystemRepresentation, F_OK) == 0;
+}
+
+// RootHide 随机 jbroot 目录扫描（.jbroot-<hex>）。仅无沙盒进程可列，列不到不算失败
+// （dyld 证据已足以判定）。同时扫 /var（IOSSecuritySuite 记录过的落点）。
+static BOOL ameJBFindRandomJBROOT(void) {
+    const char *parents[] = { "/var/containers/Bundle/Application", "/var" };
+    for (size_t p = 0; p < sizeof(parents) / sizeof(parents[0]); p++) {
+        DIR *d = opendir(parents[p]);
+        if (d == NULL) continue;
+        struct dirent *ent;
+        while ((ent = readdir(d)) != NULL) {
+            if (strncmp(ent->d_name, ".jbroot-", 8) == 0) { closedir(d); return YES; }
+        }
+        closedir(d);
+    }
+    return NO;
+}
+
+static void ameJBDetectEnvironmentOnce(void) {
+    // ① RootHide：随机 jbroot 注入库 / 环境库（roothide 系）。名字被随机化的
+    //    systemhook.dylib 不作判据，改认 .jbroot- 路径段与 roothideinit/libroothide/libvroot。
+    if (ameJBAnyLoadedImageContains(@[@".jbroot-", @"roothideinit.dylib", @"libroothide", @"libvroot"])) {
+        gAmeJBRootTag = @"roothide";
+    }
+
+    // ② 注入框架（四类）：ElleKit（Dopamine/palera1n/roothide 现代默认）/
+    //    libhooker（Taurine/Odyssey）/ Substitute / CydiaSubstrate（unc0ver/checkra1n）。
+    if (ameJBAnyLoadedImageContains(@[@"libellekit.dylib", @"/ellekit/"])) {
+        gAmeJBFrameworkTag = @"ElleKit";
+    } else if (ameJBAnyLoadedImageContains(@[@"libhooker.dylib"])) {
+        gAmeJBFrameworkTag = @"libhooker";
+    } else if (ameJBAnyLoadedImageContains(@[@"libsubstitute", @"substitute-inserter",
+                                             @"substitute-loader"])) {
+        gAmeJBFrameworkTag = @"Substitute";
+    } else if (ameJBAnyLoadedImageContains(@[@"mobilesubstrate", @"cydiasubstrate", @"libsubstrate",
+                                             @"substrateinserter", @"substrateloader",
+                                             @"substratebootstrap", @"substrate-inserter"])) {
+        gAmeJBFrameworkTag = @"CydiaSubstrate";
+    } else if (ameJBAnyLoadedImageContains(@[@"systemhook.dylib", @"libblackjack.dylib"])) {
+        // Dopamine 自有注入（某些机型/配置下 ElleKit 不可见时兜底；非 Substrate 系）。
+        gAmeJBFrameworkTag = @"Dopamine(systemhook)";
+    }
+
+    // ③ 磁盘证据（沙盒下可能 EPERM/ENOENT，命中即用，未命中不否决）。
+    BOOL diskRootless =
+        ameJBFileExists(@"/var/jb") || ameJBFileExists(@"/var/jb/usr/bin") ||
+        ameJBFileExists(@"/var/jb/usr/lib/libellekit.dylib") ||
+        ameJBFileExists(@"/var/jb/Library/LaunchDaemons");
+    BOOL diskRootHide =
+        ameJBFileExists(@"/var/mobile/Library/Preferences/com.roothide.pref.plist") ||
+        ameJBFindRandomJBROOT();
+    BOOL diskRootful =
+        ameJBFileExists(@"/Library/MobileSubstrate/MobileSubstrate.dylib") ||
+        ameJBFileExists(@"/Applications/Cydia.app") ||
+        ameJBFileExists(@"/Applications/Sileo.app") ||
+        ameJBFileExists(@"/Applications/Zebra.app") ||
+        ameJBFileExists(@"/var/binpack") ||
+        ameJBFileExists(@"/.installed_unc0ver") ||
+        ameJBFileExists(@"/.bootstrapped_electra");
+    BOOL platformBit = NO;
+    uint32_t csFlags = 0;
+    if (csops(0, CS_OPS_STATUS, &csFlags, sizeof(csFlags)) == 0) {
+        platformBit = (csFlags & CS_PLATFORM_BINARY) != 0;
+    }
+
+    // ④ 越狱根形态归类。
+    if (gAmeJBRootTag == nil) {
+        if (diskRootHide) {
+            gAmeJBRootTag = @"roothide";
+        } else if (diskRootless || (gAmeJBFrameworkTag != nil && !diskRootful)) {
+            // 有注入框架但无固定 /var/jb 也归 rootless（现代越狱注入即越狱）。
+            gAmeJBRootTag = @"rootless";
+        } else if (diskRootful || platformBit) {
+            gAmeJBRootTag = @"rootful";
+        }
+    }
+
+    // ⑤ 越狱家族（尽力而为，仅用于日志/诊断）。
+    if (ameJBFileExists(@"/Applications/Dopamine.app") ||
+        ameJBFileExists(@"/var/mobile/Library/Preferences/com.opa334.Dopamine.plist") ||
+        ameJBAnyLoadedImageContains(@[@"libblackjack.dylib", @"systemhook.dylib"])) {
+        gAmeJBFamilyTag = @"Dopamine";
+    } else if (ameJBFileExists(@"/Applications/palera1nLoader.app") ||
+               ameJBFileExists(@"/usr/bin/palera1n-helper") ||
+               ameJBFileExists(@"/cores/payload")) {
+        gAmeJBFamilyTag = @"palera1n";
+    } else if (ameJBFileExists(@"/.installed_unc0ver")) {
+        gAmeJBFamilyTag = @"unc0ver";
+    } else if (ameJBFileExists(@"/var/binpack")) {
+        gAmeJBFamilyTag = @"checkra1n";
+    } else if (ameJBFileExists(@"/.bootstrapped_electra")) {
+        gAmeJBFamilyTag = @"Electra";
+    } else if ([gAmeJBFrameworkTag isEqualToString:@"libhooker"]) {
+        gAmeJBFamilyTag = @"Taurine/Odyssey";
+    }
+
+    if ([gAmeJBRootTag isEqualToString:@"roothide"]) {
+        gAmeJBEnvironment = AMEJBEnvironmentRootHide;
+    } else if ([gAmeJBRootTag isEqualToString:@"rootless"]) {
+        gAmeJBEnvironment = AMEJBEnvironmentRootless;
+    } else if ([gAmeJBRootTag isEqualToString:@"rootful"]) {
+        gAmeJBEnvironment = AMEJBEnvironmentRootful;
+    } else {
+        gAmeJBEnvironment = AMEJBEnvironmentNone;
+    }
+
+    if (gAmeJBEnvironment == AMEJBEnvironmentNone) {
+        gAmeJBSummary = @"None";
+    } else {
+        NSString *rootDesc =
+            [gAmeJBRootTag isEqualToString:@"roothide"] ? @"RootHide(random jbroot)"
+          : [gAmeJBRootTag isEqualToString:@"rootless"] ? @"rootless(/var/jb)"
+          : @"rootful";
+        NSMutableString *s = [NSMutableString stringWithString:rootDesc];
+        if (gAmeJBFrameworkTag) [s appendFormat:@" + %@", gAmeJBFrameworkTag];
+        if (gAmeJBFamilyTag)     [s appendFormat:@" (%@)", gAmeJBFamilyTag];
+        gAmeJBSummary = s.copy;
+    }
+    // 可辨识日志：越狱环境分类（env=1 None / 2 Rootful / 3 Rootless / 4 RootHide）。
+    NSLog(@"[JB-ADAPT] jailbreak env detect: env=%ld root=%@ framework=%@ family=%@ -> %@",
+          (long)gAmeJBEnvironment, gAmeJBRootTag ?: @"none",
+          gAmeJBFrameworkTag ?: @"none", gAmeJBFamilyTag ?: @"none", gAmeJBSummary);
+}
+
+AMEJBEnvironment AMEJailbreakEnvironment(void) {
+    dispatch_once(&gAmeJBDetectOnce, ^{ ameJBDetectEnvironmentOnce(); });
+    return gAmeJBEnvironment;
+}
+
+NSString *AMEJailbreakEnvSummary(void) {
+    dispatch_once(&gAmeJBDetectOnce, ^{ ameJBDetectEnvironmentOnce(); });
+    return gAmeJBSummary ?: @"None";
 }
 
 BOOL isJITEnabled(BOOL checkCSFlags) {
-    if (!checkCSFlags && (getEntitlementValue(@"dynamic-codesigning") || isJailbroken)) {
+    // ★ [JB-ADAPT] 收紧 JIT 判据：JIT 能力只认**真实证据**（dynamic-codesigning
+    //   entitlement / CS_DEBUGGED）。原实现把 `isJailbroken` 当 JIT 能力代理 ——
+    //   越狱【不等于】本 App 被授予 JIT：越狱机上本 App 若未开 JIT，该代理会误报
+    //   可用，导致启动闸门跳过 JIT 获取 ⇒ 游戏 SIGILL。
+    //   越狱环境改由启动闸门走「原生 JIT + 真能力自检」策略
+    //   （AMEJailbreakNativeJITPathApplies / AMEJailbreakNativeJITReady），
+    //   绝不预先声明 JIT 已开 —— 满足 [ROOTHIDE] 线「环境识别不得放宽 isJITEnabled」。
+    if (!checkCSFlags && getEntitlementValue(@"dynamic-codesigning")) {
         return YES;
     }
 
@@ -120,22 +357,31 @@ static NSBundle *sAmeResolvedLanguageBundle = nil;
 
 // ★ [I18N] 启动器真正支持的语言（curated 白名单）。
 // 依据：对 Natives/resources/*.lproj/Localizable.strings 的键集合盘点（见
-// D:\CTF\_I18N_FIX.md「覆盖度表」）：只有 zh-Hans / zh-Hant / zh-CN / en / ja / km
-// 这 6 个的翻译覆盖率 ≥95%；其余 48 个（de/ar/fr/ru…）覆盖率 ≤12%（上游 Pojav
+// D:\CTF\_I18N_FIX.md「覆盖度表」）：只有 zh-Hans / zh-Hant / en / ja
+// 这 4 个的翻译覆盖率 ≥95%；其余 48 个（de/ar/fr/ru…）覆盖率 ≤12%（上游 Pojav
 // 遗留的旧键集合），选它们等于大面积回退英文 ⇒ 是"选了没用的壳子"，一律不列。
 // zh-CN 与 zh-Hans 同为简体且被变体映射到 zh-Hans，不单独作为一项。
+// ★ [AUDIT-DECIDE] E-2/A-8：km（高棉语）已从本白名单移除。km.lproj 实测是**中文内容**
+//   （值里 14762 个 CJK 字 vs 仅 140 个高棉字），把它当"可选语言"列进选单 = 把中文界面
+//   谎称成高棉语交给用户（违反「不能把中文当高棉语送出去」）。既然没有真实高棉语翻译，
+//   就从"可选语言"里拿掉：选单不再列出它（AmeLauncherAvailableLanguageCodes 只回本表），
+//   系统首选语言是 km-KH 时也不再命中它（AmeLauncherMatchLanguageCode 的第 3/4 步只在
+//   本表内匹配），并会把旧用户存过的 km 偏好当"已不支持"清掉、安全回退到「跟随系统 / en」
+//   （见 AmeLauncherPreferredLanguageOverride）。Info.plist 的 CFBundleLocalizations 同步去 km。
+//   注：km.lproj 文件本身保留在包内（无引用、不可达），以免覆盖并发子代理在该文件上的改动。
 NSArray<NSString *> *AmeLauncherSupportedLanguageCodes(void) {
     static NSArray<NSString *> *codes;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        codes = @[@"zh-Hans", @"zh-Hant", @"en", @"ja", @"km"];
+        codes = @[@"zh-Hans", @"zh-Hant", @"en", @"ja"];
     });
     return codes;
 }
 
 // ★ [I18N] 系统语言代码 → 我们实际使用的 .lproj 代码（含变体映射）。
-// 处理 zh-Hans-CN / zh-Hant-TW / en-GB / ja-JP / km-KH 这类带脚本或地区后缀的代码，
+// 处理 zh-Hans-CN / zh-Hant-TW / en-GB / ja-JP 这类带脚本或地区后缀的代码，
 // 以及 iOS 常见的"裸语言"（zh / en / ja）。匹配不到返回 nil（调用方回退 en）。
+// ★ [AUDIT-DECIDE] km 已不在支持表内 ⇒ km-KH 也走不进任何分支，最终返回 nil ⇒ 回退 en。
 NSString *AmeLauncherMatchLanguageCode(NSString *systemCode) {
     if (systemCode.length == 0) return nil;
 
@@ -156,7 +402,7 @@ NSString *AmeLauncherMatchLanguageCode(NSString *systemCode) {
         }
     }
 
-    // 1) 精确命中我们的代码（zh-Hans / zh-Hant / en / ja / km，大小写不敏感）
+    // 1) 精确命中我们的代码（zh-Hans / zh-Hant / en / ja，大小写不敏感；km 已移除）
     for (NSString *code in supported) {
         if ([code.lowercaseString isEqualToString:lower]) return code;
     }
@@ -172,7 +418,7 @@ NSString *AmeLauncherMatchLanguageCode(NSString *systemCode) {
         if (region && [tradRegions containsObject:region]) return @"zh-Hant";
         return @"zh-Hans";   // zh / zh-CN / zh-SG / zh-MY …
     }
-    // 3) 其它语言：语言码直接对应（en-US→en, ja-JP→ja, km-KH→km, …）
+    // 3) 其它语言：语言码直接对应（en-US→en, ja-JP→ja, …；km-KH 已不命中）
     for (NSString *code in supported) {
         if ([code.lowercaseString isEqualToString:lang]) return code;
     }
@@ -209,8 +455,11 @@ NSString *AmeLauncherEffectiveLanguageCode(void) {
 }
 
 // ★ [I18N] 读取用户选择；空串 / nil / 已不支持的旧值一律视为「跟随系统」。
-// "已不支持"（旧版可能存过 de/ar 等空壳语言）会被当作未选择并顺手清理，
+// "已不支持"（旧版可能存过 de/ar 等空壳语言，以及本次移除的 km）会被当作未选择并顺手清理，
 // 避免出现"切了却大面积英文"的破碎界面（幂等迁移）。
+// ★ [AUDIT-DECIDE] E-2/A-8：旧用户若把界面语言设成 km，这里因 km 已不在支持表而
+//   removeObjectForKey ⇒ 返回 nil ⇒ AmeLauncherEffectiveLanguageCode 回退到系统首选语言
+//   的匹配，匹配不到再回退 en。即"安全回退到跟随系统/en"，不会卡在已移除的语言上。
 NSString *AmeLauncherPreferredLanguageOverride(void) {
     NSString *code = [[NSUserDefaults standardUserDefaults] stringForKey:AmeLauncherLanguageDefaultsKey];
     if (code.length == 0) return nil;
@@ -239,6 +488,45 @@ NSString *AmeLauncherDisplayNameForLanguageCode(NSString *code) {
     if (code.length == 0) return @"";
     NSString *name = [[NSLocale currentLocale] localizedStringForLanguageCode:code];
     return name.length > 0 ? name : code;
+}
+
+#pragma mark - ★ [I18N-PARTIAL] 「部分翻译」语言（单一事实源 + 展示标注）
+
+// ★ [I18N-PARTIAL] **单一事实源**：只有这一个地方列出"部分翻译"的语言代码。
+// 背景（用户拍板）：ja.lproj 里 1608/1955 个键与 zh-Hans **逐字相同**（假名 2648 字 vs
+// 汉字 13479 字）⇒ 日语界面里有大量内容其实是中文；但它又确实含真实日语翻译，比 km 那种
+// "整包中文冒充外语"好 ⇒ **保留**日语、不撤其语言地位，只在用户能看到语言的地方如实标注
+// 「部分翻译」。以后要追加别的"部分翻译"语言，只改这一个集合即可
+// （展示层统一走 AmeLauncherDisplayNameAnnotatedForLanguageCode /
+//  AmeLauncherPartiallyTranslatedNoteForLanguageCode）。
+NSSet<NSString *> *AmeLauncherPartiallyTranslatedLanguageCodes(void) {
+    static NSSet<NSString *> *set;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        set = [NSSet setWithArray:@[@"ja"]];
+    });
+    return set;
+}
+
+// ★ [I18N-PARTIAL] 是否被标为"部分翻译"。
+BOOL AmeLauncherIsPartiallyTranslatedLanguage(NSString *code) {
+    if (code.length == 0) return NO;
+    return [AmeLauncherPartiallyTranslatedLanguageCodes() containsObject:code];
+}
+
+// ★ [I18N-PARTIAL] 展示名 = 语言名 +（部分翻译时）本地化的「（部分翻译）」后缀。
+// 后缀文案随界面语言本地化（preference.lang.partial_suffix，四语齐全）。
+NSString *AmeLauncherDisplayNameAnnotatedForLanguageCode(NSString *code) {
+    NSString *name = AmeLauncherDisplayNameForLanguageCode(code);
+    if (!AmeLauncherIsPartiallyTranslatedLanguage(code)) return name;
+    return [NSString stringWithFormat:@"%@%@", name,
+            localize(@"preference.lang.partial_suffix", @"部分翻译标注后缀")];
+}
+
+// ★ [I18N-PARTIAL] 部分翻译语言的补充说明（如「部分界面仍为中文」）；非部分翻译返回 nil。
+NSString *AmeLauncherPartiallyTranslatedNoteForLanguageCode(NSString *code) {
+    if (!AmeLauncherIsPartiallyTranslatedLanguage(code)) return nil;
+    return localize(@"preference.lang.partial_note", @"部分界面仍为中文");
 }
 
 // ★ [I18N] 语言选单要列出的语言（= 真正支持的白名单，按显示名排序）。
@@ -883,6 +1171,175 @@ void AMEJITLogPocketJReadiness(NSString *context) {
           AMEJITPairingFileCandidates().firstObject ?: @"(nil)");
 }
 
+// ★ [JIT-ADAPT] ============================================================
+// 「市面上能开 JIT 的工具」统一适配层（声明/设计说明见 utils.h）。
+// 唯一目的：让主游戏启动路径也能像 headless 一样「按 debug.jit_enabler 调起/引导」，
+// 而不是永远走 stikjit://；并且「工具没装」时立刻给可辨识提示，不白等一整个超时窗口。
+// 判定「已开」仍由调用方统一走 AMEJITWaitReadyVerified()（真拿到可写 JIT 区）。
+// ============================================================================
+// showDialog 定义在 ios_uikit_bridge.m（避免为一个原型引入整份 UIKit 桥接头）。
+extern void showDialog(NSString* title, NSString* message);
+
+// 本层负责的 enabler 取值（auto / stikjit 交回调用方既有分支，保持默认行为）。
+static BOOL ameJITAdapt_handlesEnabler(NSString *e) {
+    if (![e isKindOfClass:NSString.class] || e.length == 0) return NO;
+    static NSSet<NSString *> *set = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        set = [NSSet setWithArray:@[@"stikdebug", @"stosdebug", @"jitstreamer",
+                                    @"sidejitserver", @"sidestore", @"trollstore",
+                                    @"altstore", @"sideloadly", @"jailbreak", @"manual"]];
+    });
+    return [set containsObject:e];
+}
+
+// 该 enabler 是否「本机无 URL 可调、必须由用户手动开」。
+static BOOL ameJITAdapt_isManualEnabler(NSString *e) {
+    static NSSet<NSString *> *set = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        set = [NSSet setWithArray:@[@"sidejitserver", @"altstore", @"sideloadly",
+                                    @"jailbreak", @"manual"]];
+    });
+    return e != nil && [set containsObject:e];
+}
+
+// canOpenURL 只对 LSApplicationQueriesSchemes 里登记过的 scheme 可信（与 Info.plist 一致）。
+static BOOL ameJITAdapt_schemeProbeable(NSString *scheme) {
+    static NSSet<NSString *> *set = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        set = [NSSet setWithArray:@[@"stikjit", @"stikdebug", @"sidestore", @"stosdebug"]];
+    });
+    return scheme != nil && [set containsObject:scheme];
+}
+
+NSString *AMEJITConfiguredEnablerKey(void) {
+    id e = getPrefObject(@"debug.jit_enabler");
+    if (![e isKindOfClass:NSString.class] || [(NSString *)e length] == 0) return @"auto";
+    return (NSString *)e;
+}
+
+BOOL AMEJITConfiguredExternalEnablerIsActive(void) {
+    return ameJITAdapt_handlesEnabler(AMEJITConfiguredEnablerKey());
+}
+
+NSString *AMEJITConfiguredEnablerDisplayName(void) {
+    NSString *e = AMEJITConfiguredEnablerKey();
+    if ([e isEqualToString:@"stikdebug"])      return @"StikDebug (stikdebug://)";
+    if ([e isEqualToString:@"stosdebug"])      return @"StosDebug";
+    if ([e isEqualToString:@"jitstreamer"])    return @"JitStreamer (EB)";
+    if ([e isEqualToString:@"sidejitserver"])  return @"SideJITServer";
+    if ([e isEqualToString:@"sidestore"])      return @"SideStore (SideJIT)";
+    if ([e isEqualToString:@"trollstore"])     return @"TrollStore";
+    if ([e isEqualToString:@"altstore"])       return @"AltStore (AltServer / AltJIT)";
+    if ([e isEqualToString:@"sideloadly"])     return @"Sideloadly (Sideloadly Daemon)";
+    // manual / jailbreak：没有可安装的“工具 App”，返回 nil 让调用方用通用文案。
+    return nil;
+}
+
+NSString *AMEJITConfiguredEnablerGuidanceKey(void) {
+    NSString *e = AMEJITConfiguredEnablerKey();
+    if (!ameJITAdapt_isManualEnabler(e)) return nil;
+    return [NSString stringWithFormat:@"jit.wait.%@", e];
+}
+
+AMEJITEnablerActionResult AMEJITOpenConfiguredExternalEnabler(void) {
+    NSString *enabler = AMEJITConfiguredEnablerKey();
+    if (!ameJITAdapt_handlesEnabler(enabler)) {
+        return AMEJITEnablerActionResultNotHandled;   // auto / stikjit → 调用方既有分支
+    }
+
+    // ① 手动/外部-attach 类：本机没有 URL 可调。交调用方：给引导 + 进入可验证等待。
+    if (ameJITAdapt_isManualEnabler(enabler)) {
+        NSLog(@"[JIT-ADAPT] enabler=%@ -> manual/guidance only (no on-device URL); user enables "
+              @"JIT externally, we wait & self-check", enabler);
+        return AMEJITEnablerActionResultManual;
+    }
+
+    NSString *bundleId = NSBundle.mainBundle.bundleIdentifier ?: @"";
+    BOOL noScript = getPrefBool(@"debug.jit26_script_disable");
+
+    // ② URL 类：按各工具官方交接机制构造（与 headless ame139_requestJIT 同源同形）。
+    NSURL *url = nil;
+    if ([enabler isEqualToString:@"trollstore"]) {
+        // TrollStore（apple-magnifier://，v2.0.12+ 的“open with JIT”）
+        url = [NSURL URLWithString:[NSString stringWithFormat:
+            @"apple-magnifier://enable-jit?bundle-id=%@", bundleId]];
+    } else if ([enabler isEqualToString:@"sidestore"]) {
+        // SideStore / SideJIT（复用仓库既有 <17.4 分支同款 URL，避免猜未验证的形式）
+        url = [NSURL URLWithString:[NSString stringWithFormat:
+            @"sidestore://sidejit-enable?pid=%d", getpid()]];
+    } else if ([enabler isEqualToString:@"stosdebug"]) {
+        // StosDebug：stosdebug://enableJIT?bundleId=&appName=&script=<b64>
+        NSString *appName = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleDisplayName"] ?: @"Amethyst";
+        NSMutableString *u = [NSMutableString stringWithFormat:
+            @"stosdebug://enableJIT?bundleId=%@&appName=%@", bundleId, appName];
+        if (!noScript) {
+            NSData *script = [NSData dataWithContentsOfFile:
+                [NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"UniversalJIT26.js"]];
+            if (script) [u appendFormat:@"&script=%@", [script base64EncodedStringWithOptions:0]];
+        }
+        url = [NSURL URLWithString:u];
+    } else if ([enabler isEqualToString:@"jitstreamer"]) {
+        // JitStreamer-EB：WireGuard 隧道（服务器地址 fd00::）+ HTTP :9172/launch_app/<bundle>
+        url = [NSURL URLWithString:[NSString stringWithFormat:
+            @"http://[fd00::]:9172/launch_app/%@", bundleId]];
+    } else if ([enabler isEqualToString:@"stikdebug"]) {
+        // 只注册 stikdebug:// 的 StikDebug 版本（PocketJ/StikJIT INTEGRATION.md 形式）。
+        NSString *scriptDataString = @"";
+        if (!noScript) {
+            NSData *script = [NSData dataWithContentsOfFile:
+                [NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"UniversalJIT26.js"]];
+            if (script) {
+                scriptDataString = [@"&script-data=" stringByAppendingString:
+                    [script base64EncodedStringWithOptions:0]];
+            }
+        }
+        if (scriptDataString.length > 0) {
+            url = [NSURL URLWithString:[NSString stringWithFormat:
+                @"stikdebug://enable-jit?bundle-id=%@&pid=%d%@", bundleId, getpid(), scriptDataString]];
+        } else {
+            // 无脚本（用户禁用脚本 / 非 TXM 机型）：退化为 script-name 形式。
+            url = [NSURL URLWithString:[NSString stringWithFormat:
+                @"stikdebug://enable-jit?bundle-id=%@&pid=%d&script-name=universal.js", bundleId, getpid()]];
+        }
+    }
+
+    if (url == nil) {
+        NSLog(@"[JIT-ADAPT] enabler=%@ -> no URL built (treated as manual)", enabler);
+        return AMEJITEnablerActionResultManual;
+    }
+
+    // ③ 预检（仅对已登记 scheme 可信）：探不到即工具没装 ⇒ 立刻回 MissingTool，不白等。
+    if (ameJITAdapt_schemeProbeable(url.scheme) &&
+        ![UIApplication.sharedApplication canOpenURL:url]) {
+        NSLog(@"[JIT-ADAPT] canOpenURL(%@) == NO -- JIT enabler app not installed", url.scheme);
+        return AMEJITEnablerActionResultMissingTool;
+    }
+
+    // ④ 调起；回执失败时给一次可辨识提示（工具未装 / scheme 未启用）。
+    void (^ameJITAdapt_fireURL)(void) = ^{
+        [UIApplication.sharedApplication openURL:url options:@{}
+            completionHandler:^(BOOL success) {
+                NSLog(@"[JIT-ADAPT] openURL scheme=%@ -> %d", url.scheme, success);
+                if (!success) {
+                    NSString *tool = AMEJITConfiguredEnablerDisplayName() ?: enabler;
+                    showDialog(localize(@"jit.wait.abort.title", nil),
+                        [NSString stringWithFormat:localize(@"jit.wait.missing.tool", nil), tool]);
+                }
+            }];
+    };
+    if ([NSThread isMainThread]) {
+        ameJITAdapt_fireURL();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), ameJITAdapt_fireURL);
+    }
+    NSLog(@"[JIT-ADAPT] enabler=%@ -> opened %@ (will verify with brk #0x69 before launch)",
+          enabler, url.scheme);
+    return AMEJITEnablerActionResultOpened;
+}
+
 #ifndef P_TRACED
 #define P_TRACED 0x00000800 /* process is being traced by a debugger (ptrace) */
 #endif
@@ -941,6 +1398,93 @@ BOOL JIT26IsLikelyDebuggerKeepAttached(void) {
     // 服务 EXC_BREAKPOINT。把活的任务级 BREAKPOINT/SOFTWARE handler 视为
     // "调试器在岗"——它正是必须服务 brk #0x69 的实体。
     return JIT26DebuggerViaExceptionPorts();
+}
+
+// ★ [JIT-FLOW] ============================================================
+// 「JIT 是否真的可用」的**可验证能力**判据（回答实机 <2s「jit complete」假成功）。
+//
+// 为什么必须自己做、不能信外部工具：StikDebug 的「jit complete」是**它自己**弹的，
+// 它是外部 App，可能 1~2 秒就报完成而实际没把服务 `brk #0x69` 的调试器留给我们
+// （attach 即退、脚本没装、或没给任何 RX 映射）。而现有 UI 闸门/等待条件用的是
+// `isJITEnabled(false)`，它只反映：
+//   (a) dynamic-codesigning entitlement / 越狱（**能力声明**，非实测）；
+//   (b) CS_DEBUGGED —— 一个**粘滞**标志：任何一次 ptrace 附加都会置位，调试器随后
+//       立刻脱离/脚本没装也一样置位 ⇒ 等待条件在 attach 那一刻（可 <2s）即被满足。
+// `JIT26IsLikelyDebuggerKeepAttached()` 同理：它只看 ppid / P_TRACED / 异常端口，
+// 即「调试器进程还在」，而**调试器在岗 ≠ 它在服务 brk #0x69**。
+//
+// 唯一权威信号（复用仓里既有的 JIT26 建区链）：真的发一次 `brk #0x69` 向调试器
+// 要一块 JIT 区，并尽力验证其可写。拿到 ⇒ `[JIT-FLOW] verified`；拿不到 ⇒
+// `[JIT-FLOW] false-positive guard triggered`，调用方必须当「未开」处理并给明确提示。
+// 结论缓存：成功一次即记住，避免重复 brk（legacy 脚本只服务一次断点）。
+// ============================================================================
+static void *gAmeJITVerifiedRegion = NULL;
+static BOOL   gAmeJITVerified = NO;
+static NSTimeInterval gAmeJITLastVerifyAttempt = 0;
+static int    gAmeJITVerifyAttempts = 0;
+
+// 主动申请并（尽力）写入一块 JIT 区，作为「真能力」判据。失败限流 2s
+// （等待循环 200ms 一轮，若不限流会每轮发一次 brk）。
+BOOL AMEJITVerifyWritableJITRegion(void) {
+    if (gAmeJITVerified) {
+        return YES;
+    }
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    if (gAmeJITLastVerifyAttempt > 0 && (now - gAmeJITLastVerifyAttempt) < 2.0) {
+        return NO;
+    }
+    gAmeJITLastVerifyAttempt = now;
+    gAmeJITVerifyAttempts++;
+
+    size_t len = (size_t)getpagesize();
+    void *r = JIT26CreateRegionLegacySafe(len);   // brk #0x69；无人服务时返回 NULL 不致死
+    if (r == NULL) {
+        NSLog(@"[JIT-FLOW] false-positive guard triggered (#%d): brk #0x69 NOT serviced -- NOT counting JIT as "
+              @"enabled (isJITEnabled=%d keepAttached=%d traced=%d exn=%d)",
+              gAmeJITVerifyAttempts, isJITEnabled(false), JIT26IsLikelyDebuggerKeepAttached(),
+              JIT26DebuggerAttachedViaPtrace(), JIT26DebuggerViaExceptionPorts());
+        return NO;
+    }
+    // 尽力证明可写：先把这一段改成可写再写读，随后恢复 RX。mprotect 失败也不否决——
+    // 「调试器服务了 brk #0x69 并返回了映射」本身已是权威信号。
+    BOOL writable = NO;
+    if (mprotect(r, len, PROT_READ | PROT_WRITE) == 0) {
+        volatile unsigned char *p = (volatile unsigned char *)r;
+        p[0] = 0xA5;
+        p[len - 1] = 0x5A;
+        writable = (p[0] == 0xA5 && p[len - 1] == 0x5A);
+        // 恢复为可执行的 JIT 区，避免影响调试器/脚本对该区的后续用途。
+        mprotect(r, len, PROT_READ | PROT_EXEC);
+    }
+    gAmeJITVerifiedRegion = r;   // 留驻（只一页），供后续复用/诊断
+    gAmeJITVerified = YES;
+    NSLog(@"[JIT-FLOW] verified: debugger serviced brk #0x69 -> JIT region @%p (%zu bytes, writable=%d) -- real JIT capability confirmed",
+          r, len, writable);
+    return YES;
+}
+
+// 等待就绪谓词（供 UI 闸门/headless 的等待循环使用）：
+//   · 非 Universal 脚本路径（legacy / 非 iOS26+FROCE_MIRRORED）：保持原判据，不做
+//     额外 brk（避免消耗 legacy 脚本的唯一断点）。
+//   · Universal 路径：先要调试器在岗（便宜，挡掉连 attach 都没有的情形），再用
+//     「真能拿到并写入一块 JIT 区」定案（挡掉 attach-即成功的 <2s 假阳性）。
+BOOL AMEJITWaitReadyVerified(void) {
+    if (!DeviceNeedsDebugJITMapping()) {
+        if (isJITEnabled(false)) return YES;
+        // ★ [JB-ADAPT] 越狱环境：JIT 原生可用（无需调试器服务 brk #0x69）。
+        //   用**真能力**判据复核后再放行 —— 绝不因"检测到越狱"就放行（不放宽 JIT 判据）。
+        if (AMEJailbreakNativeJITPathApplies() && AMEJailbreakNativeJITReady()) return YES;
+        return NO;
+    }
+    if (!JIT26IsLikelyDebuggerKeepAttached()) {
+        return NO;
+    }
+    return AMEJITVerifyWritableJITRegion();
+}
+
+// 已通过验证的 JIT 区（未验证过返回 NULL）。供诊断/复用。
+void *AMEJITVerifiedRegionPtr(void) {
+    return gAmeJITVerifiedRegion;
 }
 
 // JIT 等待轮询的有界版本：最长 timeout 秒（超时返回 NO，调用方走超时
@@ -1052,6 +1596,37 @@ BOOL DeviceCanCreateRXMap(void) {
     return ret == 0;
 }
 
+// ★ [JB-ADAPT] 越狱下「原生 JIT」策略与真能力判据（设计约束见 utils.h [JB-ADAPT]）。
+//   · PathApplies：环境分类可辨识出越狱（仅用于【选策略】：不走"等外部工具"那条）。
+//     **不表示 JIT 已开** —— 是否真能 JIT 由下面的 Ready 用真能力说话。
+//   · Ready：本进程能否直接把匿名页设为可执行。复用 DeviceCanCreateRXMap()（mmap RW
+//     + mprotect RX + 写读），它正是本仓库决定 FORCE_MIRRORED（"需不需要调试器"）的
+//     权威判据；在越狱机上它成功即意味着原生 JIT 可用（无需调试器服务 brk #0x69）。
+//     失败绝不放行（不放宽 JIT 判据）。
+BOOL AMEJailbreakNativeJITPathApplies(void) {
+    return AMEJailbreakEnvironment() != AMEJBEnvironmentNone;
+}
+
+static int gAmeJBNativeJITProbe = 0;   // 0=未探过 1=确认可用 -1=确认不可用
+static BOOL gAmeJBNativeJITReady = NO; // 成功一次即记住
+
+BOOL AMEJailbreakNativeJITReady(void) {
+    if (gAmeJBNativeJITProbe != 0) return gAmeJBNativeJITReady;
+    // 结果缓存（含否定）：越狱下"能否自建可执行映射"在进程生命周期内由 entitlements /
+    // CS 标志决定，不会中途变化 ⇒ 否定结果也缓存，避免状态栏刷新时的重复 mmap 与日志刷屏。
+    if (!DeviceCanCreateRXMap()) {
+        gAmeJBNativeJITProbe = -1;
+        NSLog(@"[JB-ADAPT] native JIT NOT available (env=%@): anonymous page mprotect(RX) failed "
+              @"-- falling back to configured enabler path", AMEJailbreakEnvSummary());
+        return NO;
+    }
+    gAmeJBNativeJITProbe = 1;
+    gAmeJBNativeJITReady = YES;
+    NSLog(@"[JB-ADAPT] native JIT confirmed (env=%@): anonymous page mprotect(RX) OK -- "
+          @"no debugger/brk needed, launching without any external JIT tool", AMEJailbreakEnvSummary());
+    return YES;
+}
+
 static BOOL DeviceLikelyHasTXMFromChipID(void) {
     NSUInteger (*MGGetSInt64Answer)(NSString *) = dlsym(RTLD_DEFAULT, "MGGetSInt64Answer");
     if (MGGetSInt64Answer == NULL) {
@@ -1160,4 +1735,353 @@ BOOL DeviceNeedsDebugJITMapping(void) {
 
 void dismissModalViewController(UIViewController *viewController) {
     [viewController.navigationController dismissViewControllerAnimated:YES completion:nil];
+}
+
+#pragma mark - ★ [VER-ISOLATE] 完全版本隔离：实例隔离根目录
+
+// 当前实例名（general.game_directory）。直接读全局 v2 plist，不依赖 prefs 系统，
+// 因为 main.m 的日志重定向早于 loadPreferences()。读不到时回退 v1 plist 顶层键，
+// 再回退 @"default"（与 init_setupMultiDir 的缺省一致）。
+static NSString *ameVIInstanceName(void) {
+    const char *home = getenv("POJAV_HOME");
+    if (home == NULL || home[0] == '\0') return nil;
+    NSString *inst = nil;
+
+    NSString *plist = [@(home) stringByAppendingPathComponent:@"launcher_preferences_v2.plist"];
+    NSDictionary *pref = [NSDictionary dictionaryWithContentsOfFile:plist];
+    id v = pref[@"general"][@"game_directory"];
+    if ([v isKindOfClass:NSString.class] && [(NSString *)v length] > 0) {
+        inst = v;
+    } else {
+        // 旧版布局回退（PLPreferences 尚未迁移/保存时的极早期）
+        NSString *oldPlist = [@(home) stringByAppendingPathComponent:@"launcher_preferences.plist"];
+        NSDictionary *oldPref = [NSDictionary dictionaryWithContentsOfFile:oldPlist];
+        id ov = oldPref[@"game_directory"];
+        if ([ov isKindOfClass:NSString.class] && [(NSString *)ov length] > 0) inst = ov;
+    }
+    if (inst.length == 0) inst = @"default";
+    // 防目录穿越：实例名只取最后一段
+    return inst.lastPathComponent;
+}
+
+NSString *ameVIInstanceRoot(void) {
+    const char *home = getenv("POJAV_HOME");
+    if (home == NULL || home[0] == '\0') return nil;
+    NSString *inst = ameVIInstanceName();
+    if (inst.length == 0) return nil;
+    NSString *root = [@(home) stringByAppendingPathComponent:@"instances"];
+    return [root stringByAppendingPathComponent:inst];
+}
+
+NSString *ameVIInstanceSubdir(NSString *leaf) {
+    if (leaf.length == 0) return nil;
+    NSString *root = ameVIInstanceRoot();
+    if (root.length == 0) return nil;
+    NSString *dir = [root stringByAppendingPathComponent:leaf];
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir
+                             withIntermediateDirectories:YES attributes:nil error:nil];
+    return dir;
+}
+
+// 每实例日志路径：<root>/logs/latestlog.txt。实例根不可得时回退旧共享
+// <POJAV_HOME>/latestlog.txt，保证永不因隔离改动而拿不到路径。
+NSString *ameVILatestLogPath(void) {
+    NSString *dir = ameVIInstanceSubdir(@"logs");
+    if (dir.length > 0) return [dir stringByAppendingPathComponent:@"latestlog.txt"];
+    const char *home = getenv("POJAV_HOME");
+    return home ? [@(home) stringByAppendingPathComponent:@"latestlog.txt"] : nil;
+}
+
+NSString *ameVILatestLogRotatedPath(void) {
+    NSString *dir = ameVIInstanceSubdir(@"logs");
+    if (dir.length > 0) return [dir stringByAppendingPathComponent:@"latestlog.old.txt"];
+    const char *home = getenv("POJAV_HOME");
+    return home ? [@(home) stringByAppendingPathComponent:@"latestlog.old.txt"] : nil;
+}
+
+#pragma mark - ★ [LOG-FIX] 日志隔离兼容层（硬链接，保证 POJAV_HOME 下是普通文件）
+
+BOOL ameVIPathIsSymlink(NSString *path) {
+    if (path.length == 0) return NO;
+    // 关键：attributesOfItemAtPath: 【不跟随】符号链接 —— 对 symlink 报
+    // NSFileTypeSymbolicLink（size=目标串长度）。这正是旧版把 symlink 当
+    // 「透明兼容」时被读方看破的地方，这里用它来识别并清理旧残留。
+    NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil];
+    return [NSFileTypeSymbolicLink isEqualToString:attrs[NSFileType]];
+}
+
+BOOL ameVIHardLinkLog(NSString *srcPath, NSString *dstPath) {
+    if (srcPath.length == 0 || dstPath.length == 0) return NO;
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (![fm fileExistsAtPath:srcPath]) return NO;
+    // 先删目标这一个名字：无论它是旧版残留的符号链接，还是旧共享日志普通文件，
+    // 都只删名字本身 —— 若目标已是本真身的硬链接，删它也不会动到 inode 与实例内那份。
+    [fm removeItemAtPath:dstPath error:nil];
+    NSError *err = nil;
+    if ([fm linkItemAtPath:srcPath toPath:dstPath error:&err]) return YES;
+    NSLog(@"[LOG-FIX] hardlink failed: %@ -> %@ (%@)",
+          srcPath, dstPath, err.localizedDescription);
+    return NO;
+}
+
+#pragma mark - ★ [VER-ISOLATE-PCL] 版本隔离（对齐 PCL-CE「实例隔离」）
+
+// 版本隔离全局默认键（对应 PCL 的 LaunchArgumentIndieV2「默认实例隔离」）。
+static NSString *const kAmePCLVersionIsolationPref = @"general.version_isolation";
+// 一次性迁移哨兵（对应 PCL 旧值 VersionArgumentIndie → V2 的一次性迁移）。
+static NSString *const kAmePCLVersionIsolationMigrated = @"internal.version_isolation_migrated";
+
+// 版本 id 是否「具体可隔离」：
+//   排除 latest-release / latest-snapshot 之类的别名与 path 片段，并要求实例的
+//   versions/<id>/ 下确有版本定义（目录或 <id>.json）。核验不过一律回退共享（"."），
+//   保证「隔离改动永不阻断启动」——最坏情况只是没有隔离，而不是找不到游戏目录。
+static BOOL amePCLVersionIdIsConcrete(NSString *vid) {
+    if (vid.length == 0) return NO;
+    if ([vid isEqualToString:@"(default)"]) return NO;
+    if ([vid hasPrefix:@"latest-"]) return NO;           // latest-release / latest-snapshot
+    if ([vid containsString:@"/"] || [vid containsString:@"\\"]) return NO;
+    NSString *root = ameVIInstanceRoot();
+    if (root.length == 0) return YES;                    // 无法核验时按可隔离处理
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *dir = [[root stringByAppendingPathComponent:@"versions"]
+                     stringByAppendingPathComponent:vid];
+    BOOL isDir = NO;
+    if ([fm fileExistsAtPath:dir isDirectory:&isDir] && isDir) return YES;
+    NSString *json = [dir stringByAppendingPathComponent:
+                      [vid stringByAppendingPathExtension:@"json"]];
+    if ([fm fileExistsAtPath:json]) return YES;
+    return NO;
+}
+
+// 解析 profile 的版本 id：优先用调用方给的"实际启动版本"（launchTarget[@“id”]），
+// 其次 profile.lastVersionId。都不可隔离则返回 nil。
+static NSString *amePCLProfileVersionId(NSDictionary *prof, NSString *concreteVersionId) {
+    if (amePCLVersionIdIsConcrete(concreteVersionId)) return concreteVersionId;
+    id vid = prof[@"lastVersionId"];
+    if ([vid isKindOfClass:NSString.class] && amePCLVersionIdIsConcrete((NSString *)vid)) {
+        return (NSString *)vid;
+    }
+    return nil;
+}
+
+// 自动判定（对应 PCL ShouldBeIndie 第 2 步）：<实例根>/versions/<id>/ 下已有
+// mods（含非隐藏文件）或 saves（含非隐藏目录）⇒ 视为已隔离。
+static BOOL amePCLVersionFolderHasUserData(NSString *versionId) {
+    if (versionId.length == 0) return NO;
+    // ★ [VI-POLISH] 与 ameVISniffVersionFolder 同源（同一条规则，UI 说明与判定不会漂移）
+    NSDictionary *s = ameVISniffVersionFolder(versionId);
+    return [s[@"hasMods"] boolValue] || [s[@"hasSaves"] boolValue];
+}
+
+BOOL amePCLVersionIsolationForProfile(NSDictionary *prof, NSString *concreteVersionId) {
+    if (![prof isKindOfClass:NSDictionary.class]) prof = nil;
+
+    // 1) profile 显式值（PCL: VersionArgumentIndieV2）
+    id explicit = prof[@"versionIsolation"];
+    if ([explicit isKindOfClass:NSNumber.class]) return [(NSNumber *)explicit boolValue];
+    if ([explicit isKindOfClass:NSString.class] && [(NSString *)explicit length] > 0) {
+        return [(NSString *)explicit boolValue];
+    }
+
+    // 2) 自动判定（PCL: ShouldBeIndie 的 mods/saves 启发式）
+    NSString *vid = amePCLProfileVersionId(prof, concreteVersionId);
+    if (vid.length > 0 && amePCLVersionFolderHasUserData(vid)) {
+        NSLog(@"★ [VER-ISOLATE-PCL] 开启版本隔离（自动）：versions/%@ 下已有 mods/saves", vid);
+        return YES;
+    }
+
+    // 3) 全局默认（PCL: LaunchArgumentIndieV2 默认实例隔离策略）
+    return getPrefBool(kAmePCLVersionIsolationPref);
+}
+
+NSString *amePCLVersionGameDirSubpath(NSDictionary *prof, NSString *concreteVersionId) {
+    if (![prof isKindOfClass:NSDictionary.class]) prof = nil;
+
+    // 显式 gameDir（非 "."）永远优先：保持既有"自定义游戏目录"语义不受隔离开关影响。
+    id gd = prof[@"gameDir"];
+    if ([gd isKindOfClass:NSString.class] && [(NSString *)gd length] > 0 &&
+        ![(NSString *)gd isEqualToString:@"."]) {
+        return (NSString *)gd;
+    }
+
+    if (!amePCLVersionIsolationForProfile(prof, concreteVersionId)) return @".";
+
+    NSString *vid = amePCLProfileVersionId(prof, concreteVersionId);
+    if (vid.length == 0) {
+        NSLog(@"★ [VER-ISOLATE-PCL] 版本 id 不可确定，本版本回退共享目录（不隔离）");
+        return @".";
+    }
+    return [NSString stringWithFormat:@"versions/%@", vid];
+}
+
+NSString *amePCLVersionGameDirAbsolute(NSDictionary *prof, NSString *concreteVersionId) {
+    NSString *sub = amePCLVersionGameDirSubpath(prof, concreteVersionId);
+    const char *env = getenv("POJAV_GAME_DIR");
+    NSString *base = env ? [NSString stringWithUTF8String:env] : NSHomeDirectory();
+    if (sub.length == 0 || [sub isEqualToString:@"."]) return base;
+    if ([sub isAbsolutePath]) return sub;
+    NSString *clean = [sub hasPrefix:@"./"] ? [sub substringFromIndex:2] : sub;
+    return [[base stringByAppendingPathComponent:clean] stringByStandardizingPath];
+}
+
+void amePCLMigrateVersionIsolationOnce(void) {
+    if ([getPrefObject(kAmePCLVersionIsolationMigrated) boolValue]) return;  // 幂等：只跑一次
+
+    // 迁移在 main.m 的 init_setupMultiDir() 之后调用，POJAV_GAME_DIR 已就绪；
+    // 这里仍走 ameVIInstanceRoot()（直读全局 plist），不依赖该环境变量。
+    NSString *root = ameVIInstanceRoot();
+    if (root.length == 0) return;
+    NSString *profPath = [root stringByAppendingPathComponent:@"launcher_profiles.json"];
+    NSMutableDictionary *pd = parseJSONFromFile(profPath);
+    NSMutableDictionary *profiles = pd[@"profiles"];
+
+    if ([profiles isKindOfClass:NSMutableDictionary.class]) {
+        BOOL changed = NO;
+        for (NSString *name in profiles.allKeys) {
+            NSMutableDictionary *prof = profiles[name];
+            if (![prof isKindOfClass:NSMutableDictionary.class]) continue;
+            if (prof[@"versionIsolation"]) continue;   // 已有显式值，绝不覆盖用户选择
+
+            BOOL alreadyIsolated = NO;
+            id gd = prof[@"gameDir"];
+            if ([gd isKindOfClass:NSString.class] && [(NSString *)gd hasPrefix:@"versions/"]) {
+                alreadyIsolated = YES;                 // 升级前手工把 gameDir 指到 versions/*
+            }
+            if (!alreadyIsolated) {
+                id vid = prof[@"lastVersionId"];
+                if ([vid isKindOfClass:NSString.class] && amePCLVersionFolderHasUserData((NSString *)vid)) {
+                    alreadyIsolated = YES;             // 该版本目录下已有 mods/saves
+                }
+            }
+            if (alreadyIsolated) {
+                prof[@"versionIsolation"] = @"1";      // 显式落值 ⇒ 设置页可见、可回退
+                changed = YES;
+                NSLog(@"★ [VER-ISOLATE-PCL] 迁移：profile「%@」已存在版本隔离数据 ⇒ 显式置为开启", name);
+            }
+        }
+        if (changed) saveJSONToFile(pd, profPath);
+    }
+
+    setPrefObject(kAmePCLVersionIsolationMigrated, @YES);
+    NSLog(@"★ [VER-ISOLATE-PCL] 版本隔离一次性迁移完成（哨兵 %@）", kAmePCLVersionIsolationMigrated);
+}
+
+// ★ [VER-ISOLATE-MIGRATE] ====================================================
+// 共享游戏根绝对路径解析（迁移的"源根"）。只解析路径，不做任何搬动。
+// POJAV_GAME_DIR 由 init_setupMultiDir() 设置（= POJAV_HOME/instances/<实例>），
+// 与 ameVIInstanceRoot() 同源；环境变量不可得时回退后者，绝不返回空。
+NSString *amePCLSharedGameDirAbsolute(void) {
+    const char *env = getenv("POJAV_GAME_DIR");
+    if (env && *env) return [NSString stringWithUTF8String:env];
+    NSString *root = ameVIInstanceRoot();
+    if (root.length > 0) return root;
+    const char *home = getenv("POJAV_HOME");
+    return home ? [NSString stringWithUTF8String:home] : NSHomeDirectory();
+}
+
+// ★ [VER-ISOLATE-MIGRATE] 关隔离时该 profile 实际使用的 gameDir（迁移的"源根"）。
+// 唯一真相源 = 同一 resolver：显式关掉隔离后交给 amePCLVersionGameDirAbsolute 解析，
+// 自己绝不另拼一套路径（约束：目标/源都必须来自隔离 resolver）。
+NSString *amePCLSharedGameDirForProfile(NSDictionary *prof, NSString *concreteVersionId) {
+    if (![prof isKindOfClass:NSDictionary.class]) return amePCLSharedGameDirAbsolute();
+    NSMutableDictionary *off = [prof mutableCopy];
+    off[@"versionIsolation"] = @"0";       // 显式关 ⇒ resolver 第 1 步直接返回共享语义
+    return amePCLVersionGameDirAbsolute(off, concreteVersionId);
+}
+
+// ★ [VI-POLISH] ==============================================================
+// 建议 A（三态可见化）+ B（向导门槛）的共用底座实现。
+// 只读磁盘 / 只读写设置；绝不移动、复制、删除任何文件。
+// ★ [VI-FLOW] 用户修正：B 的门槛＝「用户主动选『以后不再提示』才落哨兵」，未落则每次进启动器都再弹
+// （哨兵读/写点各唯一，见文件末尾；弹出时不写哨兵）。
+
+#pragma mark - ★ [VI-POLISH] A. 隔离显式三态
+
+AmeVIExplicitState ameVIExplicitStateForProfile(NSDictionary *prof) {
+    if (![prof isKindOfClass:NSDictionary.class]) return AmeVIExplicitStateAuto;
+    id raw = prof[@"versionIsolation"];
+    if ([raw isKindOfClass:NSNumber.class]) {
+        return [(NSNumber *)raw boolValue] ? AmeVIExplicitStateIsolated : AmeVIExplicitStateShared;
+    }
+    if ([raw isKindOfClass:NSString.class] && [(NSString *)raw length] > 0) {
+        return [(NSString *)raw boolValue] ? AmeVIExplicitStateIsolated : AmeVIExplicitStateShared;
+    }
+    return AmeVIExplicitStateAuto;   // 未落键 ⇒ 自动
+}
+
+void ameVISetExplicitStateForProfile(NSMutableDictionary *prof, AmeVIExplicitState state) {
+    if (![prof isKindOfClass:NSMutableDictionary.class]) return;
+    switch (state) {
+        case AmeVIExplicitStateIsolated:
+            prof[@"versionIsolation"] = @"1";    // 显式开：resolver 第 1 步立即返回 YES
+            break;
+        case AmeVIExplicitStateShared:
+            prof[@"versionIsolation"] = @"0";    // 显式关：resolver 第 1 步立即返回 NO
+            break;
+        case AmeVIExplicitStateAuto:
+        default:
+            [prof removeObjectForKey:@"versionIsolation"];   // 自动：回到 嗅探 → 全局默认
+            // 说明：这里刻意【不】写任何默认值 —— 默认仍是「关」，与既有语义完全一致。
+            break;
+    }
+}
+
+#pragma mark - ★ [VI-POLISH] A. 版本目录形状嗅探（只读，供 UI 说明判定依据）
+
+NSDictionary *ameVISniffVersionFolder(NSString *versionId) {
+    NSMutableDictionary *r = [@{ @"hasMods":  @NO,
+                                 @"hasSaves": @NO,
+                                 @"hasAny":   @NO,
+                                 @"exists":   @NO,
+                                 @"path":     @"" } mutableCopy];
+    if (versionId.length == 0) return r;
+
+    NSString *root = ameVIInstanceRoot();
+    if (root.length == 0) return r;
+    NSString *vdir = [[root stringByAppendingPathComponent:@"versions"]
+                      stringByAppendingPathComponent:versionId];
+    r[@"path"] = vdir;
+
+    NSFileManager *fm = [NSFileManager defaultManager];
+    BOOL isDir = NO;
+    if ([fm fileExistsAtPath:vdir isDirectory:&isDir] && isDir) r[@"exists"] = @YES;
+
+    // 与 resolver 的自动判定逐字同源：非隐藏条目即算「有内容」（mods 是文件、saves 是目录，
+    // 这里都按「目录下有没有非隐藏条目」判，与 amePCLVersionFolderHasUserData 一致）。
+    BOOL hasMods = NO, hasSaves = NO;
+    for (NSString *f in ([fm contentsOfDirectoryAtPath:[vdir stringByAppendingPathComponent:@"mods"] error:nil] ?: @[])) {
+        if (![f hasPrefix:@"."]) { hasMods = YES; break; }
+    }
+    for (NSString *f in ([fm contentsOfDirectoryAtPath:[vdir stringByAppendingPathComponent:@"saves"] error:nil] ?: @[])) {
+        if (![f hasPrefix:@"."]) { hasSaves = YES; break; }
+    }
+    r[@"hasMods"]  = @(hasMods);
+    r[@"hasSaves"] = @(hasSaves);
+    r[@"hasAny"]   = @(hasMods || hasSaves);
+    return r;
+}
+
+BOOL ameVISniffShouldSuggestIsolation(NSString *versionId) {
+    if (versionId.length == 0) return NO;
+    return [ameVISniffVersionFolder(versionId)[@"hasAny"] boolValue];
+}
+
+#pragma mark - ★ [VI-FLOW] B. 向导「弹到用户主动说『以后都不弹』为止」哨兵
+
+// ★ [VI-FLOW]（用户修正 1 + 补充）语义：
+//   * 哨兵【只】在用户于向导里点「以后不再提示」时写一次（幂等）—— 弹出时【绝不】写；
+//   * 未落哨兵 ⇒ ameVIWizardShouldPresent 返回 YES ⇒ 每次进启动器都会【再次出现】（不阻碍启动、可跳过）；
+//   * 已落哨兵 ⇒ 不再【自动】弹；实例设置页的「版本隔离向导」手动入口直接 present，不受本哨兵约束
+//     （否则用户想再看就没路了）。
+//   静态证明：哨兵【读】点唯一（ameVIWizardShouldPresent，只读不写）；
+//             哨兵【写】点唯一（ameVIWizardMarkDontShowAgain，仅由向导「以后不再提示」按钮调用）。
+static NSString *const kAmeVIWizardOffKey = @"internal.version_isolation_wizard_off";
+
+BOOL ameVIWizardShouldPresent(void) {
+    return ![getPrefObject(kAmeVIWizardOffKey) boolValue];   // 只读：未落哨兵 ⇒ 该弹
+}
+
+void ameVIWizardMarkDontShowAgain(void) {
+    setPrefObject(kAmeVIWizardOffKey, @YES);   // 幂等：重复调用结果一致；只在用户选择时写一次
+    NSLog(@"★ [VI-FLOW] 向导：用户选「以后不再提示」⇒ 哨兵已落（%@），之后不再自动弹", kAmeVIWizardOffKey);
 }

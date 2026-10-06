@@ -9,6 +9,9 @@
 #include <execinfo.h>
 #include <fcntl.h>
 #include <libgen.h>
+// ★ [SDL-FIRSTFRAME] init_hookFunctions 的自证行要报镜像数（_dyld_image_count），
+//   用于区分「重绑定跑了但镜像形态不匹配」与「重绑定根本没跑」。
+#include <mach-o/dyld.h>
 // ★ [SHADER-SIGBUS] 崩溃归属取证需要：task_threads/thread_get_state/ARM_THREAD_STATE64
 // （取各线程 PC 做 dladdr 归属）与 uintptr_t/uint64_t。
 #include <mach/mach.h>
@@ -2104,7 +2107,53 @@ static int amethyst_spvc_compiler_compile(void *compiler, const char **source) {
     return g_real_spvc_compiler_compile(compiler, source);
 }
 
+// ============================================================================
+// ★ [SDL-FIRSTFRAME] dlsym 钩子「活性」取证（可判定，不靠猜）
+//
+// 背景（iPad Pro 11 / iPadOS 16.3.1 / TrollStore / MobileGlues 装机日志）：
+//   整份日志零 [SDLHook] 行，于是被判成「SDL 钩子没装上 ⇒ sdlWin=0x0 ⇒ 没首帧」。
+//   这个推理是错的：SDL 兼容层只对「按名字查 SDL*」的调用方生效，而 MC 26.2 及
+//   以下走 GLFW（LWJGL 3.4.1，库表有 lwjgl-glfw、无 lwjgl-sdl），从不查 SDL*
+//   ⇒ 零 [SDLHook] 属设计内行为。真正缺的不是钩子，而是「钩子到底装上了没有、
+//   有没有被调用」的判据。下面三处输出补上这个判据：
+//     · init_hookFunctions done + dlsym hook self-test=YES/NO ← 重绑定是否真生效
+//     · hooked_dlsym LIVE: 1st call ...                        ← 钩子是否真被调用过
+//     · SDL3 compat layer CONSULTED/takenOver                  ← 是否真走到 SDL 链
+// 判读法（本场日志只有这三条里的哪一条，结论就唯一）：
+//   self-test=NO                  → 钩子根本没装上（镜像形态/重绑定失败），SDL 链
+//                                   在任何 MC 版本上都会静默失效 —— 这才是真故障；
+//   LIVE + 无 CONSULTED           → 钩子正常，但本场没走 SDL3 链（GLFW/Metal 路径），
+//                                   零 [SDLHook] 正常，别再往 SDL 上查；
+//   CONSULTED + takenOver=0       → 真·「SDL 钩子没生效」（符号名/句柄形态不匹配）。
+// ============================================================================
+static _Atomic unsigned long g_ameDlsymHookCalls = 0;    // hooked_dlsym 被调用次数
+static _Atomic unsigned long g_ameDlsymHookSdlNames = 0; // 其中 name 以 "SDL" 开头的次数
+
+/// ★ [SDL-FIRSTFRAME] 活性探针（供 SurfaceViewController 的 45s 超时证据行读取）。
+/// dlsymCalls==0 ⇒ 钩子从未被调用；>0 且 sdlNames==0 ⇒ 钩子活着但无人查 SDL。
+void ame_sdlhook_probe(unsigned long *dlsymCalls, unsigned long *sdlNames) {
+    if (dlsymCalls) *dlsymCalls = atomic_load(&g_ameDlsymHookCalls);
+    if (sdlNames)   *sdlNames   = atomic_load(&g_ameDlsymHookSdlNames);
+}
+
 void* hooked_dlsym(void* handle, const char* name) {
+    // ★ [SDL-FIRSTFRAME] 活性计数：首次调用打一条可辨识行，之后只做原子自增。
+    //   刻意不调用 dladdr/NSLog 之外的任何 dyld API —— 本函数可能在本镜像的
+    //   dlopen 期间（dyld 持加载锁）被调用，任何加锁的解析都可能死锁
+    //   （同 sdl3_hook.m 里 26.2+mobileglues 卡死 45s 的成因），故只报名字。
+    {
+        unsigned long ameHookN = atomic_fetch_add(&g_ameDlsymHookCalls, 1) + 1;
+        if (name != NULL && strncmp(name, "SDL", 3) == 0) {
+            atomic_fetch_add(&g_ameDlsymHookSdlNames, 1);
+        }
+        if (ameHookN == 1) {
+            NSLog(@"[SDL-FIRSTFRAME] hooked_dlsym LIVE: 1st call name=%s handle=%s "
+                  @"(dlsym hook installed AND consulted; a log without this line means no "
+                  @"rebound image ever called dlsym)",
+                  name ? name : "(null)",
+                  (handle == RTLD_DEFAULT || handle == NULL) ? "RTLD_DEFAULT/NULL" : "explicit");
+        }
+    }
     // Task 133：入口镜像扫描（兜底触发面）——即使 dlopen 链因意外形态
     // 失守（如 JVM 库换了名字/路径），启动器自身的高频 dlsym（egl_bridge/
     // gl_bridge/initSDLEventFuncs 等符号解析）也会在 controlify 初始化
@@ -2247,4 +2296,25 @@ void init_hookFunctions() {
         {"open", hooked_open, (void *)&orig_open},
     };
     rebind_symbols(rebindings, sizeof(rebindings)/sizeof(struct rebinding));
+    // ★ [SDL-FIRSTFRAME] 启动期自证：重绑定到底有没有生效，不再依赖「玩家是否
+    //   触发到 SDL」。办法：重绑定后立刻用**本镜像自己的 dlsym 调用**查一个不存在
+    //   的符号 —— 命中 hooked_dlsym 则活性计数 +1（= 本进程 dlsym 槽确已改绑）。
+    //   刻意用不存在的名字：不匹配 SDL*/gl* 任何分支，既不会污染 [SDLHook]/[SDLGL]
+    //   日志，也不解析/缓存任何真实符号，零副作用。
+    //   判读：self-test=NO ⇒ 本构建/本设备的 dlsym 槽没被改绑（fishhook 只认
+    //   __la_symbol_ptr/__got 经典布局，chained-fixups 形态会静默失配），此时
+    //   SDL 兼容层在任何 MC 版本上都静默失效 —— 这才是「钩子没装上」的唯一真形态。
+    {
+        unsigned long ameSelfBefore = atomic_load(&g_ameDlsymHookCalls);
+        void *ameSelfProbe = dlsym(RTLD_DEFAULT, "ame_sdl_firstframe_selftest_no_such_symbol");
+        unsigned long ameSelfAfter = atomic_load(&g_ameDlsymHookCalls);
+        NSLog(@"[SDL-FIRSTFRAME] init_hookFunctions done: images=%u dlsym hook self-test=%s "
+              @"(calls %lu->%lu probe=%p) -- self-test=NO means this process's dlsym slot was "
+              @"NOT rebound, so the SDL compat layer is silently inert on ANY MC version; "
+              @"YES + no 'SDL3 compat layer CONSULTED' later means this session simply took the "
+              @"GLFW/Metal path (MC <=26.2) and zero [SDLHook] lines are expected",
+              (unsigned)_dyld_image_count(),
+              (ameSelfAfter > ameSelfBefore) ? "YES" : "NO",
+              ameSelfBefore, ameSelfAfter, ameSelfProbe);
+    }
 }

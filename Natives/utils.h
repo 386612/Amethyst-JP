@@ -183,6 +183,10 @@ BOOL debugLogEnabled, isJailbroken;
 #define CS_DEBUGGED 0x10000000
 int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 BOOL isJITEnabled(BOOL checkCSOps);
+// ★ [JIT-FLOW] TrollStore 装机判定（entitlement 标记 AND ../_TrollStore 磁盘标记）。
+//   取代对 getEntitlementValue(@"jb.pmap_cs.custom_trust") 的单点信任——侧载模板
+//   给每个包都预写了该 entitlement，单点信任会让每个侧载包都走 apple-magnifier://。
+BOOL isTrollStoreInstall(void);
 // legacy method used to check if we're using universal script
 void* JIT26CreateRegionLegacy(size_t len);
 // JIT26 调试器存活探针（议题 #133）：CS_DEBUGGED 只是"曾经启用过"的持久标志，
@@ -192,6 +196,16 @@ void* JIT26CreateRegionLegacy(size_t len);
 BOOL JIT26IsLikelyDebuggerKeepAttached(void);
 BOOL JIT26DebuggerAttachedViaPtrace(void);
 BOOL JIT26DebuggerViaExceptionPorts(void);
+// ★ [JIT-FLOW] 「JIT 是否真的可用」的**可验证能力**判据：主动发一次 brk #0x69
+//   向调试器要一块 JIT 区并（尽力）写入验证。拿到 = 真能执行 JIT；拿不到 = 未开。
+//   不依赖外部工具（StikDebug 等）自己的「完成」提示，也不依赖粘滞的 CS_DEBUGGED。
+//   日志：成功打 [JIT-FLOW] verified；失败打 [JIT-FLOW] false-positive guard triggered。
+BOOL AMEJITVerifyWritableJITRegion(void);
+// 等待就绪谓词：非 Universal 路径沿用 isJITEnabled(false)；Universal 路径要求
+// 上述真能力验证通过。替代 UI 闸门/headless 里的裸 isJITEnabled(false) 等待条件。
+BOOL AMEJITWaitReadyVerified(void);
+// 已通过验证的 JIT 区（未验证过返回 NULL）。
+void *AMEJITVerifiedRegionPtr(void);
 // brk #0x69 的 SIGTRAP 安全网包装：无人应答时返回 NULL 而不是致死崩溃，
 // 由调用方走优雅报错路径；调试器正常应答时行为与裸函数完全一致。
 void* JIT26CreateRegionLegacySafe(size_t len);
@@ -227,6 +241,82 @@ void AMEJITLogPocketJReadiness(NSString *context);
 void JIT26PrepareRegionForPatching(void *addr, size_t len);
 void JIT26SetDetachAfterFirstBr(BOOL value);
 void JIT26SendJITScript(NSString* script);
+
+// ★ [JIT-ADAPT] ============================================================
+// 「市面上能开 JIT 的工具」统一适配层。
+//
+// 背景：主游戏启动路径（LauncherRightPanelViewController / LauncherNavigationController
+//  / DownloadViewController 的 invokeAfterJITEnabled:）原先把「获取 JIT」硬编码成
+//  stikjit://（≥17.4）/ sidestore://（<17.4）/ apple-magnifier://（TrollStore），
+//  **完全忽略** debug.jit_enabler 偏好。于是只装了 StosDebug / JitStreamer / SideJITServer
+//  等工具的用户，即便在设置里选了对应工具也仍旧走 stikjit://（点了没反应 /
+//  只弹“未装 StikDebug”）。headless(JavaLauncher.ame139_requestJIT) 早已按偏好分发，
+//  这里让 UI 路径复用同一套语义：
+//    · stikdebug / stosdebug / jitstreamer / sidestore / trollstore → 打开对应 URL；
+//    · sidejitserver / altstore / sideloadly / jailbreak / manual  → 本机无 URL 可调
+//      （AltStore/Sideloadly 靠电脑端、SideJITServer 靠 Shortcut、越狱靠系统开关），
+//      只给「可辨识引导」，由用户在自己的 App/电脑上为本 App 开 JIT；
+//    · auto / stikjit → 不在本层处理，交回调用方既有分支（**默认行为保持不变**）。
+// 无论走哪条，判定「已开」都只用 AMEJITWaitReadyVerified()（真拿到可写 JIT 区），
+// 绝不相信外部工具的“完成”提示；工具没装时立刻回 MissingTool 让调用方给提示。
+typedef NS_ENUM(NSInteger, AMEJITEnablerActionResult) {
+    AMEJITEnablerActionResultNotHandled = 0, // auto/stikjit：调用方走既有分支
+    AMEJITEnablerActionResultOpened,         // 已调起外部工具（进入可验证等待）
+    AMEJITEnablerActionResultManual,         // 需用户手动开（进入可验证等待）
+    AMEJITEnablerActionResultMissingTool,    // 工具未装/URL 无人处理（给提示，不白等）
+};
+// 当前 debug.jit_enabler 是否属于本适配层负责的“外部工具”取值。
+BOOL AMEJITConfiguredExternalEnablerIsActive(void);
+// 按 debug.jit_enabler 调起/引导对应工具（有副作用，调用一次）。
+AMEJITEnablerActionResult AMEJITOpenConfiguredExternalEnabler(void);
+// 当前 debug.jit_enabler 的原始 key（日志用，缺省 auto）。
+NSString *AMEJITConfiguredEnablerKey(void);
+// 当前 enabler 的工具显示名（“未安装”提示用；无需安装物的返回 nil）。
+NSString *AMEJITConfiguredEnablerDisplayName(void);
+// 需要用户手动开的外部工具对应的「引导文案」i18n key（仅 Manual 类返回，否则 nil）。
+NSString *AMEJITConfiguredEnablerGuidanceKey(void);
+
+// ★ [JB-ADAPT] ============================================================
+// 越狱环境适配层（unc0ver / checkra1n / Taurine / Odyssey / Dopamine(rootless) /
+// palera1n(rootless·checkm8) / RootHide / XinaA15 / Electra …，以及 ElleKit /
+// libhooker / Substitute / CydiaSubstrate 四类注入框架）。
+//
+// 背景：越狱机上 JIT 是**原生可用**的（对本 App 而言不必有调试器 attach，也不需要
+// 外部 JIT 工具）。但"越狱"本身【不等于】"本 App 被授予 JIT"：越狱只提供机制，
+// 是否给某个 App 开 JIT 由用户/越狱配置决定（Dopamine「Allow JIT in Apps」、
+// palera1n/checkra1n/unc0ver 的 get-task-allow / platform-application 等）。
+//
+// ⚠ 硬约束（沿用 [ROOTHIDE] 线）：环境识别**只用于【选路径/选策略】**，绝不参与
+//   isJITEnabled 判定。若把"检测到越狱"当 JIT 能力代理，在"越狱已装但本 App 未开
+//   JIT"时会误报可用 ⇒ 启动闸门跳过 JIT 获取 ⇒ 游戏 SIGILL 闪退。故本层：
+//     ① 正确识别越狱环境（日志/诊断/策略选择，含 RootHide 假阴性修复）；
+//     ② 越狱下用**真能力自检**（本进程能否直接把匿名页置 RX）替代"等外部工具"。
+//
+// 证据来源（IOSSecuritySuite JailbreakChecker · Apple Wiki「Roothide/ElleKit」·
+// opa334/dopamine · palera1n/jbinit · CoolStar libhooker · MidnightTeam/substitute）：
+//   · 注入库（dyld 镜像，沙盒下最可靠）：libellekit.dylib / libhooker.dylib /
+//     libsubstitute.dylib / substrate-inserter|loader / MobileSubstrate.dylib /
+//     systemhook.dylib(Dopamine) / roothideinit.dylib(RootHide) / libblackjack.dylib；
+//   · 越狱根：固定 /var/jb（rootless）· 随机 /var/containers/Bundle/Application/
+//     .jbroot-<hex>（RootHide）· /Library/MobileSubstrate（rootful）· /var/binpack(checkra1n)；
+//   · 磁盘标记：/.installed_unc0ver · /Applications/{Dopamine,palera1nLoader,Cydia,Sileo}.app ·
+//     /var/mobile/Library/Preferences/com.roothide.pref.plist。
+typedef NS_ENUM(NSInteger, AMEJBEnvironment) {
+    AMEJBEnvironmentUnknown = 0,  // 尚未探测
+    AMEJBEnvironmentNone,         // 未越狱
+    AMEJBEnvironmentRootful,      // checkra1n / unc0ver（rootful，Cydia Substrate）
+    AMEJBEnvironmentRootless,     // Dopamine / palera1n(rootless) / Taurine / Odyssey（/var/jb）
+    AMEJBEnvironmentRootHide,     // Dopamine-roothide / palera1n-roothide（随机 jbroot）
+};
+// 越狱环境分类（只读、缓存；仅用于选路径/选策略/日志，绝不参与 isJITEnabled）。
+AMEJBEnvironment AMEJailbreakEnvironment(void);
+// 越狱环境摘要（日志/诊断）：如 "RootHide(random jbroot) + ElleKit (Dopamine)"；未越狱 "None"。
+NSString *AMEJailbreakEnvSummary(void);
+// 越狱下「原生 JIT」策略是否适用（= 环境分类可辨识出越狱）。**不表示 JIT 已开**。
+BOOL AMEJailbreakNativeJITPathApplies(void);
+// 越狱下原生 JIT 的**真能力**判据：本进程能否直接把匿名页设为可执行（无需调试器
+// 服务 brk #0x69）。成功即证明 JIT 原生可用；失败绝不放行。
+BOOL AMEJailbreakNativeJITReady(void);
 
 // ★ [JIT-NOCRASH] 其余 JIT26 brk(#0xf00d)协议调用的 SIGTRAP 安全网包装。
 //   与 JIT26CreateRegionLegacySafe / JIT26DetachSafe 共用同一套 handler /
@@ -265,6 +355,9 @@ BOOL DeviceNeedsDebugJITMapping(void);
 
 // Init functions
 void init_bypassDyldLibValidation();
+// ★ [DYLD-SWITCH] dyld 库校验旁路总开关求值（偏好 java.dyld_bypass，默认关；
+// AMETHYST_DYLD_BYPASS=0 强制关）。见 dyld_bypass_validation.m。
+BOOL ame_dyldBypassRequested(void);
 void init_hookFunctions();
 
 // Zink (Mesa 25.0.7) + MoltenVK vertex stride 4 字节对齐 fix
@@ -314,6 +407,22 @@ NSString *AmeLauncherDisplayNameForLanguageCode(NSString *code);
 NSArray<NSString *> *AmeLauncherAvailableLanguageCodes(void);
 /// ★ [I18N] 某语言的"人工翻译率"（0.0~1.0，基准语言返回 1.0）；选单标"部分翻译"用。
 double AmeLauncherLanguageTranslatedRatio(NSString *code);
+
+// ★ [I18N-PARTIAL] ============================================================
+// 「部分翻译」语言（单一事实源）。
+// 用户拍板：ja.lproj 有 1608/1955 个键与 zh-Hans 逐字相同（大量界面其实是中文），
+// 但也确实有真实日语翻译 ⇒ 【保留该语言】、只在用户能看到语言的地方如实标注
+// 「部分翻译」。要追加/移除被标注的语言，**只改** utils.m 里
+// AmeLauncherPartiallyTranslatedLanguageCodes() 这一个集合，展示层全部经下面两个函数。
+/// ★ [I18N-PARTIAL] 被标为"部分翻译"的语言代码集合（单一事实源；先只有 ja）。
+NSSet<NSString *> *AmeLauncherPartiallyTranslatedLanguageCodes(void);
+/// ★ [I18N-PARTIAL] 该语言是否被标为"部分翻译"。
+BOOL AmeLauncherIsPartiallyTranslatedLanguage(NSString *code);
+/// ★ [I18N-PARTIAL] 语言选单/设置页展示名：部分翻译的语言追加本地化的「（部分翻译）」后缀。
+/// 非部分翻译语言 = AmeLauncherDisplayNameForLanguageCode(code)，行为完全不变。
+NSString *AmeLauncherDisplayNameAnnotatedForLanguageCode(NSString *code);
+/// ★ [I18N-PARTIAL] 部分翻译语言的补充说明（如「部分界面仍为中文」）；非部分翻译返回 nil。
+NSString *AmeLauncherPartiallyTranslatedNoteForLanguageCode(NSString *code);
 // YES 表示 NSError 是"当前没有可用网络"，而非服务器返回了不喜欢的内容。
 // 账户刷新只认 NSURLErrorDataNotAllowed 会漏掉飞行模式/无 Wi-Fi 等常见离线形态。
 BOOL isConnectivityError(NSError *error);
@@ -367,8 +476,6 @@ void CallbackBridge_nativeSendScreenSize(int width, int height);
 void CallbackBridge_nativeSendScroll(CGFloat xoffset, CGFloat yoffset);
 void CallbackBridge_sendKeycode(int keycode, jchar keychar, int scancode, int modifiers, BOOL isDown);
 void CallbackBridge_pauseGameIfNeed();
-// ★ [FG] 与上面成对：回前台时重申窗口尺寸，让 MC 重新同步 framebuffer。
-void CallbackBridge_resumeGameIfNeed(void);
 // issue #27 修复（参照 FCL commit 08c0716）：物理键盘 modifier 同步
 // 显式同步 MC 1.21.9+ 内部的 InputConstants modifier 缓存。
 // 由 KeyboardInput.m 在物理键盘按下/释放事件中调用。
@@ -380,5 +487,131 @@ void ame_egl_swap_stats(unsigned long *ok, unsigned long *fail);
 void ame_egl_swap_framegap(unsigned int *maxGapMs, unsigned int *avgGapMs);
 void ame_egl_swap_phase_stats(unsigned int *presentAvgMs, unsigned int *presentMaxMs,
                               unsigned int *buildAvgMs, unsigned int *buildMaxMs);
+// ★ [SDL-FIRSTFRAME] 首帧/钩子活性取证（判读「零 [SDLHook] 行」到底是钩子没装上
+//   还是本场根本没走 SDL3 链路）。三件套：启动期自证行、活性探针、SDL 链计数。
+//   ame_sdlhook_probe      —— main_hook.m：hooked_dlsym 调用次数 / 其中 SDL* 名字次数
+//   amethyst_sdl3_hook_stats —— sdl3_hook.m：SDL 名字被咨询次数 / 真接管次数
+void ame_sdlhook_probe(unsigned long *dlsymCalls, unsigned long *sdlNames);
+void amethyst_sdl3_hook_stats(unsigned long *consulted, unsigned long *takenOver);
 bool ame_gl_surface_owns_layer(void);
 bool ame_gl_surface_transposed(void);
+
+// ★ [VER-ISOLATE] ============================================================
+// 完全版本隔离：实例隔离根目录解析（单一事实源）。
+//
+// 背景：1.21.11 / 26.2 / 26.3 与多实例共用同一份 POJAV_HOME，历史上日志/临时/
+// 渲染器配置等产物落在 POJAV_HOME 根下，被后启动的会话覆盖 ⇒「另一个版本崩、
+// 另一个能跑」时无法取证、渲染器偏好互相串扰。本组函数把「可安全隔离」的产物
+// 统一落到 <POJAV_HOME>/instances/<实例>/ 内。
+//
+// 隔离键 = 实例目录（general.game_directory）。刻意直接读全局 plist，不依赖
+// loadPreferences() —— main.m 的 STDIO 重定向早于 loadPreferences()，必须在启动
+// 最早期就能拿到实例名。任何一步不可得都返回 nil / 回退旧共享路径，绝不阻断启动。
+NSString *ameVIInstanceRoot(void);              // <POJAV_HOME>/instances/<实例>（不保证已存在）
+NSString *ameVIInstanceSubdir(NSString *leaf);  // 创建并返回 <root>/<leaf>；root 不可得返回 nil
+NSString *ameVILatestLogPath(void);             // 每实例 latestlog.txt
+NSString *ameVILatestLogRotatedPath(void);      // 每实例 latestlog.old.txt
+
+// ★ [LOG-FIX] ===============================================================
+// 日志隔离的「兼容层」：POJAV_HOME 下那两个名字必须仍是【普通文件】，不能是符号链接。
+// 证据：iOS 文件 API 把 symlink 当独立条目 —— attributesOfItemAtPath: 报
+// NSFileTypeSymbolicLink、NSFileSize=目标串长度（不是内容长度）；copyItemAtPath: /
+// UIActivityViewController 分享 / 文件 App / AFC / 第三方工具会【原样拷贝链接本身】，
+// 目标一旦不在接收方沙盒就拿到空/断裂文件。改用【硬链接】：与真身同一 inode，对一切
+// 读方表现为普通文件、内容实时就是当前实例那次运行；零额外写入，隔离收益完全保留。
+//
+// 成对处理约定（调用点必须遵守）：
+//   · 建链：先 removeItemAtPath:dest（dest 可能是旧版残留 symlink），再 linkItemAtPath:。
+//   · 轮转：真身按 move+create 轮转（得到新 inode），随后对 latestlog(./old) 两个名字重建。
+//   · 删除：dest 被删只是少一个名字，真身 inode 仍由实例内名字保活；下次启动重建。
+BOOL ameVIPathIsSymlink(NSString *path);                     // 不跟随 symlink 的判定
+BOOL ameVIHardLinkLog(NSString *srcPath, NSString *dstPath); // 建硬链接；成功=dest 为普通文件
+
+// ★ [VER-ISOLATE-PCL] ========================================================
+// 版本隔离（对齐 PCL2 社区版 PCL-CE 的「实例隔离」语义，源码键
+// VersionArgumentIndieV2 / LaunchArgumentIndieV2）。
+//
+// 语义（与 PCL 一致，纯目录指针切换，**不搬运文件**）：
+//   开启 → 该版本的 gameDir = <实例根>/versions/<版本 id>/   （mods/config/saves/
+//          resourcepacks/shaderpacks/logs/options.txt 全部落在此，与其它版本互不干涉）
+//   关闭 → 该版本的 gameDir = <实例根>/                      （与实例内其它版本共享，现状）
+// versions/ 目录本身、libraries/、assets/ 始终按实例共享 —— 与 PCL 相同：
+//   只有"游戏数据目录"被隔离，不是把整棵树复制一份。
+//
+// 判定顺序（对应 PCL McInstance.PathIndie / ShouldBeIndie）：
+//   1) profile 显式值 versionIsolation（"1"/"0"）——对应 PCL 的 VersionArgumentIndieV2
+//   2) 自动判定：<实例根>/versions/<id>/ 下已有 mods(含文件) 或 saves(含目录) ⇒ 开启
+//   3) 全局默认 general.version_isolation ——对应 PCL 的「默认实例隔离」LaunchArgumentIndieV2
+//
+// 解析给定 profile 的版本隔离是否开启。concreteVersionId 可为 nil（启动期可传
+// launchTarget[@“id”] 以拿到比 lastVersionId 更准确的版本 id）。
+BOOL amePCLVersionIsolationForProfile(NSDictionary *prof, NSString *concreteVersionId);
+
+// 生效的 gameDir 子路径（相对当前实例根）：@“.”（共享）或 @“versions/<id>”（隔离）。
+// profile 里显式写了非 @“.” 的 gameDir 时以显式值为准（保持既有语义不变）。
+NSString *amePCLVersionGameDirSubpath(NSDictionary *prof, NSString *concreteVersionId);
+
+// 生效的 gameDir 绝对路径（POJAV_GAME_DIR + 上面的子路径）。
+NSString *amePCLVersionGameDirAbsolute(NSDictionary *prof, NSString *concreteVersionId);
+
+// 一次性幂等迁移（哨兵键 internal.version_isolation_migrated）：
+// 把"升级前已手工隔离过"的 profile（gameDir 指向 versions/*，或对应版本目录下
+// 已有 mods/saves）显式写成 versionIsolation=@"1"，使其在设置页可见、可回退。
+void amePCLMigrateVersionIsolationOnce(void);
+
+// ★ [VER-ISOLATE-MIGRATE] ====================================================
+// 实例【共享游戏根】绝对路径（= POJAV_GAME_DIR；不可得时回退 ameVIInstanceRoot()）。
+// 仅作 fallback；带 profile 的迁移请用下面的 amePCLSharedGameDirForProfile。
+// 注意：本函数【只解析路径，绝不移动/复制任何文件】。
+NSString *amePCLSharedGameDirAbsolute(void);
+
+// ★ [VER-ISOLATE-MIGRATE] 某 profile 在【关闭隔离】时实际使用的 gameDir 绝对路径
+// （= 迁移的"源根" = 用户当前真正在用的那个目录）。**唯一真相源 = 同一 resolver**：
+// 本函数不另拼路径，而是把 profile 的 versionIsolation 显式置 "0" 后交给
+// amePCLVersionGameDirAbsolute 解析（显式 versionIsolation 会让 resolver 立即返回，
+// 不再走自动启发式）。profile 若写了显式自定义 gameDir，则会解析成该目录 ⇒ 与
+// amePCLVersionGameDirAbsolute(profile,...)（开隔离）同值 ⇒ 迁移自动判定为"无目标"。
+// 迁移动作用户在实例编辑页显式触发；本函数自身不动任何文件。
+NSString *amePCLSharedGameDirForProfile(NSDictionary *prof, NSString *concreteVersionId);
+
+// ★ [VI-POLISH] ==============================================================
+// 采纳《_LAUNCHER_ISOLATION_SURVEY.md》§③ 建议 A/B/C/D 的共用底座：
+//   A 三态可见化 —— 隔离显式三态读写 + 目录形状嗅探明细（供 UI 说明「为什么是这个判定」）
+//   B 首启向导   —— ★ [VI-FLOW] 用户修正：每次进启动器都再弹，直到用户主动选「以后不再提示」
+// （C 共享边界文案 / D 关闭恢复提示 是纯文案，落在 .strings 与各页 UI，不在这里。）
+// 硬约束：本段所有函数只【读磁盘 + 读/写设置】，绝不移动、复制或删除任何文件；
+//         「自动」= 不落键，保持 resolver 既有默认语义（默认仍关，未改任何默认值）。
+
+// A. 隔离显式三态 —— 对应 profile 的 versionIsolation 键，与 resolver 第 1 步完全同源：
+//    Auto     = 未落键（resolver 走 自动判定 → 全局默认 general.version_isolation）
+//    Shared   = 显式 "0"（PCL 的 VersionArgumentIndieV2=0）
+//    Isolated = 显式 "1"（PCL 的 VersionArgumentIndieV2=1）
+typedef NS_ENUM(NSInteger, AmeVIExplicitState) {
+    AmeVIExplicitStateAuto     = -1,
+    AmeVIExplicitStateShared   =  0,
+    AmeVIExplicitStateIsolated =  1,
+};
+
+// 读 profile 的显式三态（未落键 ⇒ Auto）。
+AmeVIExplicitState ameVIExplicitStateForProfile(NSDictionary *prof);
+
+// 写 profile 的显式三态：Auto ⇒ 移除该键（回到自动判定），Isolated/Shared ⇒ 写 "1"/"0"。
+// 只改这一个键，不动任何文件、不动 profile 的其它字段。
+void ameVISetExplicitStateForProfile(NSMutableDictionary *prof, AmeVIExplicitState state);
+
+// A. 版本目录形状嗅探明细（纯只读）。判定规则与 resolver 的自动判定**逐字同源**
+//    （mods：含非隐藏文件；saves：含非隐藏条目 ⇒ 视为已隔离）。
+// 返回 @{ @"hasMods": @BOOL, @"hasSaves": @BOOL, @"hasAny": @BOOL,
+//          @"exists": @BOOL, @"path": NSString }（任何一步不可得都返回全 NO，绝不抛错）。
+NSDictionary *ameVISniffVersionFolder(NSString *versionId);
+
+// A. 向导用「建议隔离态」：嗅探到内容 ⇒ 建议显式隔离；否则建议保持自动（默认）。只读，不落键。
+BOOL ameVISniffShouldSuggestIsolation(NSString *versionId);
+
+// ★ [VI-FLOW] B（用户修正 1 + 补充）：向导「弹到用户主动说『以后都不弹』为止」。
+//    * 哨兵 internal.version_isolation_wizard_off：幂等，【只】在用户于点「以后不再提示」时写一次；
+//      弹出时绝不写。未落哨兵 ⇒ 每次进启动器都会再次出现（可跳过、不阻碍启动）。
+//    * 已落哨兵 ⇒ 不再【自动】弹；但实例设置页的「版本隔离向导」手动入口直接 present（不受哨兵约束）。
+//    静态证明：哨兵读点唯一（ShouldPresent，只读不写）、写点唯一（MarkDontShowAgain，仅向导按钮调用）。
+BOOL ameVIWizardShouldPresent(void);
+void ameVIWizardMarkDontShowAgain(void);

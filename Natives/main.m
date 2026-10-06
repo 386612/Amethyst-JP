@@ -15,6 +15,7 @@
 #import "config.h"
 
 #include <libgen.h>
+#include <limits.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -77,6 +78,83 @@ bool init_checkForsubstrated() {
     return false;
 }
 
+// ============================================================================
+// ★ [ROOTHIDE] RootHide 环境探测（独立于 init_checkForJailbreak，勿混入 isJailbroken）
+// ----------------------------------------------------------------------------
+// RootHide 是“隐藏越狱”的 rootless 变体（Dopamine-roothide / palera1n-roothide）：
+//   · 越狱根 jbroot 随机化到 /var/containers/Bundle/Application/.jbroot-<16hex>/，
+//     不再用固定 /var/jb（dopamine 固定、roothide 随机化以躲检测）；每个含 Mach-O
+//     的目录里放一个 .jbroot 符号链接指向 jbroot，jbroot/rootfs 才是系统根；
+//   · 取消全局 dyld 补丁，改用【进程级补丁】注入 systemhook.dylib，且该文件名也被随机化；
+//   · 只对“加入隐藏名单”的 App 藏越狱痕迹（路径重定向 + 进程列表隐藏）。
+//
+// 本文件 init_checkForJailbreak() 的三条判据在 RootHide 上全部落空：
+//   · substrated 不存在（Dopamine/RootHide 用 ElleKit，不是 CydiaSubstrate）⇒ 假阴性；
+//   · systemhook.dylib 名字被随机化 ⇒ strstr("/systemhook.dylib") 失配 ⇒ 假阴性；
+//   · 普通 App 不是 platform binary ⇒ 假阴性（与普通无根越狱一致）；
+//   只剩 opendir("/Applications") 一条，且仅在【无沙盒】安装（TrollStore/.tipa）时成立。
+// ⇒ 结论：RootHide 下 isJailbroken 大概率 = false（假阴性）。这不是“没越狱”，
+//   故环境分类必须单独认，不能把“检测不到 jailbreak”当“非越狱”。
+//
+// ⚠ 设计约束（[JB-ADAPT] 后更新）：RootHide / 越狱环境识别**只用于【选路径/选策略】**，
+//   不得放宽 isJITEnabled。原实现 utils.m 的 isJITEnabled(NO) 用
+//   `dynamic-codesigning || isJailbroken` 当“JIT 能力”代理，故当时刻意不把 RootHide 并入
+//   isJailbroken。本轮 [JB-ADAPT] 已把 `isJailbroken` 从 isJITEnabled 的代理里移除
+//   （JIT 能力只认 dynamic-codesigning entitlement / CS_DEBUGGED 这些**真实证据**），
+//   越狱环境改由启动闸门走「原生 JIT + 真能力自检」（AMEJailbreakNativeJITPathApplies /
+//   AMEJailbreakNativeJITReady）。因此现在把 RootHide（及其它越狱环境）正确并入
+//   isJailbroken 是安全的：它只影响【选哪条策略/哪条路径】与诊断分类，不再放宽 JIT 判据。
+// ============================================================================
+static BOOL gAmeIsRootHide = NO;
+static char gAmeRootHideJBROOT[PATH_MAX] = {0};
+
+// 尽力解析 jbroot 的 real path（无则空串）。识别两类证据：
+//   (1) 进程内已加载 roothide 注入库：镜像路径含 ".jbroot-" 或 "roothideinit.dylib"
+//       ⇒ 本进程已被 roothide 接管（“隐藏名单”里的 App 也是这样被注入的）；
+//   (2) 文件系统上存在 .jbroot-*：只有无沙盒进程能列 /var/containers/Bundle/Application；
+//       列不到也不算失败（(1) 已足够）。
+bool init_checkForRootHide(void) {
+    for (uint32_t i = 0; i < _dyld_image_count(); i++) {
+        const char *name = _dyld_get_image_name(i);
+        if (name == NULL) continue;
+        const char *mark = strstr(name, ".jbroot-");
+        if (mark != NULL || strstr(name, "roothideinit.dylib") != NULL) {
+            gAmeIsRootHide = YES;
+            if (mark != NULL && gAmeRootHideJBROOT[0] == '\0') {
+                size_t len = (size_t)(mark - name);
+                if (len > 0 && len < sizeof(gAmeRootHideJBROOT)) {
+                    memcpy(gAmeRootHideJBROOT, name, len);
+                    gAmeRootHideJBROOT[len] = '\0';
+                }
+            }
+        }
+    }
+
+    if (!gAmeIsRootHide) {
+        const char *parent = "/var/containers/Bundle/Application";
+        DIR *d = opendir(parent);
+        if (d != NULL) {
+            struct dirent *ent;
+            while ((ent = readdir(d)) != NULL) {
+                if (strncmp(ent->d_name, ".jbroot-", 8) == 0) {
+                    snprintf(gAmeRootHideJBROOT, sizeof(gAmeRootHideJBROOT), "%s/%s", parent, ent->d_name);
+                    gAmeIsRootHide = YES;
+                    break;
+                }
+            }
+            closedir(d);
+        }
+    }
+
+    if (gAmeIsRootHide) {
+        NSLog(@"[ROOTHIDE] RootHide environment detected (jbroot=%s)",
+              gAmeRootHideJBROOT[0] ? gAmeRootHideJBROOT : "(unresolved)");
+    } else {
+        NSLog(@"[ROOTHIDE] no RootHide environment detected");
+    }
+    return gAmeIsRootHide;
+}
+
 bool init_checkForJailbreak() {
     if (NSProcessInfo.processInfo.macCatalystApp) {
         // macOS doesn't automatically enable JIT.
@@ -100,6 +178,23 @@ bool init_checkForJailbreak() {
         return true;
     }
 
+    // ★ [JB-ADAPT] 多证据越狱识别（修假阴性）。原 4 条判据在现代越狱上大面积漏报：
+    //   · Dopamine / palera1n(rootless) / Taurine / Odyssey / RootHide 一律不用
+    //     CydiaSubstrate（没有 substrated 进程）⇒ 判据①全灭；
+    //   · RootHide 把 systemhook.dylib 文件名随机化 ⇒ 判据②strstr 失配；
+    //   · 普通 App 不是 platform binary ⇒ 判据③只在越狱 App 身份安装时为真；
+    //   · opendir("/Applications") 只与「无沙盒」相关，与是否越狱无关。
+    //   这里补上「注入框架 + 越狱根 + 家族标记」三类证据（判据与来源见 utils.h
+    //   [JB-ADAPT] 注释块；实现 utils.m ameJBDetectEnvironmentOnce）。命中即越狱。
+    //   ⚠ 本函数的返回值 isJailbroken 只用于【选路径/选策略/诊断】，**不再**参与
+    //     isJITEnabled 判定（见 utils.m isJITEnabled 的 [JB-ADAPT] 注释）。
+    AMEJBEnvironment jbEnv = AMEJailbreakEnvironment();
+    if (jbEnv != AMEJBEnvironmentNone) {
+        NSLog(@"[JB-ADAPT] jailbreak detected via multi-evidence: env=%ld (%@)",
+              (long)jbEnv, AMEJailbreakEnvSummary());
+        return true;
+    }
+
     return opendir("/Applications") != NULL;
 }
 
@@ -111,9 +206,21 @@ void init_logDeviceAndVer(char *argument) {
     NSLog(@"[Pre-Init] Version: %@", NSBundle.mainBundle.infoDictionary[@"CFBundleShortVersionString"], CONFIG_TYPE);
     NSLog(@"[Pre-Init] Commit: %s (%s)", CONFIG_COMMIT, CONFIG_BRANCH);
     
+    // ★ [ROOTHIDE] TrollStore 标记有两个已知落点：<bundle>/../_TrollStore（TrollStore
+    //   自己建）与 <bundle>/_TrollStore。RootHide 1.1.3 起“隐藏更多 jailbreak/
+    //   trollstore 痕迹”，该标记对【被隐藏的 App】可能不可见 ⇒ 单靠它会把根在 RootHide
+    //   上的 TrollStore 环境误判为普通越狱。这里两处都查，并把 RootHide 环境单独标出
+    //   （RootHide 不并入 isJailbroken，原因见 init_checkForRootHide 顶部注释）。
     NSString *tsPath = [NSString stringWithFormat:@"%@/../_TrollStore", NSBundle.mainBundle.bundlePath];
+    BOOL hasTrollStoreMarker =
+        (!access(tsPath.UTF8String, F_OK)) ||
+        ([fm fileExistsAtPath:[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"_TrollStore"]]);
     const char *type;
-    if (!access(tsPath.UTF8String, F_OK)) {
+    if (gAmeIsRootHide && hasTrollStoreMarker) {
+        type = "RootHide+TrollStore";
+    } else if (gAmeIsRootHide) {
+        type = "RootHide";
+    } else if (hasTrollStoreMarker) {
         type = "TrollStore";
     } else if (isJailbroken) {
         type = "Jailbroken";
@@ -121,6 +228,15 @@ void init_logDeviceAndVer(char *argument) {
         type = "Unjailbroken";
     }
     setenv("POJAV_DETECTEDINST", type, 1);
+
+    if (gAmeIsRootHide) {
+        // ★ [ROOTHIDE] 可辨识日志：设备跑 RootHide。越狱根是随机路径，本启动器不硬编码
+        //   /var/jb（运行时一律走 POJAV_HOME/容器），故路径假设不受影响；但 TrollStore
+        //   标记与 systemhook 名字被随机化会影响 isTrollStoreInstall / JIT 使能选择。
+        NSLog(@"[ROOTHIDE] env class=%s jbroot=%s detectedTrollStoreMarker=%d isJailbroken=%d",
+              type, gAmeRootHideJBROOT[0] ? gAmeRootHideJBROOT : "(unresolved)",
+              hasTrollStoreMarker ? 1 : 0, isJailbroken ? 1 : 0);
+    }
     
     NSLog(@"[Pre-Init] Device: %@", [HostManager GetModelName]);
     NSLog(@"[Pre-Init] %@ (%s)", UIDevice.currentDevice.completeOSVersion, type);
@@ -143,14 +259,65 @@ void init_redirectStdio() {
     NSString *home = @(getenv("POJAV_HOME"));
     NSString *currName = [home stringByAppendingPathComponent:@"latestlog.txt"];
     NSString *oldName = [home stringByAppendingPathComponent:@"latestlog.old.txt"];
-    [fm removeItemAtPath:oldName error:nil];
-    [fm moveItemAtPath:currName toPath:oldName error:nil];
 
-    [fm createFileAtPath:currName contents:nil attributes:nil];
-    NSFileHandle *file = [NSFileHandle fileHandleForWritingAtPath:currName];
+    // ★ [LOG-FIX] 每实例日志隔离：真身仍写实例目录，但 POJAV_HOME 下那两个名字
+    //   改用【硬链接】（旧版是符号链接 —— 已确认会坏日志功能）。
+    //   为什么 symlink 不行：iOS 文件 API 把它当独立条目 —— attributesOfItemAtPath:
+    //   报 NSFileTypeSymbolicLink、NSFileSize=目标串长度（不是内容长度）；分享
+    //   (UIActivityViewController)/文件 App/AFC/拷贝/第三方工具会【原样拷走链接本身】，
+    //   目标一旦不在接收方沙盒就读空或断裂 ⇒ 导出/外拉全废。硬链接与真身【同一
+    //   inode】：对上述一切读方与改动前的普通文件完全等价，内容实时就是当前实例那次
+    //   运行，零额外写入，隔离收益（真身每实例一份）不丢。
+    //   硬链接不可用（跨卷/无权限）⇒ 回退改动前的单一路径：日志可用优先于隔离。
+    NSString *instLog = ameVILatestLogPath();
+    NSString *instOld = ameVILatestLogRotatedPath();
+    BOOL isolated = (instLog.length > 0 && instOld.length > 0);
+    NSString *logTarget = currName;
+
+    // 清理旧版（symlink 方案）残留在 POJAV_HOME 下的符号链接：removeItemAtPath: 只删
+    // 链接本身，不动实例内真身；不先清掉的话，后面的 move/硬链接会落在这条链接上。
+    if (ameVIPathIsSymlink(currName)) [fm removeItemAtPath:currName error:nil];
+    if (ameVIPathIsSymlink(oldName))  [fm removeItemAtPath:oldName  error:nil];
+
+    if (isolated) {
+        // 一次性迁移：把旧的共享日志（普通文件）搬进本实例，保留最后一次会话。
+        // 幂等：仅当实例日志尚不存在时才搬。
+        if (![fm fileExistsAtPath:instLog] && [fm fileExistsAtPath:currName]) {
+            [fm moveItemAtPath:currName toPath:instLog error:nil];
+        }
+        // 轮转真身：move 把旧 inode 留给 latestlog.old.txt，再 create 出一个全新 inode，
+        // 与改动前的语义成对；随后 POJAV_HOME 下两个名字都重建硬链接。
+        [fm removeItemAtPath:instOld error:nil];
+        [fm moveItemAtPath:instLog toPath:instOld error:nil];
+        [fm createFileAtPath:instLog contents:nil attributes:nil];
+
+        if (ameVIHardLinkLog(instLog, currName)) {
+            // .old 首次运行可能不存在 ⇒ 尽力而为，失败不影响 latestlog.txt 可用。
+            if (!ameVIHardLinkLog(instOld, oldName)) {
+                NSLog(@"[LOG-FIX] latestlog.old hardlink skipped/failed (non-fatal)");
+            }
+            NSLog(@"[LOG-FIX] per-instance log -> %@ (hardlink %@)", instLog, currName);
+            logTarget = instLog;
+        } else {
+            // 硬链接不可用：回退改动前的共享日志，保证 POJAV_HOME/latestlog.txt 始终
+            // 是普通文件、日志功能完全不受影响（代价：失去按实例隔离）。
+            NSLog(@"[LOG-FIX] hardlink latestlog failed -- using shared log (isolation dropped)");
+            isolated = NO;
+        }
+    }
+
+    if (!isolated) {
+        // 与改动前完全一致：POJAV_HOME 下直接轮转 + 新建普通文件。
+        [fm removeItemAtPath:oldName error:nil];
+        [fm moveItemAtPath:currName toPath:oldName error:nil];
+        [fm createFileAtPath:currName contents:nil attributes:nil];
+        logTarget = currName;
+    }
+
+    NSFileHandle *file = [NSFileHandle fileHandleForWritingAtPath:logTarget];
 
     if (!file) {
-        NSLog(@"[Pre-init] Error: failed to open %@", currName);
+        NSLog(@"[Pre-init] Error: failed to open %@", logTarget);
         // ★ [DEMINE] 原为 assert(0,...)：Release 下 C assert 被 -DNDEBUG 编译掉(无效)，
         //   但 Debug 构建会在此直接 abort 整个启动；且一旦走到这里，原代码仍会把
         //   stdout/stderr 重定向进管道、由 nil 的 file 静默吞掉全部输出 —— 用户什么都
@@ -286,6 +453,28 @@ void init_setupHomeDirectory() {
     homeDir = [NSString stringWithFormat:@"%s/Documents%@", getenv("HOME"),
         isNotSandboxed ? @"/AngelAuraAmethyst":@""];
 
+    // ★ [ROOTHIDE] 防御：RootHide 会把 CFFIXED_USER_HOME/部分 HOME 相关路径重定向进随机
+    //   jbroot（.../Application/.jbroot-<16hex>/...）；若带着随机段，POJAV_HOME 会随每次
+    //   越狱换名字 ⇒ 实例/账号/日志全部“消失”。这里若发现路径含 /.jbroot-<随机段>，
+    //   就把它剥掉还原为 rootfs 真实路径（RootHide 的 <jbroot>/rootfs 才是系统根）。
+    //   正常环境下该分支永不触发（路径里不会出现 .jbroot-），故对既有行为零影响。
+    if (gAmeIsRootHide) {
+        const char *cffix = getenv("CFFIXED_USER_HOME");
+        NSLog(@"[ROOTHIDE] home resolve: URL-home=%s CFFIXED_USER_HOME=%s", homeDir.UTF8String, cffix ?: "(unset)");
+        NSRange jb = [homeDir rangeOfString:@"/.jbroot-"];
+        if (jb.location != NSNotFound) {
+            NSRange tail = NSMakeRange(jb.location + 1, homeDir.length - (jb.location + 1));
+            NSUInteger slash = [homeDir rangeOfString:@"/" options:0 range:tail].location;
+            if (slash != NSNotFound) {
+                NSString *realHome = [homeDir substringFromIndex:slash];
+                NSLog(@"[ROOTHIDE] HOME was redirected into jbroot (%@) -- using real path %@", homeDir, realHome);
+                homeDir = realHome;
+            } else {
+                NSLog(@"[ROOTHIDE] HOME looks jbroot-redirected but no suffix found (%@) -- keeping as-is", homeDir);
+            }
+        }
+    }
+
     if (![fm fileExistsAtPath:homeDir] ) {
         [fm createDirectoryAtPath:homeDir withIntermediateDirectories:NO attributes:nil error:&homeError];
     }
@@ -297,7 +486,13 @@ void init_setupHomeDirectory() {
         [fm createDirectoryAtPath:homeDir withIntermediateDirectories:YES attributes:nil error:&homeError];
     }
     
-    setenv("POJAV_HOME", realpath(homeDir.UTF8String, NULL), 1);
+    // ★ [ROOTHIDE] 原实现直接把 realpath() 的返回值喂给 setenv()：realpath 失败返回 NULL，
+    //   而 setenv(name, NULL, 1) 是未定义行为（可能崩）。改为失败时回退 homeDir 本身，
+    //   并打印最终 POJAV_HOME —— RootHide/沙盒/无沙盒三种落点一眼可辨（排障用）。
+    char *resolved = realpath(homeDir.UTF8String, NULL);
+    setenv("POJAV_HOME", resolved ? resolved : homeDir.UTF8String, 1);
+    if (resolved) free(resolved);
+    NSLog(@"[Pre-init] POJAV_HOME=%s (sandboxed=%d)", getenv("POJAV_HOME"), !isNotSandboxed);
 }
 
 int main(int argc, char *argv[]) {
@@ -345,6 +540,10 @@ int main(int argc, char *argv[]) {
 
     setenv("BUNDLE_PATH", dirname(argv[0]), 1);
     isJailbroken = init_checkForJailbreak();
+    // ★ [ROOTHIDE] 环境探测必须在 init_setupHomeDirectory() 之前 —— 后者用 gAmeIsRootHide
+    //   判断 HOME 是否被重定向进随机 jbroot 并做还原。探测本身不改变 isJailbroken
+    //   （见 init_checkForRootHide 顶部“设计约束”）。
+    init_checkForRootHide();
     init_setupHomeDirectory();
     init_redirectStdio();
     init_logDeviceAndVer(argv[0]);
@@ -360,6 +559,9 @@ int main(int argc, char *argv[]) {
     init_setupMultiDir();
     toggleIsolatedPref(NO);
     [PLProfiles updateCurrent];
+    // ★ [VER-ISOLATE-PCL] 版本隔离开关一次性幂等迁移：必须在 POJAV_GAME_DIR 就绪
+    // （init_setupMultiDir）与 PLProfiles 刷新之后；哨兵保证只跑一次，失败不阻断启动。
+    amePCLMigrateVersionIsolationOnce();
     init_setupAccounts();
     init_setupCustomControls();
 
