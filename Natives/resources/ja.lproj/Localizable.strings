@@ -147,6 +147,9 @@
 "login.msa.progress.acquireXboxProfile" = "(3/5) Xboxプロファイルの取得";
 "login.msa.progress.acquireMCToken" = "(4/5) Minecraft トークンの取得";
 "login.msa.progress.checkMCProfile" = "(5/5) Minecraft プロファイルの確認";
+"login.msa.error.network.token" = "ログインサーバーに接続できません（%@）。通信環境を確認して再試行してください。";
+"login.msa.error.xbl.rejected" = "Xbox Live トークンを取得できません：Xbox Live がこのアカウントのアクセストークンを拒否しました。この Microsoft アカウントで Xbox プロフィールを作成済みか確認してください（初回は xbox.com か Xbox アプリで一度サインインしてください）。";
+"login.msa.error.mc.token" = "Minecraft トークンを取得できません：この Microsoft アカウントが Minecraft: Java Edition を所有していないか、Xbox プロフィールが未作成の可能性があります。";
 
 "login.3rdparty.progress.auth" = "(1/2)正在通过第三方服务器进行认证";
 "login.3rdparty.progress.refresh" = "(2/2)正在刷新第三方认证";
@@ -179,6 +182,11 @@
 "preference.title.confirm" = "よろしいですか？";
 
 "preference.title.game_directory" = "ゲームのディレクトリ";
+/* ★ [VER-ISOLATE-PCL] バージョン分離 */
+"preference.title.version_isolation" = "既定のバージョン分離";
+"preference.profile.title.version_isolation" = "バージョン分離";
+"preference.detail.version_isolation" = "有効にすると、バージョンは隔離の既定に従い mods / config / セーブデータを versions/<バージョン>/ に保存します。既存のバージョンはそれぞれの設定を維持します。";
+"preference.detail.versionIsolation" = "有効にすると、このバージョンの mods / config / セーブデータは versions/<バージョン>/ に独立して保存され、他のバージョンに影響しません。無効にすると共有に戻ります（ファイルは移動しません）。";
 "preference.title.confirm.delete_game_directory" = "インスタンス %@ は永久に削除されるため、復元できません。";
 "preference.multidir.add_directory" = "ゲームディレクトリの追加";
 
@@ -312,7 +320,7 @@
 "preference.detail.recording_hide" = "在截图和屏幕录制时隐藏控制，但它们仍然在屏幕上可见。";
 "preference.title.gesture_mouse" = "鼠标手势";
 "preference.detail.gesture_mouse" = "启用手势，例如点击放置方块、按住破坏方块、用两根手指转动视角";
-"preference.title.bt_pointer_enable" = "蓝牙鼠标 / 触控板";
+"preference.title.bt_pointer_enable" = "Bluetooth マウス／トラックパッド";
 "preference.detail.bt_pointer_enable" = "Bluetooth マウス／トラックパッドを実際のポインタとして使います（移動／左クリック／右クリック）。GameController がマウスを報告していない場合のみ有効になるため、タッチやハードウェアマウスと競合しません。iPhone では先に「設定 → アクセシビリティ → タッチ → AssistiveTouch → ポインタデバイス」を有効にしてください。iPad はそのまま使えます。";
 "preference.title.gesture_hotbar" = "快捷栏手势";
 "preference.detail.gesture_hotbar" = "启用手势，例如点击快捷栏物品槽、双手交换物品、丢弃物品";
@@ -328,6 +336,9 @@
 "preference.detail.mouse_speed" = "仮想マウスの速度を変更する";
 "preference.title.virtmouse_enable" = "仮想マウス";
 "preference.detail.virtmouse_enable" = "仮想マウスの起動時にこのオプションを有効にする";
+// ★ [ISSUE-152] 隐藏游戏内悬浮球(小齿轮)开关（设置页 自定义控制键 分区）
+"preference.title.menu_button_visible" = "ゲーム内メニューボタンを表示";
+"preference.detail.menu_button_visible" = "オフにするとゲーム内の設定ボタン（歯車）を隠します。再度表示するには「設定 → コントロール設定」から有効にします。";
 "preference.title.slideable_hotbar" = "スライド可能なホットバー";
 "preference.detail.slideable_hotbar" = "マウスホイールのようにホットバーをスライド可能にする";
 
@@ -360,6 +371,8 @@
 "preference.title.env_variables" = "环境变量";
 "preference.detail.env_variables" = "在启动 Minecraft 时设置自定义环境变量。小心，这可能会使游戏崩溃。";
 "preference.placeholder.env_variables" = "指定变量...";
+"preference.title.dyld_bypass" = "dyld のライブラリ検証をバイパス";
+"preference.detail.dyld_bypass" = "既定ではオフ。オンにすると dyld の mmap/fcntl を書き換えます。iOS 16.2 ではランチャーが dlopen(libjli) でハングすることが実測されています。本機で必要と確信できる場合以外はオフのままにしてください。変更は完全にアプリを再起動するまで反映されません。";
 "preference.title.auto_ram" = "自動RAM調整";
 "preference.detail.auto_ram" = "メモリの自動調整を有効にする";
 "preference.warn.auto_ram" = "脱獄済みのデバイスでこのオプションを無効にすると、変更された場合に不安定になる可能性があります。注意してください。";
@@ -838,6 +851,7 @@
 "resman.mods.sort.modified" = "修改时间";
 "resman.mods.empty" = "还没有 Mod";
 "resman.mods.search_empty" = "没有匹配的 Mod";
+"resman.download.filter_empty" = "フィルターに一致する項目がありません";
 "resman.mods.none_selected" = "未选择任何 Mod";
 "resman.mods.no_local_for_update" = "没有本地 Mod 可检查更新。";
 "resman.mods.no_version_info" = "无法获取当前版本信息。";
@@ -1313,6 +1327,8 @@
 "i18n_str_464" = "无加载器";
 "i18n_str_465" = "CurseForge 不可用";
 "i18n_str_466" = "未配置 CurseForge API Key。请在设置中配置后重试，或继续使用 Modrinth 源。";
+/* ★ [MODSRC-403] 有 key 但被官方/镜像以 401/403 拒绝时的用户提示（区分「无效或未填」，指向设置页）。 */
+"i18n_str_9103" = "CurseForge API Key 无效或未填写，请到设置里检查后重试";
 "i18n_str_467" = "无法获取版本信息，请检查网络连接或切换下载源";
 "i18n_str_468" = "未找到可下载的版本，可尝试切换下载源（Modrinth/CurseForge）或更换筛选条件";
 "i18n_str_469" = "导出已取消";
@@ -1583,10 +1599,10 @@
 "i18n_str_1007" = "ZeroTier 联机";
 "i18n_str_1008" = "创建房间";
 "i18n_str_1009" = "加入房间";
-"i18n_str_1010" = "先在 Minecraft 中点击「对局域网开放」，记下显示的端口号，填入下方后点击创建。";
+"i18n_str_1010" = "先在 Minecraft 中点击「对局域网开放」，端口会自动检测并填入下方；检测不到时可手动填写，然后点击创建。";
 "i18n_str_1013" = "邀请码";
 "i18n_str_1014" = "玩家列表";
-"i18n_str_1015" = "请输入有效端口";
+"i18n_str_1015" = "未检测到端口，请先在游戏里「对局域网开放」（也可手动填写）";
 "i18n_str_1016" = "请输入邀请码";
 "i18n_str_1017" = "邀请码无效";
 "i18n_str_1018" = "邀请码已复制";
@@ -1599,6 +1615,9 @@
 "i18n_str_1026" = "暂无玩家信息";
 "i18n_str_1027" = "房主";
 "i18n_str_1028" = "访客";
+"i18n_str_2068" = "我";
+"i18n_str_2069" = "房客";
+"i18n_str_2070" = "已自动检测到局域网端口 %@";
 "i18n_str_1029" = "未联机";
 "i18n_str_1031" = "加入房间中…";
 "i18n_str_1033" = "联机出错";
@@ -1976,6 +1995,9 @@
 "preference.lang.section.system" = "システム";
 "preference.lang.section.available" = "利用可能な言語";
 "preference.lang.search_placeholder" = "言語を検索";
+// ★ [I18N-PARTIAL] 一部翻訳の言語ラベル（単一情報源：AmeLauncherPartiallyTranslatedLanguageCodes）
+"preference.lang.partial_suffix" = "（一部翻訳）";
+"preference.lang.partial_note" = "一部の画面は中国語のままです";
 "preference.lang.restart_hint.title" = "言語を切り替えました";
 "preference.lang.restart_hint.message" = "選択した言語で画面を再読み込みしました。";
 
@@ -1995,6 +2017,9 @@
 "preference.title.debug_universal_script_jit" = "Use Universal StikDebug Script";
 "preference.debug.jit_enabler.auto" = "Auto (recommended)";
 "preference.title.tap_click_mode" = "Tap button";
+// ★ [TAP-BTN] 非ボタン領域のタップ既定動作スイッチ
+"preference.title.tap_default_left" = "タップを既定で左クリックにする（非ボタン領域）";
+"preference.detail.tap_default_left" = "オフ（既定）：タップのボタンは照準の対象に応じて自動判定。オン：非ボタン領域（ゲーム画面）のタップは常に左クリックを送信。「タップのボタン」が常に左/常に右の場合は本スイッチは無効。";
 "jit.wait.sidestore" = "Enable JIT for this app in SideStore / SideJIT, then return to the launcher. Waiting up to 30 seconds…";
 "preference.style.native" = "Native";
 "jit.wait.stikdebug" = "Enable JIT for this app in StikDebug, then return to the launcher. Waiting up to 30 seconds…";
@@ -2005,7 +2030,7 @@
 "preference.title.renderer.debug.mithril" = "Mithril (1.17+) - OpenGL 3.3 Core via Vulkan/Metal, EXPERIMENTAL";
 "preference.detail.jit_enabler" = "Choose the app used to enable JIT. If you don't have StikDebug installed, pick SideStore, StosDebug, JitStreamer-EB or TrollStore instead, otherwise tapping Launch does nothing. Auto (default) tries TrollStore, then StikDebug, then SideStore depending on your device.";
 "jit.wait.jitstreamer" = "Enable JIT for this app through JitStreamer, then return to the launcher. Waiting up to 30 seconds…";
-"jit.timeout_retry_msg" = "Timed out waiting for JIT (120s). The JIT tool may not have responded. Tap Retry to try again, or attach a debugger manually and retry.";
+"jit.timeout_retry_msg" = "Your JIT tool may have reported \"complete\", but the launcher's own self-check failed (no writable JIT region — being attached is not the same as working). Tap Retry, or restart the app / use TrollStore and retry.";
 "preference.style.footer.handdrawn" = "Hand-drawn highlight is on: an extra rim/inner highlight is drawn on top of the system glass (optional).";
 "preference.title.renderer.release.mg" = "MobileGlues";
 "i18n_str_9102" = "Large";
@@ -2026,6 +2051,10 @@
 "jit.wait.trollstore" = "Enable JIT for this app in TrollStore, then return to the launcher. Waiting up to 30 seconds…";
 "login.warn.title.ios19_jitdead" = "Amethyst is not supported on iOS 26 or later.";
 "preference.debug.jit_enabler.manual" = "Manual (attach a debugger yourself)";
+"preference.debug.jit_enabler.sidejitserver" = "SideJITServer（ショートカット）";  // ★ [JIT-ADAPT]
+"preference.debug.jit_enabler.altstore" = "AltStore / AltJIT";  // ★ [JIT-ADAPT]
+"preference.debug.jit_enabler.sideloadly" = "Sideloadly";  // ★ [JIT-ADAPT]
+"preference.debug.jit_enabler.jailbreak" = "脱獄（Dopamine / palera1n / checkra1n / unc0ver）";  // ★ [JIT-ADAPT]
 "preference.title.jit_enabler" = "JIT Enabler";
 "neoforge.no_version_for_mc" = "No NeoForge build has been released for Minecraft %@ yet";
 "preference.detail.auto_check_update" = "Automatically check GitHub Releases when the launcher starts. At most once per hour; versions you chose to ignore are not shown again.";
@@ -2033,7 +2062,13 @@
 "preference.title.renderer.debug.sfpew" = "SFPEW (<=1.16.x) - fixed-function emulation, backend defaults to MobileGlues, EXPERIMENTAL";
 "preference.title.renderer.debug.mobilegl" = "MobileGL Vulkan (1.17+) - OpenGL 3.3 Core, EXPERIMENTAL";
 "preference.detail.tap_click_button_right" = "Legacy. On forces tap = right-click (same as mode = Always right).";
-"jit.wait.manual" = "Please go to your JIT tool now and enable JIT for this app. Waiting up to 30 seconds…";
+"jit.wait.manual" = "パソコンからデバッガをアタッチするか（Xcode → Debug → Attach to Process / Wait for Debugger、または idevicedebug / lldb とペアリングファイル）、JIT ツールでこの App の JIT を有効にしてから、ランチャーに戻ってください。最大 30 秒待機します……";
+"jit.guide.title" = "JIT を有効にする";
+// ★ [JIT-ADAPT] ツール別ガイド：これらは端末側に URL がなく、ユーザーが自分の App/PC で有効化します。
+"jit.wait.sidejitserver" = "この端末で SideJITServer ショートカットを実行し（同じ Wi-Fi または VPN 上で SideJITServer + pymobiledevice3 を動かした PC と組み合わせます）、この App を選んでからランチャーに戻ってください。最大 30 秒待機します……";
+"jit.wait.altstore" = "AltServer と同じ Wi-Fi 上で（iOS 17+ は USB が必要）、AltStore →「My Apps」→ この App を長押し →「Enable JIT」を選び、ランチャーに戻ってください。最大 30 秒待機します……";
+"jit.wait.sideloadly" = "PC/Mac で Sideloadly を起動したまま（Sideloadly Daemon、同じ Wi-Fi または USB）この App を前面にし、Sideloadly からこの App の Enable JIT を選んで、ランチャーに戻ってください。最大 30 秒待機します……";
+"jit.wait.jailbreak" = "脱獄の JIT 設定を開いて有効にし（Dopamine: Allow JIT in Apps、palera1n / checkra1n / unc0ver: この App が get-task-allow を保つことを確認）、ランチャーに戻ってください。最大 30 秒待機します……";
 "preference.title.launcher_language" = "Language";
 "update_dialog.version_from" = "%@  (current: %@)";
 "preference.style.auto" = "Auto";
@@ -2042,8 +2077,7 @@
 "i18n_str_jit26_pending" = "JIT: Enabled (attaches on launch)";
 "preference.style.footer.unsupported" = "This system is older than iOS 26, so only the Native style is available. The launcher uses standard system materials instead of drawing its own glass.";
 "update_dialog.later" = "Later";
-"login.warn.message.ios19_jitdead" = "Due to changes in iOS that inhibit the ability to enable JIT, Amethyst cannot work in its current state and requires heavy research to find a new path forward.
-Pressing OK will close the app.";
+"login.warn.message.ios19_jitdead" = "Due to changes in iOS that inhibit the ability to enable JIT, Amethyst cannot work in its current state and requires heavy research to find a new path forward.\nPressing OK will close the app.";  // ★ [AUDIT-FIX]
 "jit.wait.auto" = "Waiting for JIT to become ready. Enable JIT for this app with your JIT tool (TrollStore, StikDebug, SideStore / SideJIT, JitStreamer, …), then return to the launcher. Waiting up to 30 seconds…";
 "preference.detail.jit26_script_disable" = "Stop sending UniversalJIT26.js to the JIT tool when launching the game (plain debugger-attach JIT). Only turn this on if your tool doesn't support scripts or the script misbehaves; devices that need system-level memory mapping (TXM) may fail to launch the game with this enabled.";
 "jit.wait.timeout.message" = "Tried to launch your JIT enabler, but JIT was not ready within 30 seconds, so the launch was canceled. Enable JIT for this app and try again (you can also change the JIT enabler in Settings).";
@@ -2073,3 +2107,121 @@ Pressing OK will close the app.";
 "ai.system_prompt.title" = "システムプロンプト";
 "ai.assistant.title" = "AI アシスタント";
 "ai.session.new" = "新しい会話";
+/* ★ [I18N-MISS] JIT 启用器 stikdebug 选项: 补日语（原缺，界面回落英文） */
+"preference.debug.jit_enabler.stikdebug" = "StikDebug（stikdebug://）";
+/* ★ [I18N-MISS] 设置页 3 行文案在 ea419d4fb 上游重构中丢失了 preference.title/detail 键 ⇒ 界面直接显示生键：启动器背景 / CurseForge API 密钥 / 公告展示详细度。本次从上游恢复，并同步 4 语(含 sfpew_overlay 同类生键) */
+"preference.title.launcher_background" = "ランチャーの背景";
+"preference.detail.launcher_background" = "ランチャーの背景（画像/動画）を設定、または既定の単色背景に戻します。";
+"preference.title.curseforge_api_key" = "CurseForge API キー";
+"preference.detail.curseforge_api_key" = "CurseForge の MOD や Modpack を閲覧/ダウンロードするための API キーを設定します。未設定の場合は内蔵の既定キーが使われます。";
+"preference.title.announcement_preview_level" = "お知らせの表示詳細度";
+"preference.detail.announcement_preview_level" = "ホーム画面でお知らせをどの程度詳しく表示するかを設定します。";
+"preference.title.sfpew_overlay" = "SimpleFPEWrapper オーバーレイ";
+"preference.detail.sfpew_overlay" = "GLES バックエンド上に SimpleFPEWrapper 固定機能パイプライン（GL 1.x）エミュレーション層を重ね、旧バージョン向けの互換性を提供します。gl4es / zink / Vulkan などでは使用できません。";
+/* ★ [I18N-MISS] 语言切换确认弹窗(SceneDelegate 语言流程)键全 6 语都缺 ⇒ 切语言后弹窗直接显示生键。本次补齐 */
+"preference.lang.switched.title" = "言語を切り替えました";
+"preference.lang.switched.message" = "選択した言語で画面を再読み込みしました。";
+
+"login.title" = "アカウント";  // ★ [AUDIT-FIX]
+"login.cancelled" = "ログインがキャンセルされました";  // ★ [AUDIT-FIX]
+
+/* ★ [AUDIT-DECIDE] 新增键 + 补齐 preference.vi / migrate 缺口（日本語） */
+"custom_controls.control_menu.copy.ok" = "コピーしました";  // ★ [AUDIT-DECIDE]
+"custom_controls.control_menu.copy.ok.message" = "コントロール設定をクリップボードにコピーしました。.json ファイルとして保存し、「読み込み」でインポートできます。";  // ★ [AUDIT-DECIDE]
+"custom_controls.control_menu.copy.error.none" = "コピーするコントロールがありません";  // ★ [AUDIT-DECIDE]
+"custom_controls.button_edit.width" = "幅";  // ★ [AUDIT-DECIDE]
+"custom_controls.button_edit.height" = "高さ";  // ★ [AUDIT-DECIDE]
+"login.sign_in" = "サインイン";  // ★ [AUDIT-DECIDE]
+"login.error.account_load" = "アカウント情報を読み込めませんでした。";  // ★ [AUDIT-DECIDE]
+"launcher.pref.jre.none" = "なし";  // ★ [AUDIT-DECIDE]
+"launcher.pref.gamedir.rename" = "名前を変更";  // ★ [AUDIT-DECIDE]
+"curseforge.api_key" = "API キー";  // ★ [AUDIT-DECIDE]
+"home.instances.sort" = "並べ替え ⇅";  // ★ [AUDIT-DECIDE]
+"home.instances.new" = "＋ 新規";  // ★ [AUDIT-DECIDE]
+"home.instances.launch" = "起動";  // ★ [AUDIT-DECIDE]
+"multiplayer.unavailable.title" = "マルチプレイを利用できません";  // ★ [AUDIT-DECIDE]
+"multiplayer.unavailable.message" = "libterracotta ライブラリがリンクされていません。README の「Terracotta 統合」の章に従って xcframework をダウンロードし、再ビルドしてください。";  // ★ [AUDIT-DECIDE]
+"preference.detail.migrate_version_data" = "このインスタンスの mods / config / セーブデータを分離フォルダ versions/<バージョン>/ にコピーします。コピーのみで元ファイルは残し、同名ファイルは上書きしません。";  // ★ [AUDIT-DECIDE]
+"preference.migrate.all" = "すべて移行";  // ★ [AUDIT-DECIDE]
+"preference.migrate.auto.confirm.msg" = "%1$lu グループ / %2$lu ファイル（%3$@）を %4$lu 個のインスタンスフォルダにコピーします。コピーのみで元は残し、既存ファイルはスキップします。";  // ★ [AUDIT-DECIDE]
+"preference.migrate.auto.confirm.title" = "移行の確認";  // ★ [AUDIT-DECIDE]
+"preference.migrate.auto.done.msg" = "コピー %1$lu · 既存 %2$lu · 競合 %3$lu · 改名 %4$lu";  // ★ [AUDIT-DECIDE]
+"preference.migrate.auto.done.title" = "移行が完了しました";  // ★ [AUDIT-DECIDE]
+"preference.migrate.auto.group.detail" = "%1$lu ファイル · %2$@ · %3$@";  // ★ [AUDIT-DECIDE]
+"preference.migrate.auto.group.unmatched" = "一致するインスタンスがありません";  // ★ [AUDIT-DECIDE]
+"preference.migrate.auto.group.unrecognized" = "未認識";  // ★ [AUDIT-DECIDE]
+"preference.migrate.auto.groups" = "検出結果（行をタップで選択を切り替え。コピー先は自動で決まります）";  // ★ [AUDIT-DECIDE]
+"preference.migrate.auto.need.pick" = "先に移行元フォルダを選択してください。";  // ★ [AUDIT-DECIDE]
+"preference.migrate.auto.no.source" = "（フォルダ未選択）";  // ★ [AUDIT-DECIDE]
+"preference.migrate.auto.none.selected" = "グループが選択されていません。";  // ★ [AUDIT-DECIDE]
+"preference.migrate.auto.pick" = "スキャンするフォルダを選択";  // ★ [AUDIT-DECIDE]
+"preference.migrate.auto.run" = "選択項目を移行";  // ★ [AUDIT-DECIDE]
+"preference.migrate.auto.source" = "移行元フォルダ";  // ★ [AUDIT-DECIDE]
+"preference.migrate.auto.source.instance" = "インスタンス";  // ★ [AUDIT-DECIDE]
+"preference.migrate.auto.source.other" = "他のフォルダを入力…";  // ★ [AUDIT-DECIDE]
+"preference.migrate.auto.source.shared" = "共有ゲームフォルダ";  // ★ [AUDIT-DECIDE]
+"preference.migrate.auto.subtitle" = "フォルダを選ぶとバージョンとローダーを自動判別し、確認後にコピーします";  // ★ [AUDIT-DECIDE]
+"preference.migrate.auto.title" = "自動判別で移行";  // ★ [AUDIT-DECIDE]
+"preference.migrate.cleanup_source" = "コピー元のファイルを削除";  // ★ [AUDIT-DECIDE]
+"preference.migrate.confirm.message" = "%1$lu 項目・%2$lu ファイル（%3$@）を次へコピーします:\n%4$@\n\nコピーのみで元ファイルは残します。同名ファイルはスキップし、両方を保持します。";  // ★ [AUDIT-DECIDE]
+"preference.migrate.filter.summary" = "%1$lu グループ表示 · %2$lu 選択（%3$@）";  // ★ [AUDIT-DECIDE]
+"preference.migrate.filter.title" = "フィルター";  // ★ [AUDIT-DECIDE]
+"preference.migrate.issues" = "説明：";  // ★ [AUDIT-DECIDE]
+"preference.migrate.item.title" = "%1$@（%2$lu ファイル、%3$@）";  // ★ [AUDIT-DECIDE]
+"preference.migrate.line" = "%1$@：コピー %2$lu · 既存 %3$lu · 競合 %4$lu · 改名 %5$lu";  // ★ [AUDIT-DECIDE]
+"preference.migrate.need_isolation" = "先に上の「バージョン分離」をオンにして保存してから移行してください。そうしないとデータは他のバージョンと共有されたままになります。";  // ★ [AUDIT-DECIDE]
+"preference.migrate.no_target" = "このインスタンスはカスタムゲームフォルダを使用しているため、移行先の分離フォルダがありません。";  // ★ [AUDIT-DECIDE]
+"preference.migrate.nothing" = "移行するデータがありません（このバージョンはすでに分離済みか、mods / config / セーブデータがありません）。";  // ★ [AUDIT-DECIDE]
+"preference.migrate.origin.all" = "すべて";  // ★ [AUDIT-DECIDE]
+"preference.migrate.origin.detail" = "【%1$@】%2$@";  // ★ [AUDIT-DECIDE]
+"preference.migrate.origin.loader" = "ローダー標準";  // ★ [AUDIT-DECIDE]
+"preference.migrate.origin.mod" = "Mod 生成";  // ★ [AUDIT-DECIDE]
+"preference.migrate.origin.note" = "由来＝その項目がどこから来たか。既定では【プレイヤー追加】でインスタンスに一致した項目のみ選択され、【ローダー標準】【Mod 生成】【未認識】は未選択のままです。";  // ★ [AUDIT-DECIDE]
+"preference.migrate.origin.player" = "プレイヤー追加";  // ★ [AUDIT-DECIDE]
+"preference.migrate.origin.title" = "由来で絞り込み";  // ★ [AUDIT-DECIDE]
+"preference.migrate.origin.unknown" = "未認識";  // ★ [AUDIT-DECIDE]
+"preference.migrate.removed" = "検証後に元ファイルを削除しました。";  // ★ [AUDIT-DECIDE]
+"preference.migrate.result.title" = "移行が完了しました";  // ★ [AUDIT-DECIDE]
+"preference.migrate.summary" = "%1$lu ファイルをコピー、既存 %2$lu をスキップ、競合 %3$lu、改名 %4$lu。元ファイルは保持されています。";  // ★ [AUDIT-DECIDE]
+"preference.migrate.type.all" = "すべて";  // ★ [AUDIT-DECIDE]
+"preference.migrate.type.config" = "設定";  // ★ [AUDIT-DECIDE]
+"preference.migrate.type.datapacks" = "データパック";  // ★ [AUDIT-DECIDE]
+"preference.migrate.type.mods" = "Mod";  // ★ [AUDIT-DECIDE]
+"preference.migrate.type.other" = "その他";  // ★ [AUDIT-DECIDE]
+"preference.migrate.type.resourcepacks" = "リソースパック";  // ★ [AUDIT-DECIDE]
+"preference.migrate.type.saves" = "ワールド";  // ★ [AUDIT-DECIDE]
+"preference.migrate.type.shaderpacks" = "シェーダー";  // ★ [AUDIT-DECIDE]
+"preference.profile.title.lwjgl_version" = "LWJGL バージョン";  // ★ [AUDIT-DECIDE]
+"preference.profile.title.migrate_version_data" = "バージョンデータを移行";  // ★ [AUDIT-DECIDE]
+"preference.vi.explain.explicit.off" = "手動オフ：同じインスタンスの他のバージョンとゲームフォルダを共有します。";  // ★ [AUDIT-DECIDE]
+"preference.vi.explain.explicit.on" = "手動オン：データはこのバージョンのフォルダに保存されます。";  // ★ [AUDIT-DECIDE]
+"preference.vi.explain.noversion" = "具体的なバージョン id を特定できないため、共有フォルダにフォールバックします。";  // ★ [AUDIT-DECIDE]
+"preference.vi.explain.sniff.hit" = "自動判定：分離済み（このバージョンのフォルダ内 %1$@ に既に内容があります）。";  // ★ [AUDIT-DECIDE]
+"preference.vi.explain.sniff.miss" = "自動判定：このバージョンのフォルダに mods / saves がないため、全体の既定（現在：%1$@）に従います。";  // ★ [AUDIT-DECIDE]
+"preference.vi.explain.title" = "現在の判定";  // ★ [AUDIT-DECIDE]
+"preference.vi.flow.migrate.go" = "移行する（自動判別）";  // ★ [AUDIT-DECIDE]
+"preference.vi.flow.migrate.later" = "あとで";  // ★ [AUDIT-DECIDE]
+"preference.vi.flow.migrate.msg" = "このバージョンに属する mod / ワールド / リソースパックなどを自動判別し、分離フォルダにコピーします（コピーのみ、元は残します）。";  // ★ [AUDIT-DECIDE]
+"preference.vi.flow.migrate.title" = "このインスタンスのデータを分離フォルダに移行しますか？";  // ★ [AUDIT-DECIDE]
+"preference.vi.recover.hint" = "オフにすると元のフォルダに戻ります。データは失われません。";  // ★ [AUDIT-DECIDE]
+"preference.vi.shared.boundary" = "分離すると mods / config / saves / リソースパック / シェーダー / データパック / ログ はバージョンフォルダに入り、assets・libraries（および Java ランタイム / 起動ライブラリ）は常に共有されます。";  // ★ [AUDIT-DECIDE]
+"preference.vi.state.auto" = "自動";  // ★ [AUDIT-DECIDE]
+"preference.vi.state.isolated" = "分離";  // ★ [AUDIT-DECIDE]
+"preference.vi.state.shared" = "共有";  // ★ [AUDIT-DECIDE]
+"preference.vi.wizard.apply" = "適用";  // ★ [AUDIT-DECIDE]
+"preference.vi.wizard.done.msg" = "%1$lu 個のインスタンスに分離設定を書き込みました（設定のみ変更、ファイルは移動していません）。";  // ★ [AUDIT-DECIDE]
+"preference.vi.wizard.done.title" = "適用しました";  // ★ [AUDIT-DECIDE]
+"preference.vi.wizard.dontshow" = "今後表示しない";  // ★ [AUDIT-DECIDE]
+"preference.vi.wizard.dontshow.footer" = "これを選ぶとこのウィザードは自動で表示されなくなります。インスタンス設定ページからいつでも再度開けます。「スキップ」は今回だけ閉じます。";  // ★ [AUDIT-DECIDE]
+"preference.vi.wizard.feature.title" = "新機能：バージョン分離が使えるようになりました";  // ★ [AUDIT-DECIDE]
+"preference.vi.wizard.footer" = "書き込まれるのは設定のみで、ファイルは移動しません。データはそのままの場所にあり、いつでも戻せます。";  // ★ [AUDIT-DECIDE]
+"preference.vi.wizard.intro" = "各インスタンスに個別のバージョン分離を設定できるようになりました。データはそれぞれ独立し、干渉しません。あなたの %1$lu 個のインスタンスに基づく提案：";  // ★ [AUDIT-DECIDE]
+"preference.vi.wizard.reopen" = "バージョン分離ウィザード";  // ★ [AUDIT-DECIDE]
+"preference.vi.wizard.reopen.subtitle" = "各インスタンスの分離設定を開いて調整";  // ★ [AUDIT-DECIDE]
+"preference.vi.wizard.row.detail" = "%1$@ · 推奨：%2$@";  // ★ [AUDIT-DECIDE]
+"preference.vi.wizard.section" = "インスタンスと提案";  // ★ [AUDIT-DECIDE]
+"preference.vi.wizard.skip" = "スキップ";  // ★ [AUDIT-DECIDE]
+"preference.vi.wizard.sniff.hit" = "このバージョンのフォルダに %1$@ があります";  // ★ [AUDIT-DECIDE]
+"preference.vi.wizard.sniff.miss" = "このバージョンのフォルダに mods / saves がありません";  // ★ [AUDIT-DECIDE]
+"preference.vi.wizard.sniff.noversion" = "具体的なバージョン id がありません";  // ★ [AUDIT-DECIDE]
+"preference.vi.wizard.title" = "バージョン分離の設定";  // ★ [AUDIT-DECIDE]

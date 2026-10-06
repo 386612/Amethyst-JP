@@ -147,6 +147,9 @@
 "login.msa.progress.acquireXboxProfile" = "(4/6) Acquiring the Xbox profile";
 "login.msa.progress.acquireMCToken" = "(5/6) Acquiring the Minecraft token";
 "login.msa.progress.checkMCProfile" = "(6/6) Checking the Minecraft profile";
+"login.msa.error.network.token" = "Cannot reach the login server (%@). Check your network and try again.";
+"login.msa.error.xbl.rejected" = "Could not acquire the Xbox Live token: Xbox Live rejected this account's access token. Make sure this Microsoft account has an Xbox profile (sign in once at xbox.com or the Xbox app), or try again later.";
+"login.msa.error.mc.token" = "Could not acquire the Minecraft token: this Microsoft account may not own Minecraft: Java Edition, or its Xbox profile has not been created yet.";
 
 "login.3rdparty.progress.auth" = "(1/2) Authenticating with third-party server";
 "login.3rdparty.progress.refresh" = "(2/2) Refreshing third-party authentication";
@@ -179,6 +182,96 @@
 "preference.title.confirm" = "Are you sure?";
 
 "preference.title.game_directory" = "Game directory";
+/* ★ [VER-ISOLATE-PCL] 版本隔离 */
+"preference.title.version_isolation" = "Default version isolation";
+"preference.profile.title.version_isolation" = "Version isolation";
+"preference.detail.version_isolation" = "When enabled, versions follow the isolation default: mods, config and saves are kept under versions/<version>/. Existing versions keep their own setting.";
+"preference.detail.versionIsolation" = "When enabled, this version's mods, config and saves live in versions/<version>/ independently of other versions. Turning it off restores the shared folders - no files are ever moved.";
+/* ★ [VER-ISOLATE-MIGRATE] 版本隔离数据迁移（逐实例、复制式、可中断重跑；默认不自动搬） */
+"preference.profile.title.migrate_version_data" = "Migrate version data";
+"preference.detail.migrate_version_data" = "Copy this instance's mods, config and saves into the isolation folder versions/<version>/. Copy only - source files are kept, and files that already exist are never silently overwritten.";
+"preference.migrate.need_isolation" = "Turn on \"Version isolation\" above (and save) before migrating; otherwise the data stays shared with other versions.";
+"preference.migrate.no_target" = "This instance uses a custom game directory, so there is no isolation folder to migrate into.";
+"preference.migrate.nothing" = "Nothing to migrate - this version is already isolated, or there is no mods / config / saves here.";
+"preference.migrate.confirm.message" = "%1$lu item(s), %2$lu file(s) (%3$@) will be copied into:\n%4$@\n\nCopy only - source files are kept. Files that already exist are skipped and both copies are kept.";
+"preference.migrate.item.title" = "%1$@  (%2$lu files, %3$@)";
+"preference.migrate.all" = "Migrate all";
+"preference.migrate.result.title" = "Migration finished";
+"preference.migrate.line" = "%1$@: copied %2$lu · already there %3$lu · conflicts %4$lu · renamed %5$lu";
+"preference.migrate.summary" = "Copied %1$lu file(s); skipped %2$lu already present; %3$lu conflict(s); %4$lu renamed. Source files kept.";
+"preference.migrate.issues" = "Notes:";
+"preference.migrate.cleanup_source" = "Delete the copied source files";
+"preference.migrate.removed" = "Source files deleted after verification.";
+// ★ [VI-MIGRATE-AUTO] 自动识别迁移
+"preference.migrate.auto.title" = "Auto-detect migration";
+"preference.migrate.auto.subtitle" = "Pick a folder; auto-detect version + loader; confirm; then copy";
+"preference.migrate.auto.source" = "Source folder";
+"preference.migrate.auto.groups" = "Detected groups (tap a row to toggle; targets are chosen automatically)";
+"preference.migrate.auto.pick" = "Choose the folder to scan";
+"preference.migrate.auto.no.source" = "(no folder chosen)";
+"preference.migrate.auto.source.shared" = "Shared game root";
+"preference.migrate.auto.source.instance" = "Instance";
+"preference.migrate.auto.source.other" = "Enter another folder...";
+"preference.migrate.auto.group.unrecognized" = "Unrecognized";
+"preference.migrate.auto.group.unmatched" = "No matching instance";
+"preference.migrate.auto.group.detail" = "%1$lu file(s) · %2$@ · %3$@";
+"preference.migrate.auto.run" = "Migrate selected";
+"preference.migrate.auto.confirm.title" = "Confirm migration";
+"preference.migrate.auto.confirm.msg" = "%1$lu group(s) / %2$lu file(s) (%3$@) will be copied into %4$lu instance folder(s). Copy only - sources kept; existing files are skipped.";
+"preference.migrate.auto.done.title" = "Migration finished";
+"preference.migrate.auto.done.msg" = "Copied %1$lu · already present %2$lu · conflicts %3$lu · renamed %4$lu";
+"preference.migrate.auto.need.pick" = "Choose a source folder first.";
+"preference.migrate.auto.none.selected" = "No group is selected.";
+"preference.vi.state.auto" = "Auto";
+"preference.vi.state.isolated" = "Isolated";
+"preference.vi.state.shared" = "Shared";
+"preference.migrate.filter.title" = "Filter";
+"preference.migrate.filter.summary" = "%1$lu group(s) shown · %2$lu selected (%3$@)";
+"preference.migrate.type.all" = "All";
+"preference.migrate.type.mods" = "Mods";
+"preference.migrate.type.saves" = "Worlds";
+"preference.migrate.type.resourcepacks" = "Resource packs";
+"preference.migrate.type.shaderpacks" = "Shaders";
+"preference.migrate.type.datapacks" = "Data packs";
+"preference.migrate.type.config" = "Config";
+"preference.migrate.type.other" = "Other";
+"preference.migrate.origin.title" = "Filter by origin";
+"preference.migrate.origin.all" = "All";
+"preference.migrate.origin.loader" = "Loader defaults";
+"preference.migrate.origin.player" = "Player-added";
+"preference.migrate.origin.mod" = "Mod-generated";
+"preference.migrate.origin.unknown" = "Unrecognized";
+"preference.migrate.origin.detail" = "[%1$@] %2$@";
+"preference.migrate.origin.note" = "Origin = where an item comes from. By default only Player-added items matched to an instance are checked; Loader defaults / Mod-generated / Unrecognized stay unchecked.";
+"preference.vi.explain.title" = "Current decision";
+"preference.vi.explain.explicit.on" = "Manual: ON - this version keeps its data in its own version folder.";
+"preference.vi.explain.explicit.off" = "Manual: OFF - shares one game directory with the other versions of this instance.";
+"preference.vi.explain.sniff.hit" = "Auto: isolated - this version folder already has content in %1$@.";
+"preference.vi.explain.sniff.miss" = "Auto: no mods / saves under this version folder, so it follows the global default (currently: %1$@).";
+"preference.vi.explain.noversion" = "Cannot determine the concrete version id, so this version falls back to the shared directory.";
+"preference.vi.shared.boundary" = "When isolated, mods / config / saves / resource packs / shaders / datapacks / logs go into the version folder, while assets, libraries (and the Java runtime / launch libraries) are always shared.";
+"preference.vi.recover.hint" = "Turning it off returns to the original directory immediately - no data is lost.";
+"preference.vi.wizard.title" = "Version isolation setup";
+"preference.vi.wizard.intro" = "You can now give each instance its own version isolation - each keeps its own data, no interference. Based on your %1$lu instance(s), we suggest:";
+"preference.vi.wizard.section" = "Instances and suggestions";
+"preference.vi.wizard.sniff.hit" = "this version folder already has %1$@";
+"preference.vi.wizard.sniff.miss" = "no mods / saves in this version folder";
+"preference.vi.wizard.sniff.noversion" = "no concrete version id";
+"preference.vi.wizard.row.detail" = "%1$@ - Suggested: %2$@";
+"preference.vi.wizard.footer" = "Only settings are written - no files are moved. Your data stays where it is, and you can change this back at any time.";
+"preference.vi.wizard.skip" = "Skip";
+"preference.vi.wizard.apply" = "Apply";
+"preference.vi.wizard.done.title" = "Applied";
+"preference.vi.wizard.done.msg" = "Isolation settings written for %1$lu instance(s). Only settings were changed - no files were moved.";
+"preference.vi.wizard.feature.title" = "New: version isolation is now available";
+"preference.vi.wizard.dontshow" = "Don't show this again";
+"preference.vi.wizard.dontshow.footer" = "Choosing this stops the wizard from popping up automatically; you can still reopen it any time from an instance's settings page. Skipping only closes it for now.";
+"preference.vi.wizard.reopen" = "Version isolation wizard";
+"preference.vi.wizard.reopen.subtitle" = "Reopen and adjust isolation for each instance";
+"preference.vi.flow.migrate.title" = "Move this instance's data into its isolated folder?";
+"preference.vi.flow.migrate.msg" = "Auto-detect mods / worlds / resource packs belonging to this version and copy them into the isolated folder? Copy only - sources are kept.";
+"preference.vi.flow.migrate.go" = "Migrate (auto-detect)";
+"preference.vi.flow.migrate.later" = "Not now";
 "preference.title.confirm.delete_game_directory" = "The instance %@ will be deleted forever and cannot be restored.";
 "preference.multidir.add_directory" = "Add game directory";
 
@@ -343,6 +436,9 @@
 "preference.title.tap_click_mode-right" = "Always right";
 "preference.title.tap_click_button_right" = "Tap sends right-click instead";
 "preference.detail.tap_click_button_right" = "Legacy. On forces tap = right-click (same as mode = Always right).";
+// ★ [TAP-BTN] 非按键区域轻触默认动作开关
+"preference.title.tap_default_left" = "Tap defaults to left-click (non-button area)";
+"preference.detail.tap_default_left" = "Off (default): the tap button is chosen automatically. On: a tap on the non-button area always sends left-click. Has no effect when Tap button is set to Always left / Always right.";
 "preference.title.button_scale" = "On-screen button scale (%)";
 "preference.detail.button_scale" = "Upscale them if buttons are too small, usually needed for iPad users.";
 "preference.title.mouse_scale" = "Mouse scaling (%)";
@@ -351,6 +447,9 @@
 "preference.detail.mouse_speed" = "Change the speed of the virtual mouse";
 "preference.title.virtmouse_enable" = "Virtual mouse";
 "preference.detail.virtmouse_enable" = "Enable this option to start with virtual mouse on";
+// ★ [ISSUE-152] 隐藏游戏内悬浮球(小齿轮)开关（设置页 自定义控制键 分区）
+"preference.title.menu_button_visible" = "Show In-Game Menu Button";
+"preference.detail.menu_button_visible" = "Hide the in-game settings button (gear). Re-enable it in Settings → Control customization.";
 "preference.title.slideable_hotbar" = "Slideable hotbar";
 "preference.detail.slideable_hotbar" = "Make the hotbar slideable like the mouse wheel";
 
@@ -383,6 +482,8 @@
 "preference.title.env_variables" = "Environment variables";
 "preference.detail.env_variables" = "Set custom environment variables when launching Minecraft. Be careful, this can make the game crash if modified incorrectly.";
 "preference.placeholder.env_variables" = "Specify variables...";
+"preference.title.dyld_bypass" = "Bypass dyld library validation";
+"preference.detail.dyld_bypass" = "Off by default. When enabled it rewrites dyld's mmap/fcntl; on iOS 16.2 this was measured to make the launcher hang in dlopen(libjli). Keep it off unless you are sure your device needs it. Changes take effect only after a full app restart.";
 "preference.title.auto_ram" = "Auto RAM";
 "preference.detail.auto_ram" = "Enables automatic RAM adjuster";
 "preference.warn.auto_ram" = "Disabling this option on an unjailbroken device can create instability if altered. Proceed with caution.";
@@ -862,6 +963,7 @@
 "resman.mods.sort.modified" = "Date Modified";
 "resman.mods.empty" = "No mods yet";
 "resman.mods.search_empty" = "No matching mods";
+"resman.download.filter_empty" = "No results match the current filters";
 "resman.mods.none_selected" = "No mods selected";
 "resman.mods.no_local_for_update" = "There are no local mods to check for updates.";
 "resman.mods.no_version_info" = "Unable to get the current version info.";
@@ -1337,6 +1439,8 @@
 "i18n_str_464" = "No Loader";
 "i18n_str_465" = "CurseForge Unavailable";
 "i18n_str_466" = "No CurseForge API Key is configured. Configure it in Settings and retry, or continue using the Modrinth source.";
+/* ★ [MODSRC-403] 有 key 但被官方/镜像以 401/403 拒绝时的用户提示（区分「无效或未填」，指向设置页）。 */
+"i18n_str_9103" = "The CurseForge API Key is invalid or missing. Check it in Settings and retry.";
 "i18n_str_467" = "Unable to fetch version information. Please check your network connection or switch download source";
 "i18n_str_468" = "No downloadable versions found. Try switching the download source (Modrinth/CurseForge) or changing the filter conditions";
 "i18n_str_469" = "Export cancelled";
@@ -1607,10 +1711,10 @@
 "i18n_str_1007" = "ZeroTier online play";
 "i18n_str_1008" = "Create room";
 "i18n_str_1009" = "Join room";
-"i18n_str_1010" = "First, tap \"Open to LAN\" in Minecraft, note the displayed port number, enter it below, then tap Create.";
+"i18n_str_1010" = "Tap \"Open to LAN\" in Minecraft; the port is auto-detected and filled in below. Enter it manually if detection fails, then tap Create.";
 "i18n_str_1013" = "Invite code";
 "i18n_str_1014" = "Player list";
-"i18n_str_1015" = "Please enter a valid port";
+"i18n_str_1015" = "No port detected — open to LAN in-game first (or enter it manually)";
 "i18n_str_1016" = "Please enter the invite code";
 "i18n_str_1017" = "Invalid invite code";
 "i18n_str_1018" = "Invite code copied";
@@ -1623,6 +1727,9 @@
 "i18n_str_1026" = "No player information";
 "i18n_str_1027" = "Host";
 "i18n_str_1028" = "Guest";
+"i18n_str_2068" = "Me";
+"i18n_str_2069" = "Guest";
+"i18n_str_2070" = "Auto-detected LAN port %@";
 "i18n_str_1029" = "Not online";
 "i18n_str_1031" = "Joining room...";
 "i18n_str_1033" = "Online play error";
@@ -1880,7 +1987,7 @@
 "i18n_str_629" = "Timed out waiting for the ZeroTier network to be ready (%.0fs). Please confirm the Network ID is correct and that your node has been authorized on the central.zerotier.com dashboard.";
 "i18n_str_632" = "Failed to start the SOCKS5 proxy";
 "i18n_str_637" = "1. Enter the ZeroTier Network ID above on the launcher's online play page\n";
-"i18n_str_638" = "2. Tap \"Join Room\"; the launcher will automatically start the online core and connect\n";
+"i18n_str_638" = "2. Tap \"Join Room\"; the launcher will automatically start the online core and connect\n";  // ★ [AUDIT-FIX]
 "i18n_str_639" = "3. After connecting, launch the game and add the server in MC: %@";
 "i18n_str_832" = "SHA1 checksum failed: expected %@, got %@ (%@)";
 "i18n_str_883" = "Automatically join this server after launching the game (refer to FCL)\nFormat: host or host:port ([host]:port for IPv6); leave empty to not auto-join";
@@ -1994,7 +2101,7 @@
 "preference.auto_select" = "Auto";
 
 "i18n_str_jit26_pending" = "JIT: Enabled (attaches on launch)";
-"jit.timeout_retry_msg" = "Timed out waiting for JIT (120s). The JIT tool may not have responded. Tap Retry to try again, or attach a debugger manually and retry.";
+"jit.timeout_retry_msg" = "Your JIT tool may have reported \"complete\", but the launcher's own self-check failed (no writable JIT region — being attached is not the same as working). Tap Retry, or restart the app / use TrollStore and retry.";
 "jit.retry" = "Retry";
 
 // Task 134: JIT enabler picker (ported from Air)
@@ -2006,6 +2113,10 @@
 "preference.debug.jit_enabler.jitstreamer" = "JitStreamer-EB";
 "preference.debug.jit_enabler.trollstore" = "TrollStore";
 "preference.debug.jit_enabler.manual" = "Manual (attach a debugger yourself)";
+"preference.debug.jit_enabler.sidejitserver" = "SideJITServer (Shortcut)";  // ★ [JIT-ADAPT]
+"preference.debug.jit_enabler.altstore" = "AltStore / AltJIT";  // ★ [JIT-ADAPT]
+"preference.debug.jit_enabler.sideloadly" = "Sideloadly";  // ★ [JIT-ADAPT]
+"preference.debug.jit_enabler.jailbreak" = "Jailbreak (Dopamine / palera1n / checkra1n / unc0ver)";  // ★ [JIT-ADAPT]
 "preference.title.jit_enabler" = "JIT Enabler";
 "preference.detail.jit_enabler" = "Choose the app used to enable JIT. If you don't have StikDebug installed, pick SideStore, StosDebug, JitStreamer-EB or TrollStore instead, otherwise tapping Launch does nothing. Auto (default) tries TrollStore, then StikDebug, then SideStore depending on your device.";
 "preference.title.jit26_script_disable" = "Disable iOS 26 JS-Script JIT";
@@ -2048,12 +2159,21 @@
 "preference.lang.section.system" = "System";
 "preference.lang.section.available" = "Available Languages";
 "preference.lang.search_placeholder" = "Search languages";
+// ★ [I18N-PARTIAL] 部分翻译语言标注（单一事实源：AmeLauncherPartiallyTranslatedLanguageCodes）
+"preference.lang.partial_suffix" = " (Partial translation)";
+"preference.lang.partial_note" = "Some screens are still in Chinese";
 "preference.lang.restart_hint.title" = "Language Changed";
 "preference.lang.restart_hint.message" = "The interface has been reloaded in the selected language.";
 
 // ★ [JIT-WAIT] 主启动 JIT 等待/调起失败提示(launchJVM 失败分支 + ame139_requestJIT)
 "jit.wait.auto" = "Waiting for JIT to become ready. Enable JIT for this app with your JIT tool (TrollStore, StikDebug, SideStore / SideJIT, JitStreamer, …), then return to the launcher. Waiting up to 30 seconds…";
-"jit.wait.manual" = "Please go to your JIT tool now and enable JIT for this app. Waiting up to 30 seconds…";
+"jit.wait.manual" = "Attach a debugger from your computer (Xcode → Debug → Attach to Process / Wait for Debugger, or idevicedebug / lldb with the pairing file), or enable JIT in your JIT tool, then return to the launcher. Waiting up to 30 seconds…";
+"jit.guide.title" = "Enable JIT";
+// ★ [JIT-ADAPT] 逐工具引导：这些工具本机没有 URL 可调，必须由用户在自己的 App/电脑上开。
+"jit.wait.sidejitserver" = "Run the SideJITServer Shortcut on this device (with a SideJITServer + pymobiledevice3 host on the same Wi-Fi or VPN), pick this app, then return to the launcher. Waiting up to 30 seconds…";
+"jit.wait.altstore" = "On the same Wi-Fi as AltServer (USB required on iOS 17+), open AltStore → My Apps → long-press this app → Enable JIT, then return to the launcher. Waiting up to 30 seconds…";
+"jit.wait.sideloadly" = "Keep Sideloadly running on your PC/Mac (Sideloadly Daemon; same Wi-Fi or USB), put this app in the foreground, then pick Enable JIT for it from Sideloadly, then return to the launcher. Waiting up to 30 seconds…";
+"jit.wait.jailbreak" = "Open your jailbreak's JIT settings (Dopamine: Allow JIT in Apps; palera1n / checkra1n / unc0ver: make sure this app keeps get-task-allow) and enable JIT, then return to the launcher. Waiting up to 30 seconds…";
 "jit.wait.trollstore" = "Enable JIT for this app in TrollStore, then return to the launcher. Waiting up to 30 seconds…";
 "jit.wait.stikdebug" = "Enable JIT for this app in StikDebug, then return to the launcher. Waiting up to 30 seconds…";
 "jit.wait.sidestore" = "Enable JIT for this app in SideStore / SideJIT, then return to the launcher. Waiting up to 30 seconds…";
@@ -2079,8 +2199,8 @@
 "preference.title.debug_universal_script_jit" = "preference.title.debug_universal_script_jit";
 "preference.title.debug_always_attached_jit" = "preference.title.debug_always_attached_jit";
 "preference.title.renderer.release.mg" = "preference.title.renderer.release.mg";
-"login.warn.title.ios19_jitdead" = "login.warn.title.ios19_jitdead";
-"login.warn.message.ios19_jitdead" = "login.warn.message.ios19_jitdead";
+"login.warn.title.ios19_jitdead" = "Amethyst is not supported on iOS 26 or later.";  // ★ [AUDIT-FIX]
+"login.warn.message.ios19_jitdead" = "Due to changes in iOS that inhibit the ability to enable JIT, Amethyst cannot work in its current state and requires heavy research to find a new path forward.\nPressing OK will close the app.";  // ★ [AUDIT-FIX]
 "preference.group.runtime" = "Memory & Performance";
 "preference.group.java" = "Java & Launch Options";
 
@@ -2092,24 +2212,35 @@
 "ai.system_prompt.title" = "System Prompt";
 "ai.assistant.title" = "AI Assistant";
 "ai.session.new" = "New Chat";
-"i18n_str_2068" = "Share your world with friends; an invite code is made for you";
-"i18n_str_2069" = "Paste the invite code your friend shared with you";
-"i18n_str_2070" = "Detect port automatically";
-"i18n_str_2072" = "Detecting port...";
-"i18n_str_2073" = "In Minecraft: Pause -> Open to LAN. The port fills in automatically.";
-"i18n_str_2074" = "Port %u detected";
-"i18n_str_2075" = "Choose how you want to play together";
-"i18n_str_2076" = "Scan this device for the port";
-"i18n_str_2077" = "Scanning this device...";
-"i18n_str_2078" = "Checked %lu / %lu ports";
-"i18n_str_2079" = "No Minecraft port found. Open to LAN inside the game first.";
-"i18n_str_2080" = "Cancel";
-"i18n_str_2081" = "Copy";
-"i18n_str_2082" = "Send this code to your friends so they can join your world";
-"i18n_str_2083" = "Add this address in Minecraft -> Multiplayer, then connect";
-"i18n_str_2084" = "Create room";
-"i18n_str_2085" = "Invite code looks good";
-"i18n_str_2087" = "Unknown error";
-"i18n_str_2088" = "Enter the invite code your friend shared with you";
-"i18n_str_2089" = "Invite code";
-"i18n_str_2090" = "Server address";
+/* ★ [I18N-MISS] 设置页 3 行文案在 ea419d4fb 上游重构中丢失了 preference.title/detail 键 ⇒ 界面直接显示生键：启动器背景 / CurseForge API 密钥 / 公告展示详细度。本次从上游恢复，并同步 4 语(含 sfpew_overlay 同类生键) */
+"preference.title.launcher_background" = "Launcher Background";
+"preference.detail.launcher_background" = "Set a launcher background (image/video), or restore the default solid color.";
+"preference.title.curseforge_api_key" = "CurseForge API Key";
+"preference.detail.curseforge_api_key" = "Set a CurseForge API key for browsing/downloading CurseForge mods and modpacks. The built-in default key is used when unset.";
+"preference.title.announcement_preview_level" = "Announcement Detail Level";
+"preference.detail.announcement_preview_level" = "How much detail announcements show on the home screen.";
+"preference.title.sfpew_overlay" = "SimpleFPEWrapper overlay";
+"preference.detail.sfpew_overlay" = "Overlays the SimpleFPEWrapper fixed-function (GL 1.x) emulation layer on top of the GLES backend for legacy compatibility; not applicable to gl4es / zink / Vulkan and other backends.";
+/* ★ [I18N-MISS] 语言切换确认弹窗(SceneDelegate 语言流程)键全 6 语都缺 ⇒ 切语言后弹窗直接显示生键。本次补齐 */
+"preference.lang.switched.title" = "Language switched";
+"preference.lang.switched.message" = "The interface has been reloaded in the selected language.";
+
+"login.title" = "Accounts";  // ★ [AUDIT-FIX]
+"login.cancelled" = "Login cancelled";  // ★ [AUDIT-FIX]
+
+/* ★ [AUDIT-DECIDE] 新增键（硬编码英文 → localize）：Copy 反馈/尺寸/登录/CurseForge/实例 chip/陶瓦提示 */
+"custom_controls.control_menu.copy.ok" = "Copied";  // ★ [AUDIT-DECIDE]
+"custom_controls.control_menu.copy.ok.message" = "The control configuration was copied to the clipboard. You can save it as a .json file and import it with Load.";  // ★ [AUDIT-DECIDE]
+"custom_controls.control_menu.copy.error.none" = "Nothing to copy";  // ★ [AUDIT-DECIDE]
+"custom_controls.button_edit.width" = "width";  // ★ [AUDIT-DECIDE]
+"custom_controls.button_edit.height" = "height";  // ★ [AUDIT-DECIDE]
+"login.sign_in" = "Sign in";  // ★ [AUDIT-DECIDE]
+"login.error.account_load" = "Account data could not be loaded.";  // ★ [AUDIT-DECIDE]
+"launcher.pref.jre.none" = "None";  // ★ [AUDIT-DECIDE]
+"launcher.pref.gamedir.rename" = "Rename";  // ★ [AUDIT-DECIDE]
+"curseforge.api_key" = "API Key";  // ★ [AUDIT-DECIDE]
+"home.instances.sort" = "Sort ⇅";  // ★ [AUDIT-DECIDE]
+"home.instances.new" = "＋ New";  // ★ [AUDIT-DECIDE]
+"home.instances.launch" = "Launch";  // ★ [AUDIT-DECIDE]
+"multiplayer.unavailable.title" = "Multiplayer unavailable";  // ★ [AUDIT-DECIDE]
+"multiplayer.unavailable.message" = "The libterracotta library is not linked. Follow the “Terracotta integration” section in the README to download the xcframework, then rebuild the app.";  // ★ [AUDIT-DECIDE]
