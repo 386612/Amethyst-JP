@@ -35,6 +35,9 @@ extern NSNotificationName TerracottaManagerStateDidChangeNotification;
 @property(nonatomic, readonly) uint16_t currentPort;                   /* 房主的 MC LAN 端口 */
 @property(nonatomic, readonly, nullable) NSString *stageDescription;   /* UI 显示的阶段文字 */
 @property(nonatomic, readonly, nullable) NSArray<TerracottaPlayerProfile *> *players;
+/// ★ [MP-ROLE] 本地玩家在 players 里的下标（Rust 侧状态里的 profile_index；越界/未知为 NSNotFound）。
+/// 用于在玩家列表里标出「我」。语义未在 Rust 侧文档确认 ⇒ 见报告存疑项。
+@property(nonatomic, readonly) NSInteger currentProfileIndex;
 @property(nonatomic, readonly, nullable) NSString *directConnectURL;   /* 访客进 MC 直连地址 */
 @property(nonatomic, readonly, nullable) NSString *lastError;
 @property(nonatomic, readonly) BOOL initialized;

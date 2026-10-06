@@ -127,7 +127,7 @@ static void terracottaCallWithOptionalCString(NSString *s, void (^body)(const ch
     state.index = [json[@"index"] integerValue];
     state.room = json[@"room"];
     state.directConnectURL = json[@"url"];
-    state.profileIndex = [json[@"profile_index"] integerValue];
+    state.profileIndex = json[@"profile_index"] ? [json[@"profile_index"] integerValue] : NSNotFound;
     state.exceptionType = [json[@"type"] integerValue];
 
     /* 解析玩家列表 */

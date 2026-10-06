@@ -48,6 +48,7 @@
 #import "LanPortDetector.h"
 #import "ZeroTierBridge.h"
 #import "utils.h"
+#import "McLanPortDetector.h"   // ★ [PORT-AUTO]
 
 /// 本地化辅助函数
 /// 优先通过 localize() 查找本地化文本；若未找到（返回值等于 key），则使用传入的 fallback。
@@ -909,6 +910,7 @@ NS_INLINE NSString *MPLocalized(NSString *key, NSString *fallback) {
 ///   - 用户在游戏未真正"对局域网开放"时就生成了分享代码
 /// 现在改为手动输入端口，确保端口来自当前会话的真实 LAN 端口。
 - (void)hostButtonTapped {
+    NSLog(@"[MP-ROLE] view=ingame event=host_tapped role=host");   // ★ [MP-ROLE]
     [self.view endEditing:YES];
 
     // 检查 1：ZeroTier 框架可用性
@@ -1088,12 +1090,26 @@ NS_INLINE NSString *MPLocalized(NSString *key, NSString *fallback) {
 /// 开放局域网时生成错误代码的问题。
 - (void)showManualPortInputAlert {
     NSString *localIP = [[MultiplayerManager sharedManager] currentLocalIP] ?: @"-";
-    NSString *message = [NSString stringWithFormat:@"%@\n\n%@\n%@\n\n%@: %@",
+
+    // ★ [PORT-AUTO] 自动探测 MC 局域网端口（读游戏日志取最后一次出现的端口），预填到输入框
+    NSString *autoGameDir = [McLanPortDetector resolveGameDirectoryWithInstanceName:getPrefObject(@"general.game_directory")];
+    uint16_t autoPort = [McLanPortDetector detectPortInGameDirectory:autoGameDir
+                                                       launcherHome:[McLanPortDetector launcherHome]];
+    NSString *autoPortText = (autoPort > 0) ? [NSString stringWithFormat:@"%u", autoPort] : nil;
+    NSLog(@"[PORT-AUTO] host manual-port dialog prefill: gameDir=%@ detected=%u", autoGameDir ?: @"(nil)", autoPort);
+
+    NSMutableString *message = [NSMutableString stringWithFormat:@"%@\n\n%@\n%@\n\n%@: %@",
                          MPLocalized(@"mp.host.connected_msg", @"已连接到联机网络，请在 MC 中开放局域网后输入端口号"),
                          MPLocalized(@"mp.host.tip.create_world", @"请在 MC 中创建世界并点击「对局域网开放」"),
                          MPLocalized(@"mp.host.tip.manual_port", @"开放局域网后，MC 会在聊天框显示端口号，请将其输入下方"),
                          MPLocalized(@"mp.host.local_ip", @"本机 IP"),
                          localIP];
+    if (autoPortText.length > 0) {
+        [message appendFormat:@"\n\n%@", [NSString stringWithFormat:
+            MPLocalized(@"mp.host.port_autodetected", @"已自动检测到端口 %@，可直接生成分享代码（也可手动修改）"), autoPortText]];
+    } else {
+        [message appendFormat:@"\n\n%@", MPLocalized(@"mp.host.port_notdetected", @"未检测到端口，请先在游戏里「对局域网开放」（也可手动填写）")];
+    }
 
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:MPLocalized(@"mp.host.connected_title", @"联机已开启")
                                                                    message:message
@@ -1105,6 +1121,7 @@ NS_INLINE NSString *MPLocalized(NSString *key, NSString *fallback) {
         textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
         textField.autocorrectionType = UITextAutocorrectionTypeNo;
         textField.clearButtonMode = UITextFieldViewModeWhileEditing;
+        if (autoPortText.length > 0) textField.text = autoPortText;   // ★ [PORT-AUTO] 预填
     }];
 
     [alert addAction:[UIAlertAction actionWithTitle:MPLocalized(@"common.cancel", @"取消")
@@ -1317,6 +1334,7 @@ NS_INLINE NSString *MPLocalized(NSString *key, NSString *fallback) {
 ///   4. 连接到房间（connectToRoom:completion:）
 ///   5. 连接成功后提示并显示服务器地址
 - (void)guestButtonTapped {
+    NSLog(@"[MP-ROLE] view=ingame event=guest_tapped role=guest");   // ★ [MP-ROLE]
     [self.view endEditing:YES];
 
     // 检查 ZeroTier 框架可用性
@@ -2051,6 +2069,19 @@ NS_INLINE NSString *MPLocalized(NSString *key, NSString *fallback) {
         MPLocalized(@"mp.room.network_id", @"Network ID"),
         room.networkId ?: @"-"];
     [detail appendFormat:@"\n%@", statusText];
+    // ★ [MP-ROLE] 角色标识：这个房间是我当房主还是房客（MultiplayerRoom.role 已有，不新造状态）
+    NSString *roomRoleTag = nil;
+    if (room.role == MultiplayerRoomRoleHost) {
+        roomRoleTag = [NSString stringWithFormat:@"%@ · %@",
+                       MPLocalized(@"i18n_str_2068", @"我"), MPLocalized(@"i18n_str_1027", @"房主")];
+    } else if (room.role == MultiplayerRoomRoleGuest) {
+        roomRoleTag = [NSString stringWithFormat:@"%@ · %@",
+                       MPLocalized(@"i18n_str_2068", @"我"), MPLocalized(@"i18n_str_2069", @"房客")];
+    }
+    if (roomRoleTag.length > 0) {
+        [detail appendFormat:@"\n%@", roomRoleTag];
+        NSLog(@"[MP-ROLE] view=rooms room=%@ role=%@", room.name ?: @"(unnamed)", roomRoleTag);
+    }
     if (room.status == MultiplayerRoomStatusConnected) {
         // 已连接时显示完整服务器地址
         NSString *hostIP = room.hostIP.length ? room.hostIP : [[MultiplayerManager sharedManager] currentLocalIP];

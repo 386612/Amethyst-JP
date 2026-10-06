@@ -5,6 +5,15 @@
 
 NSNotificationName TerracottaManagerStateDidChangeNotification = @"TerracottaManagerStateDidChange";
 
+/// ★ [MP-ROLE] 角色名（日志用）
+static NSString *TerracottaRoleName(TerracottaRole role) {
+    switch (role) {
+        case TerracottaRoleHost:   return @"host";
+        case TerracottaRoleClient: return @"guest";
+        default:                   return @"none";
+    }
+}
+
 @interface TerracottaManager ()
 @property(nonatomic, assign) TerracottaStatus status;
 @property(nonatomic, assign) TerracottaRole role;
@@ -12,6 +21,7 @@ NSNotificationName TerracottaManagerStateDidChangeNotification = @"TerracottaMan
 @property(nonatomic, assign) uint16_t currentPort;
 @property(nonatomic, copy, nullable) NSString *stageDescription;
 @property(nonatomic, copy, nullable) NSArray<TerracottaPlayerProfile *> *players;
+@property(nonatomic, assign) NSInteger currentProfileIndex;   // ★ [MP-ROLE]
 @property(nonatomic, copy, nullable) NSString *directConnectURL;
 @property(nonatomic, copy, nullable) NSString *lastError;
 @property(nonatomic, assign) BOOL initialized;
@@ -40,6 +50,7 @@ NSNotificationName TerracottaManagerStateDidChangeNotification = @"TerracottaMan
     if (self) {
         _status = TerracottaStatusDisconnected;
         _role = TerracottaRoleNone;
+        _currentProfileIndex = NSNotFound;   // ★ [MP-ROLE] 未知
         _pollQueue = dispatch_queue_create("terracotta.poll", dispatch_queue_attr_make_with_qos_class(
             DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0));
         /* 单例触发 init 时自动初始化 Terracotta（若库可用） */
@@ -92,6 +103,10 @@ NSNotificationName TerracottaManagerStateDidChangeNotification = @"TerracottaMan
     self.stageDescription = localize(@"i18n_str_997", nil);
     self.lastError = nil;
 
+    // ★ [MP-ROLE] 房主创建房间（房间号由核心生成）
+    NSLog(@"[MP-ROLE] role=host event=create port=%u inviteCode=%@", port,
+          inviteCode.length ? @"(provided)" : @"(auto-generated)");
+
     [[SilentAudioPlayer shared] startKeepingAlive];
 
     BOOL ok = [TerracottaBridge startHostWithRoom:inviteCode
@@ -121,6 +136,9 @@ NSNotificationName TerracottaManagerStateDidChangeNotification = @"TerracottaMan
     self.stageDescription = localize(@"i18n_str_1000", nil);
     self.lastError = nil;
 
+    // ★ [MP-ROLE] 房客凭房间号/邀请码加入
+    NSLog(@"[MP-ROLE] role=guest event=join codeLen=%lu", (unsigned long)inviteCode.length);
+
     [[SilentAudioPlayer shared] startKeepingAlive];
 
     BOOL ok = [TerracottaBridge setGuestingWithRoom:inviteCode playerName:playerName];
@@ -137,6 +155,8 @@ NSNotificationName TerracottaManagerStateDidChangeNotification = @"TerracottaMan
 }
 
 - (void)stopSession {
+    // ★ [MP-ROLE] 结束会话（角色回到 none）
+    NSLog(@"[MP-ROLE] role=none event=stop (was role=%@)", TerracottaRoleName(self.role));
     [TerracottaBridge setWaiting];
     [self stopPolling];
     [[SilentAudioPlayer shared] stopKeepingAlive];
@@ -154,6 +174,7 @@ NSNotificationName TerracottaManagerStateDidChangeNotification = @"TerracottaMan
     self.stageDescription = nil;
     self.players = nil;
     self.directConnectURL = nil;
+    self.currentProfileIndex = NSNotFound;   // ★ [MP-ROLE] 会话结束，未知
     /* lastError 不在此清除，让 UI 能在 stopSession 后仍看到上次错误（如果有） */
     _lastStateKind = -1;
     _lastStateIndex = -1;
@@ -200,6 +221,17 @@ NSNotificationName TerracottaManagerStateDidChangeNotification = @"TerracottaMan
     }
     _lastStateKind = state.kind;
     _lastStateIndex = state.index;
+
+    // ★ [MP-ROLE] 本地玩家下标（profile_index）+ 房主下标（profiles[].kind=="host"）
+    self.currentProfileIndex = state.profileIndex;
+    NSInteger hostIdx = NSNotFound;
+    NSArray<TerracottaPlayerProfile *> *profiles = state.profiles;
+    for (NSInteger i = 0; i < (NSInteger)profiles.count; i++) {
+        if ([profiles[i].kind isEqualToString:@"host"]) { hostIdx = i; break; }
+    }
+    NSLog(@"[MP-ROLE] role=%@ phase=kind:%ld index:%ld selfIdx=%ld hostIdx=%ld players=%lu",
+          TerracottaRoleName(self.role), (long)state.kind, (long)state.index,
+          (long)self.currentProfileIndex, (long)hostIdx, (unsigned long)profiles.count);
 
     switch (state.kind) {
         case TerracottaStateKindWaiting:
