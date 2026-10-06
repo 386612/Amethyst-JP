@@ -261,8 +261,48 @@ static void ameInstallCrashCapture(void) {
     const char *home = getenv("POJAV_HOME");
     if (home == NULL || home[0] == '\0') home = "/tmp";
     char path[PATH_MAX];
-    snprintf(path, sizeof(path), "%s/native-crash.log", home);
+    // ★ [VER-ISOLATE] 崩溃日志按实例隔离：<POJAV_HOME>/instances/<实例>/native-crash.log。
+    //   原先所有实例/版本共用 <POJAV_HOME>/native-crash.log（O_APPEND），崩溃归属只能靠
+    //   "======== LAUNCH <ts> ========" 人工分辨；分实例后每个版本/实例各留一份，互不混淆。
+    //   实例根不可得（或目录不可写）时回退旧共享路径，绝不因隔离改动而丢掉崩溃捕获。
+    NSString *viCrashRoot = ameVIInstanceRoot();
+    if (viCrashRoot.length > 0) {
+        // 确保实例根存在（ameVIInstanceSubdir 会建 <root>/logs 及中间目录）
+        ameVIInstanceSubdir(@"logs");
+        snprintf(path, sizeof(path), "%s/native-crash.log", viCrashRoot.UTF8String);
+        // ★ [LOG-FIX] 崩溃记录也必须在 POJAV_HOME 下留一个【普通文件】入口：用户/文件
+        //   App/AFC/AI/工具历来按 <POJAV_HOME>/native-crash.log 取崩溃栈，上一版只写进
+        //   实例目录 ⇒ 那个惯用路径取不到（或取到旧的）。打开前先把「实例尚无记录」时
+        //   的旧共享根文件迁进实例（不静默丢弃），打开后再用硬链接把根名字指回真身。
+        NSString *viCrashInst = @(path);
+        NSString *viCrashHome = [@(home) stringByAppendingPathComponent:@"native-crash.log"];
+        if (![viCrashInst isEqualToString:viCrashHome]
+            && ![fm fileExistsAtPath:viCrashInst]
+            && [fm fileExistsAtPath:viCrashHome]
+            && !ameVIPathIsSymlink(viCrashHome)) {
+            [fm moveItemAtPath:viCrashHome toPath:viCrashInst error:nil];
+        }
+    } else {
+        snprintf(path, sizeof(path), "%s/native-crash.log", home);
+    }
     gAmeCrashFd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (gAmeCrashFd < 0 && viCrashRoot.length > 0) {
+        // 实例日志目录不可写 ⇒ 回退共享路径
+        snprintf(path, sizeof(path), "%s/native-crash.log", home);
+        gAmeCrashFd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    }
+    // ★ [LOG-FIX] 硬链接 <POJAV_HOME>/native-crash.log → 实例真身：同 inode，对一切
+    //   读方（文件 App/分享/AFC/工具）表现为普通文件，写到 fd 的追加内容根路径实时
+    //   可见；实例内那份仍在 ⇒ 隔离收益保留。硬链接失败不影响崩溃捕获本身。
+    if (gAmeCrashFd >= 0 && viCrashRoot.length > 0) {
+        NSString *viCrashInst = @(path);
+        NSString *viCrashHome = [@(home) stringByAppendingPathComponent:@"native-crash.log"];
+        if (![viCrashInst isEqualToString:viCrashHome]) {
+            if (ameVIHardLinkLog(viCrashInst, viCrashHome)) {
+                NSLog(@"[LOG-FIX] native-crash -> %@ (hardlink %@)", viCrashInst, viCrashHome);
+            }
+        }
+    }
     if (gAmeCrashFd < 0) {
         NSLog(@"[JavaLauncher] native crash capture unavailable (cannot open %s)", path);
         return;
@@ -312,6 +352,108 @@ static void ameInstallCrashCapture(void) {
     }
 
     NSLog(@"[JavaLauncher] native crash capture armed -> %s", path);
+}
+
+// ============================================================================
+// ★ [DYLD-BYPASS] SIGBUS 容错 handler
+// ============================================================================
+// 移植自 herbrine8403 的 test 分支(26e479f7d9f0 引入;1173a6ef2af2 / 11256409f226 /
+// 6b9ec62c37ae / f60d83091f65 迭代)。机制:
+//
+//   init_bypassDyldLibValidation() 历史上会 signal(SIGBUS, SIG_IGN)(改 dyld 可执行
+//   页的副作用是「执行期间可能触发 SIGBUS」,于是选择忽略)。SIG_IGN 语义下触发
+//   SIGBUS 的那条指令会被内核反复重投 —— 不是「等一下就好」,而是无限活锁:
+//   主线程照常跑、界面照常可点,而 launchJVM 线程永远卡在 dlopen(libjli) 不返回,
+//   控制台停在「JVM GC optimization」,之后 Caciocavallo / Found JLI lib /
+//   Calling JLI_Launch 三条日志全部缺席,也没有崩溃报告。
+//
+//   处置:保留与 SIG_IGN 相同的「重试」语义,但不再静默、且可终止。
+//     - 第 1..AME_SIGBUS_TOLERANCE 次:把 pc/sp/lr/si_addr/si_code 与镜像清单写进
+//       native-crash.log 后返回,让出错指令重试;
+//     - 超过容错次数:signal(SIGBUS, SIG_DFL) 后返回,下一次 SIGBUS 按默认行为终止
+//       —— 宁可带着完整日志崩溃,也不要无声活锁。
+//
+//   安全约束(与 ameCrashHandler 同):handler 内只允许 async-signal-safe 操作 ——
+//   ameCrashWrite/ameCrashLine 走预打开 fd + write;禁止 NSLog / malloc / ObjC / 锁
+//   (这两个 hook 是被 libdyld 持锁调进来的,在里面碰 stdio 会把「重试活锁」变成
+//   「handler 内死锁」,反而盖掉要抓的现象)。
+#define AME_SIGBUS_TOLERANCE 8
+static volatile sig_atomic_t gAmeSigbusCount = 0;
+static volatile sig_atomic_t gAmeSigbusInHandler = 0;
+
+static void ameTolerantSigbusHandler(int sig, siginfo_t *si, void *ucRaw) {
+    (void)sig;
+    if (gAmeSigbusCount >= AME_SIGBUS_TOLERANCE) {
+        // 持续 SIGBUS:交回默认处理,结束活锁(下一次触发即终止,并留下系统 crash report)。
+        signal(SIGBUS, SIG_DFL);
+        ameCrashWrite("\n=== SIGBUS (fatal, tolerance exhausted) ===\n");
+        ameCrashLine("sigbus_count", (uint64_t)gAmeSigbusCount + 1);
+        ameCrashWrite("=== END SIGBUS ===\n");
+        return;
+    }
+    if (gAmeSigbusInHandler) {
+        // 重入保护:读别人的栈时若再触发 SIGBUS,别把备用信号栈也冲掉。
+        return;
+    }
+    gAmeSigbusInHandler = 1;
+    gAmeSigbusCount++;
+
+    uint64_t pc = 0, sp = 0, lr = 0, fp = 0;
+    ucontext_t *uc = (ucontext_t *)ucRaw;
+#if defined(__arm64__) || defined(__aarch64__)
+    if (uc != NULL && uc->uc_mcontext != NULL) {
+        pc = (uint64_t)uc->uc_mcontext->__ss.__pc;
+        sp = (uint64_t)uc->uc_mcontext->__ss.__sp;
+        lr = (uint64_t)uc->uc_mcontext->__ss.__lr;
+        fp = (uint64_t)uc->uc_mcontext->__ss.__fp;
+    }
+#endif
+    ameCrashWrite("\n=== SIGBUS (tolerated) ===\n");
+    ameCrashLine("sigbus_count", (uint64_t)gAmeSigbusCount);
+    ameCrashLine("si_addr", (uint64_t)(uintptr_t)(si != NULL ? si->si_addr : NULL));
+    ameCrashLine("si_code", (uint64_t)(int64_t)(si != NULL ? si->si_code : 0));
+    ameCrashLine("thread", (uint64_t)pthread_mach_thread_np(pthread_self()));
+    ameCrashLine("pc", pc);
+    ameCrashLine("sp", sp);
+    ameCrashLine("fp", fp);
+    ameCrashLine("lr", lr);
+    ameCrashDumpImagesFrom(gAmeCrashImageCount);
+    ameCrashWrite("=== END SIGBUS ===\n");
+    gAmeSigbusInHandler = 0;
+    // 返回 => 内核重投出错指令(与 SIG_IGN 同样的重试语义,但被上面的计数与容错上限兜住)。
+}
+
+// 在 init_bypassDyldLibValidation() 之后立刻调用:把被它覆盖掉的 SIGBUS 处置换成
+// 上面的容错 handler。可重复调用(调用方在 JLI_Launch 前会把 SIGBUS 复位回
+// SIG_DFL,那两个复位点同样要重装 —— 否则退回活锁)。
+static void ame_installTolerantSigbusHandler(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = ameTolerantSigbusHandler;
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGBUS, &sa, NULL);
+    NSLog(@"[JavaLauncher] tolerant SIGBUS handler armed (tolerance=%d, replaces SIG_IGN)",
+          AME_SIGBUS_TOLERANCE);
+}
+
+// ★ [DYLD-SWITCH] 容错 SIGBUS handler 的「带开关安装」入口。
+// 旁路总开关 java.dyld_bypass 默认关闭(PLPreferences 注册 @NO);关闭时不装 dyld 旁路
+// hook、也不装本 handler —— 回到系统默认 SIGBUS 行为(等价原句 signal(SIGBUS, SIG_DFL))。
+// 环境逃生口 AMETHYST_DYLD_BYPASS=0 同样令其关闭(见 ame_dyldBypassRequested())。
+// [来源: fork 分支 fix/dyld-bypass-default-off @ c26262a58b 的默认关闭语义]
+static void ame_installTolerantSigbusHandlerIfBypassEnabled(void) {
+    if (!ame_dyldBypassRequested()) {
+        signal(SIGBUS, SIG_DFL);
+        return;
+    }
+    // 逃生口保留:AMETHYST_SIGBUS_IGNORE=1 时维持旧 SIG_IGN 行为(init_bypass 内已置
+    // SIG_IGN),不再换成容错 handler —— 否则该逃生口会被本函数无条件覆盖而失效。
+    const char *sigbusIgnore = getenv("AMETHYST_SIGBUS_IGNORE");
+    if (sigbusIgnore != NULL && sigbusIgnore[0] == '1') {
+        return;
+    }
+    ame_installTolerantSigbusHandler();
 }
 
 void init_loadDefaultEnv() {
@@ -479,7 +621,13 @@ void init_loadMobileGluesConfig() {
         NSLog(@"[JavaLauncher] MobileGlues renderer detected, config will take effect.");
     }
 
-    NSString *mgDirPath = [NSString stringWithFormat:@"%s/MG", getenv("POJAV_HOME")];
+    // ★ [VER-ISOLATE] MobileGlues 配置按实例隔离：<POJAV_HOME>/instances/<实例>/MG。
+    //   原先所有实例/版本共用 <POJAV_HOME>/MG/config.json，切换实例会互相覆盖渲染器
+    //   偏好（GL 版本 / DSA / 着色器缓存大小 / FSR）。实例根不可得时回退旧共享路径。
+    NSString *viRoot = ameVIInstanceRoot();
+    NSString *mgDirPath = viRoot.length > 0
+        ? [viRoot stringByAppendingPathComponent:@"MG"]
+        : [NSString stringWithFormat:@"%s/MG", getenv("POJAV_HOME")];
     setenv("MG_DIR_PATH", mgDirPath.UTF8String, 1);
 
     NSMutableDictionary *config = [NSMutableDictionary dictionary];
@@ -1102,6 +1250,12 @@ int launchJVM(NSString *accountId, id launchTarget, int width, int height, int m
     // 而非 TXM 固件检测，确保 iOS 26+ 无 TXM 设备也能正确设置 JIT 脚本
     DeviceGetJITFlags(YES);
     BOOL requiresDebugJITMapping = DeviceNeedsDebugJITMapping();
+    // ★ [JB-ADAPT] 越狱环境可见性：越狱且原生可建 RX 映射 ⇒ requiresDebugJITMapping 为假，
+    //   本路径不做 brk #0x69、不请求任何外部 JIT 工具（真能力由 DeviceCanCreateRXMap 说话）。
+    if (AMEJailbreakNativeJITPathApplies()) {
+        NSLog(@"[JB-ADAPT] [Headless] jailbreak env=%@ nativeJITReady=%d requiresDebugJITMapping=%d",
+              AMEJailbreakEnvSummary(), AMEJailbreakNativeJITReady(), requiresDebugJITMapping);
+    }
     BOOL jit26AlwaysAttached = getPrefBool(@"debug.debug_always_attached_jit");
     if (requiresDebugJITMapping) {
         // 检测是否在使用 legacy JIT script（brk #0x69 由 UniversalJIT26.js 处理）。
@@ -1264,6 +1418,11 @@ int launchJVM(NSString *accountId, id launchTarget, int width, int height, int m
         }
         // Activate Library Validation bypass for external runtime and dylibs (JNA, etc)
         init_bypassDyldLibValidation();
+        // ★ [DYLD-SWITCH] 容错 SIGBUS handler 只在 dyld 旁路开关(java.dyld_bypass)
+        //   开启时才安装;关闭(默认)则回到系统默认 SIGBUS 行为。旁路内部会把 SIGBUS
+        //   置为 SIG_IGN ⇒ 开启时必须立刻换回容错 handler,否则后续 dlopen 里的 SIGBUS
+        //   会变成静默无限活锁(卡在 dlopen(libjli))。
+        ame_installTolerantSigbusHandlerIfBypassEnabled();
     } else {
         NSLog(@"[DyldLVBypass] Hook disabled! Loading unsigned dylib will cause code signature error.");
     }
@@ -1498,39 +1657,45 @@ int launchJVM(NSString *accountId, id launchTarget, int width, int height, int m
         NSLog(@"[JavaLauncher] GRAPHICS_API is set to %@\n", graphicsApi);
 
         // Setup gameDir
+        // ★ [VER-ISOLATE-PCL] 子路径改由「版本隔离」统一解析函数给出（对齐 PCL-CE 的
+        //   实例隔离 / VersionArgumentIndieV2 语义）：
+        //     关闭（默认）⇒ "."（实例根）——与改动前逐字节一致，零行为变化；
+        //     开启        ⇒ "versions/<版本 id>"（mods/config/saves/... 全部落该目录）。
+        //   profile 显式写了非 "." 的 gameDir 时仍以显式值为准（见 amePCLVersionGameDirSubpath）。
+        NSString *viConcreteId = nil;
+        if ([launchTarget isKindOfClass:NSDictionary.class]) {
+            viConcreteId = [launchTarget[@"id"] description];
+        } else if ([launchTarget isKindOfClass:NSString.class]) {
+            viConcreteId = (NSString *)launchTarget;
+        }
+        NSString *viGameDirSub = amePCLVersionGameDirSubpath(PLProfiles.current.selectedProfile, viConcreteId);
         gameDir = [NSString stringWithFormat:@"%s/instances/%@/%@",
             getenv("POJAV_HOME"), getPrefObject(@"general.game_directory"),
-            [PLProfiles resolveKeyForCurrentProfile:@"gameDir"]]
+            viGameDirSub]
             .stringByStandardizingPath;
+        NSLog(@"[VER-ISOLATE-PCL] gameDir=%@ (版本隔离=%@, 约束版本 id=%@)",
+              gameDir, [viGameDirSub isEqualToString:@"."] ? @"关" : @"开", viConcreteId ?: @"(nil)");
 
-        // 内置 MetalUniversal mod 预置: bundle 的 mods_preload/ 首次启动拷贝到实例 mods/
-        // (vanilla 实例不加载 mods, 无害; Fabric 实例自动生效 —— 开箱即用)
-        // 按 MC 版本过滤: 文件名含 "12111" 的 mod 仅拷给 1.21.11 实例, 其余仅拷给 26.x 实例
-        NSString *versionId = nil;
-        if ([launchTarget isKindOfClass:NSDictionary.class]) {
-            versionId = launchTarget[@"id"];
-        } else {
-            versionId = launchTarget;
-        }
-        BOOL mc12111 = (versionId && [versionId containsString:@"1.21.11"]);
-        BOOL mc26 = (versionId && [versionId hasPrefix:@"26"]);
-        NSString *preloadDir = [[NSBundle mainBundle] pathForResource:@"mods_preload" ofType:nil];
-        if (preloadDir) {
+        // ★ [MODS-PRELOAD-FIX] 原先这里会把 bundle 的 mods_preload/MetalUniversal-*.jar
+        //   拷进实例 mods/。该机制已下线:26.x 的 Metal 后端全程走 `-javaagent:metallum_agent.jar`
+        //   注入(见下方 [AGENT-GATE]),mods/ 里那份在 Fabric 上会表现为「删不掉的 metal mod 报错」
+        //   (删了下一次启动又被拷回)⇒ 改为一次性清理旧版拷进去的那份(仅限我们预置过的文件名)。
+        {
             NSString *modsDir = [gameDir stringByAppendingPathComponent:@"mods"];
-            [[NSFileManager defaultManager] createDirectoryAtPath:modsDir
-                                      withIntermediateDirectories:YES attributes:nil error:nil];
-            NSArray *files = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:preloadDir error:nil];
-            for (NSString *f in files) {
-                BOOL is12111Mod = [f containsString:@"12111"];
-                if (is12111Mod && !mc12111) continue;   // 1.21.11 专用 mod, 非 1.21.11 实例跳过
-                if (!is12111Mod && mc12111) continue;   // 26.x 专用 mod, 1.21.11 实例跳过
-                NSString *srcPath = [preloadDir stringByAppendingPathComponent:f];
-                NSString *dstPath = [modsDir stringByAppendingPathComponent:f];
-                if (![[NSFileManager defaultManager] fileExistsAtPath:dstPath]) {
-                    if ([[NSFileManager defaultManager] copyItemAtPath:srcPath toPath:dstPath error:nil]) {
-                        NSLog(@"[JavaLauncher] Preloaded bundled mod: %@", f);
+            NSString *stamp = [gameDir stringByAppendingPathComponent:@".ame_bundled_mod_cleaned"];
+            NSFileManager *pfm = [NSFileManager defaultManager];
+            if (![pfm fileExistsAtPath:stamp] && [pfm fileExistsAtPath:modsDir]) {
+                NSArray *mf = [pfm contentsOfDirectoryAtPath:modsDir error:nil];
+                for (NSString *f in mf) {
+                    // ★ 只删我们自己预置过的文件名,不动用户自己装的其它 metallum mod
+                    if ([f hasPrefix:@"MetalUniversal-"] && [f hasSuffix:@".jar"]) {
+                        NSString *p = [modsDir stringByAppendingPathComponent:f];
+                        if ([pfm removeItemAtPath:p error:nil]) {
+                            NSLog(@"[MODS-PRELOAD-FIX] 清理旧版预置 mod(已改走 agent 注入): %@", f);
+                        }
                     }
                 }
+                [pfm createFileAtPath:stamp contents:[NSData data] attributes:nil];
             }
         }
     } else {
@@ -1659,6 +1824,19 @@ int launchJVM(NSString *accountId, id launchTarget, int width, int height, int m
     NSLog(@"[JavaLauncher] library.path = %@", frameworksPath);
     PUSH_MARGV_FORMAT(@"-Duser.dir=%@", gameDir);
     PUSH_MARGV_FORMAT(@"-Duser.home=%s", getenv("POJAV_HOME"));
+    // ★ [VER-ISOLATE] 每实例 Java 临时目录：把 java.io.tmpdir 指向
+    //   <POJAV_HOME>/instances/<实例>/tmp，隔离 agent/JNA/模组安装等对临时目录的
+    //   使用。metallum agent 从 jar 解包 native（natives/ios[12111]/libmetallum.dylib，
+    //   解包后文件名固定为 libmetallum.dylib / libspvc_metallum.dylib），若所有实例/版本
+    //   共用同一个 java.io.tmpdir，切换版本时可能命中上一版本解出的那份 ⇒ 分实例后
+    //   各版本各自解包、互不覆盖。实例根不可得则不下发本参数（保持 JVM 默认）。
+    //   注意：只改 java.io.tmpdir（Java 侧），不动 TMPDIR 环境变量 —— 后者被
+    //   main_hook.m 的 dyld-bypass 判定（strstr(fullpath, TMPDIR)）依赖，改它有风险。
+    NSString *viTmpDir = ameVIInstanceSubdir(@"tmp");
+    if (viTmpDir.length > 0) {
+        PUSH_MARGV_FORMAT(@"-Djava.io.tmpdir=%@", viTmpDir);
+        NSLog(@"[VER-ISOLATE] java.io.tmpdir -> %@", viTmpDir);
+    }
     PUSH_MARGV_FORMAT(@"-Duser.timezone=%@", NSTimeZone.localTimeZone.name);
     PUSH_MARGV_FORMAT(@"-DUIScreen.maximumFramesPerSecond=%d", (int)UIScreen.mainScreen.maximumFramesPerSecond);
 
@@ -1898,51 +2076,43 @@ int launchJVM(NSString *accountId, id launchTarget, int width, int height, int m
   
     NSString *librariesPath = [NSString stringWithFormat:@"%@/libs", NSBundle.mainBundle.bundlePath];
     PUSH_MARGV_FORMAT(@"-javaagent:%@/patchjna_agent.jar=", librariesPath);
-    // ★ [AGENT-GATE] 上游 5.1.0 的 "MC major >= 26" 闸门(含版本 id 解析)保留,
-    //   叠加我们追加的渲染器闸门:渲染器不是 Metal/Metallum 时,agent 自己在 premain
-    //   里也只装配 SDL 桩 ⇒ 白担 classpath 风险,直接跳过注入。
-    //   不做加载器判断(上游语义:由 agent 按 MC 版本 / 加载器自行分流)。
-    NSString *launchId = [launchTarget isKindOfClass:NSDictionary.class]
-        ? [launchTarget[@"id"] description] : (NSString *)launchTarget;
-    NSInteger metallumMcMajor = ame98_mcMajorFromVersionId(launchId);
-    BOOL mcIs26Plus = (metallumMcMajor >= 26);
-    // ★ [METALLUM-264] 26.4 适配：显式解析并透传"版本家族"，agent 不再靠零散
-    //   contains("26.3") 猜版本（旧写法把 26.4 误判到 26.2 家族 ⇒ 类集/字节码补丁全错）。
-    //   26.4 归入 263 家族（renderpearl.api + SDL3，与 26.3 同族）。
-    //   可用环境变量 METALLUM_ROUTE_FAMILY=1211|261|262|263 覆盖（排障/回退）。
-    NSString *metallumFamily = ameMetallumRouteFamily(launchId);
-    const char *rendC = getenv("AMETHYST_RENDERER");
-    NSString *renderer = rendC ? @(rendC) : @"";
-    NSString *rendererLower = renderer.lowercaseString;
-    // ★ [AGENT-GATE-FIX] 不能只读 AMETHYST_RENDERER 判 Metal!
-    //   选了 Metal 时上游会把 AMETHYST_RENDERER 故意改写成 auto(→ANGLE),
-    //   那只为给 Surface 提供 GL 上下文;真正的"我选了 Metal"信号是
-    //   AMETHYST_METAL=1 —— agent 自己也只认这个开关来打开渲染 patch。
-    //   只读 AMETHYST_RENDERER 会把 Metal 误判成 ANGLE ⇒ 跳过 agent ⇒ 渲染 patch
-    //   全关 ⇒ 只能用 ANGLE 渲染 ⇒ MC 26.2 的 flat_clouds/clouds 管线编译失败而崩溃
-    //   (实测 2026-10-03,日志:[AGENT-GATE] 渲染器=libtinygl4angle.dylib ⇒ 跳过)。
-    const char *metalC = getenv("AMETHYST_METAL");
-    BOOL metalFlagOn = (metalC != NULL && strcmp(metalC, "1") == 0);
-    BOOL rendererIsMetallum = metalFlagOn ||
-                              [rendererLower containsString:@"metallum"] ||
-                              [rendererLower containsString:@"metal"];
-    BOOL wantsMetallumAgent = mcIs26Plus && rendererIsMetallum;
-    if (!wantsMetallumAgent) {
-        NSLog(@"[AGENT-GATE] MC=%@(major=%ld) 渲染器=%@ AMETHYST_METAL=%@ ⇒ %@,跳过 metallum_agent 注入",
-              launchId, (long)metallumMcMajor, renderer,
-              metalFlagOn ? @"1" : @"(未置)",
-              mcIs26Plus ? @"渲染器非 Metal" : @"版本不足 26");
-    }
-    if (wantsMetallumAgent
-        && [fm fileExistsAtPath:[librariesPath stringByAppendingPathComponent:@"metallum_agent.jar"]]) {
-        NSLog(@"[AGENT-GATE] 注入 metallum_agent(MC=%@ major=%ld 家族=%@ 渲染器=%@ AMETHYST_METAL=%@)",
-              launchId, (long)metallumMcMajor, metallumFamily, renderer, metalFlagOn ? @"1" : @"(未置)");
-        PUSH_MARGV_FORMAT(@"-javaagent:%@/metallum_agent.jar=", librariesPath);
-        if (launchId.length > 0) {
-            PUSH_MARGV_FORMAT(@"-Dmetallum.mc.version=%@", launchId);
+    // [Metallum agent] 原生 Metal 后端（26.2 / 26.3）：
+    //   * jar 由 JavaApp/libs/others/ 随包落在 app/libs/（见根 Makefile 的 payload 目标），
+    //     agent 自带 metallum 类集与 natives/ios（libmetallum.dylib、libspvc.dylib），
+    //     运行期自行解出到沙盒，不需要 Frameworks 另行放置。
+    //   * 注入范围由 agent 自己判定（premain 按 MC 版本 / 加载器分流：26.2 走
+    //     classes262 类集、Fabric 缺桩时跳过相应步骤、Forge 走 dummy provider
+    //     且不注入自带 slf4j）。
+    //   * jar 不在 libs/ 时安静跳过，便于回滚与 A/B。
+    //   * [fix/java8-agent] 只对 MC major >= 26 挂载：agent 的 class 文件版本是
+    //     65.0（Java 21+ 编译），而老版本 MC 走 Java 8（class 上限 52.0）——
+    //     此前"老版本 MC 没有目标类，转换器天然 no-op"的假设漏掉了 agent
+    //     本身在 Java 8 上就加载不了这件事（UnsupportedClassVersionError ->
+    //     "processing of -javaagent failed" -> JVM 直接 abort，premain 阶段
+    //     全灭，GL/SFPEW 代码根本没机会跑）。1.7.10 + SFPEW 两路会话的
+    //     latestlog（43177bd 实测）即死于此。
+    //     26.x 强制 Java 25（ResolveLwjglVersion 同款 major 判定），class 65 可加载。
+    if ([[NSFileManager defaultManager] fileExistsAtPath:
+            [librariesPath stringByAppendingPathComponent:@"metallum_agent.jar"]]) {
+        NSString *metallumMcVersionId = nil;
+        if ([launchTarget isKindOfClass:NSDictionary.class]) {
+            metallumMcVersionId = [launchTarget[@"id"] description];
+        } else if ([launchTarget isKindOfClass:NSString.class]) {
+            metallumMcVersionId = (NSString *)launchTarget;
         }
-        // ★ [METALLUM-264] 显式家族路由（agent 端 mcFamily() 优先读该属性）。
-        PUSH_MARGV_FORMAT(@"-Dmetallum.route.family=%@", metallumFamily);
+        NSInteger metallumMcMajor = ame98_mcMajorFromVersionId(metallumMcVersionId);
+        if (metallumMcMajor >= 26) {
+            PUSH_MARGV_FORMAT(@"-javaagent:%@/metallum_agent.jar=", librariesPath);
+            // 把实例的 MC 版本 id 传给 agent（按版本选 metallum 类映射）
+            if (metallumMcVersionId.length > 0) {
+                PUSH_MARGV_FORMAT(@"-Dmetallum.mc.version=%@", metallumMcVersionId);
+            }
+            NSLog(@"[JavaLauncher] Metallum agent enabled: -javaagent:metallum_agent.jar (mcVersion=%@)",
+                  metallumMcVersionId);
+        } else {
+            NSLog(@"[JavaLauncher] Metallum agent skipped: MC major %ld < 26 (agent needs Java 21+ class files, this session runs Java 8)",
+                  (long)metallumMcMajor);
+        }
     }
     if(getPrefBool(@"general.cosmetica")) {
         PUSH_MARGV_FORMAT(@"-javaagent:%@/arc_dns_injector.jar=23.95.137.176", librariesPath);
@@ -1994,8 +2164,20 @@ int launchJVM(NSString *accountId, id launchTarget, int width, int height, int m
     PUSH_MARGV_LITERAL("-XX:CodeCacheExpansionSize=4m");
 
     // On iOS 26, use mirror mapped JIT by default
+    // ★ [ISSUE-FIX] #70：Java 8 运行时的 libjvm 不识别 -XX:+MirrorMappedCodeCache
+    //   （iPhone15 Pro / iOS 26.0.1 / 5.0.0 实测：启动即
+    //    `Unrecognized VM option 'MirrorMappedCodeCache'`，加
+    //    -XX:+IgnoreUnrecognizedVMOptions 后转黑屏）。镜像映射 JIT 仅 Java 17+/21/25
+    //    的 JVM 提供；Java 8 直接跳过该参数，避免因未知 VM 参数启动失败。
+    //   判据与下方 isJava8 相同（lib/jli/libjli.dylib 存在 = Java 8），此处提前探测
+    //   以免依赖后面的变量声明顺序。
     if (@available(iOS 26.0, *)) {
-        PUSH_MARGV_LITERAL("-XX:+MirrorMappedCodeCache");
+        BOOL ame70IsJava8 = [fm fileExistsAtPath:[NSString stringWithFormat:@"%@/lib/jli/libjli.dylib", javaHome]];
+        if (!ame70IsJava8) {
+            PUSH_MARGV_LITERAL("-XX:+MirrorMappedCodeCache");
+        } else {
+            NSLog(@"[ISSUE-FIX] #70: Java 8 runtime -> skip -XX:+MirrorMappedCodeCache (unsupported VM option)");
+        }
     }
 
     // Disable Forge 1.16.x early progress window
@@ -2356,7 +2538,12 @@ int launchJVM(NSString *accountId, id launchTarget, int width, int height, int m
     // reset signal handler so that JVM can catch them
     signal(SIGSEGV, SIG_DFL);
     signal(SIGPIPE, SIG_DFL);
-    signal(SIGBUS, SIG_DFL);
+    // ★ [DYLD-BYPASS] SIGBUS 例外:这里原写 signal(SIGBUS, SIG_DFL),会让启动期
+    //   的 SIGBUS 直接按默认行为终止(此前甚至是被旁路改成 SIG_IGN 的静默活锁)。
+    //   HotSpot 在 arm64 上不使用 SIGBUS(上面复位 SIGSEGV/SIGPIPE 是让 JVM 接管),
+    //   故旁路开启时保留容错 handler:前若干次记 pc/镜像后放行,连续超限再转 SIG_DFL。
+    //   ★ [DYLD-SWITCH] 旁路关闭(默认)时不装 handler,恢复原句 signal(SIGBUS, SIG_DFL)。
+    ame_installTolerantSigbusHandlerIfBypassEnabled();
     signal(SIGILL, SIG_DFL);
     signal(SIGFPE, SIG_DFL);
 
@@ -2404,8 +2591,24 @@ static NSString *ameJITWaitMessageKeyForEnabler(NSString *enabler) {
     if ([enabler isEqualToString:@"sidestore"]) return @"jit.wait.sidestore";
     if ([enabler isEqualToString:@"jitstreamer"]) return @"jit.wait.jitstreamer";
     if ([enabler isEqualToString:@"stosdebug"]) return @"jit.wait.stosdebug";
+    // ★ [JIT-ADAPT] 本机无 URL 可调、靠用户在自己 App/电脑上开的工具（逐工具引导文案）。
+    if ([enabler isEqualToString:@"sidejitserver"]) return @"jit.wait.sidejitserver";
+    if ([enabler isEqualToString:@"altstore"]) return @"jit.wait.altstore";
+    if ([enabler isEqualToString:@"sideloadly"]) return @"jit.wait.sideloadly";
+    if ([enabler isEqualToString:@"jailbreak"]) return @"jit.wait.jailbreak";
     if ([enabler isEqualToString:@"stikdebug"] || [enabler isEqualToString:@"stikjit"]) return @"jit.wait.stikdebug";
     return @"jit.wait.auto";
+}
+
+// ★ [JIT-ADAPT] 「本机没有 URL 可调、必须先由用户手动开」的 enabler 集合：
+//   AltStore/Sideloadly(靠电脑端 AltServer/Sideloadly Daemon)、SideJITServer(靠 Shortcut)、
+//   越狱(靠系统开关)、manual(用户自选)。headless 侧与 UI 侧共用同一判定。
+static BOOL ameJITIsManualLikeEnabler(NSString *enabler) {
+    return [enabler isEqualToString:@"manual"] ||
+           [enabler isEqualToString:@"sidejitserver"] ||
+           [enabler isEqualToString:@"altstore"] ||
+           [enabler isEqualToString:@"sideloadly"] ||
+           [enabler isEqualToString:@"jailbreak"];
 }
 
 // ★ [JIT-WAIT2] 前台感知的 JIT 就绪等待。
@@ -2520,6 +2723,11 @@ static NSString *ameJITEnablerDisplayName(NSString *enabler) {
     if ([enabler isEqualToString:@"sidestore"]) return @"SideStore (SideJIT)";
     if ([enabler isEqualToString:@"jitstreamer"]) return @"JitStreamer";
     if ([enabler isEqualToString:@"stosdebug"]) return @"StosDebug";
+    // ★ [JIT-ADAPT] 外部-attach 类工具显示名（“未检测到工具”提示用）。
+    if ([enabler isEqualToString:@"sidejitserver"]) return @"SideJITServer";
+    if ([enabler isEqualToString:@"altstore"]) return @"AltStore (AltServer / AltJIT)";
+    if ([enabler isEqualToString:@"sideloadly"]) return @"Sideloadly (Sideloadly Daemon)";
+    // manual / jailbreak：没有可安装的“工具 App” ⇒ nil，用通用文案。
     return nil;
 }
 
@@ -2607,8 +2815,11 @@ static BOOL ame139_requestJIT(BOOL forceStikJIT) {
             url = [NSURL URLWithString:[NSString stringWithFormat:
                 @"stikdebug://enable-jit?bundle-id=%@&pid=%d&script-name=universal.js",
                 bundleId, getpid()]];
-        } else if ([enabler isEqualToString:@"manual"]) {
-            // 手动模式：不跳转，仅弹窗告知（维持旧语义）。
+        } else if (ameJITIsManualLikeEnabler(enabler)) {
+            // ★ [JIT-ADAPT] manual / AltStore / Sideloadly / SideJITServer / 越狱：
+            //   本机没有 URL 可调（分别靠用户在本机 JIT 工具、电脑端 AltServer/Sideloadly
+            //   Daemon、Shortcut、系统开关里开）。不跳转，仅弹引导并等待可验证自检。
+            NSLog(@"[JIT-ADAPT] [Headless] enabler=%@ -> manual/guidance only (no on-device URL)", enabler);
         } else if (@available(iOS 17.4, *)) {
             // auto / stikjit 共用 stikjit://
             NSString *scriptData = @"";
@@ -2665,7 +2876,7 @@ static BOOL ame139_requestJIT(BOOL forceStikJIT) {
         }
     }
 
-    BOOL isManual = [chosenEnabler isEqualToString:@"manual"];
+    BOOL isManual = ameJITIsManualLikeEnabler(chosenEnabler);   // ★ [JIT-ADAPT] 含新外部-attach 类
     BOOL launched = NO;   // 事实:使能工具确实被系统接管
     if (isManual) {
         launched = NO;                 // manual 单列(下面直接进等待)
@@ -2684,8 +2895,10 @@ static BOOL ame139_requestJIT(BOOL forceStikJIT) {
     if (isManual) {
         // ★ [JIT-WAIT] manual / 该方式本就不跳转:仍要等(用户可能在别处手动开),
         //   等待框明确「请现在到你的 JIT 工具里为本 App 启用 JIT,最长等 30 秒」。
-        NSLog(@"[JIT-WAIT] enabler=manual -- waiting for the user to enable JIT elsewhere");
-        showDialog(localize(@"i18n_str_437", nil), localize(@"jit.wait.manual", nil));
+        // ★ [JIT-ADAPT] manual-like 现含 AltStore/Sideloadly/SideJITServer/越狱:
+        //   文案按实际选中的方式给对应那条(逐工具引导),不再一律打 jit.wait.manual。
+        NSLog(@"[JIT-ADAPT] [Headless] enabler=%@ -- manual-like, waiting for the user to enable JIT elsewhere", chosenEnabler);
+        showDialog(localize(@"i18n_str_437", nil), localize(ameJITWaitMessageKeyForEnabler(chosenEnabler), nil));
         return YES;
     }
     if (launched) {
@@ -2727,6 +2940,11 @@ int launchHeadlessJVM(NSString *mainClass, NSArray<NSString *> *args, int minJav
     if (!isJITEnabled(NO)) {
         if (getPrefBool(@"debug.debug_skip_wait_jit")) {
             NSLog(@"[JavaLauncher] launchHeadlessJVM: debug_skip_wait_jit set, proceeding without JIT");
+        } else if (AMEJailbreakNativeJITPathApplies() && AMEJailbreakNativeJITReady()) {
+            // ★ [JB-ADAPT] 越狱环境且原生 JIT 已确认可用（真能力判据：匿名页可直接置 RX）
+            //   ⇒ **不请求任何外部 JIT 工具**，直接继续（越狱原生化，免 attach/免使能器）。
+            NSLog(@"[JB-ADAPT] [Headless] native JIT ready (env=%@) -- skipping external JIT enabler entirely",
+                  AMEJailbreakEnvSummary());
         } else {
             NSLog(@"[JavaLauncher] launchHeadlessJVM: Task139 JIT not enabled -- auto-requesting via configured enabler");
             if (!ame139_requestJIT(NO)) {
@@ -2736,14 +2954,21 @@ int launchHeadlessJVM(NSString *mainClass, NSArray<NSString *> *args, int minJav
                 return -1;
             }
             // 有界等待 120s（ame169：心跳+挂起豁免）；超时则明确报错而非无限转圈。
-            if (!ame169_waitForJITCondition(^BOOL{ return isJITEnabled(NO); }, 120.0, @"Headless JIT")) {
+            // ★ [JIT-FLOW] 等待条件由裸 isJITEnabled(NO)（CS_DEBUGGED 粘滞 ⇒ attach
+            //   即 <2s 假阳性）改为 AMEJITWaitReadyVerified()：不再相信外部工具的
+            //   「jit complete」提示，必须真的发 brk #0x69 拿到可写 JIT 区才算就绪。
+            if (!ame169_waitForJITCondition(^BOOL{ return AMEJITWaitReadyVerified(); }, 120.0, @"JIT-FLOW verify")) {
                 NSLog(@"[JavaLauncher] launchHeadlessJVM: Task139 JIT wait timed out");
+                // ★ [JIT-FLOW] 外部工具（如 StikDebug）可能已弹自己的「jit complete」，
+                //   但我们独立自检（brk #0x69 -> 可写 JIT 区）未过 ⇒ 明确告知。
+                NSLog(@"[JIT-FLOW] [Headless] stikdebug reported complete but self-check failed (brk #0x69 not serviced) -- NOT proceeding");
                 showDialog(localize(@"Error", nil),
-                    @"JIT 开启等待超时（120 秒）。请确认 JIT 工具已安装并可正常拉起后重试，也可在设置中选择其它 JIT 开启方式。\n"
-                    @"Timed out waiting for JIT (120s). Make sure the JIT enabler app can be launched, or pick another enabler in Settings, then retry.");
+                    @"StikDebug / JIT 工具可能已提示完成，但本机 JIT 自检未通过（未能申请到可写 JIT 区），安装器无法运行。请重试、重启 App，或改用 TrollStore 直启及其它 JIT 开启方式。\n"
+                    @"Your JIT tool may report \"complete\" but the launcher's own self-check failed (no writable JIT region obtainable). Retry, restart the app, or use TrollStore / another enabler.");
                 return -1;
             }
-            NSLog(@"[JavaLauncher] launchHeadlessJVM: Task139 JIT became enabled, continuing");
+            NSLog(@"[JavaLauncher] launchHeadlessJVM: Task139 JIT verified (writable JIT region=%p), continuing",
+                  AMEJITVerifiedRegionPtr());
         }
     }
 
@@ -2813,7 +3038,11 @@ int launchHeadlessJVM(NSString *mainClass, NSArray<NSString *> *args, int minJav
             task_set_exception_ports(mach_task_self(), EXC_MASK_ALL & ~EXC_MASK_BREAKPOINT, 0,
                 EXCEPTION_DEFAULT, THREAD_STATE_NONE);
         }
+        // ★ [DYLD-SWITCH] 与 launchJVM 同:旁路开启时会把 SIGBUS 置为 SIG_IGN ⇒ 立刻换回
+        //   容错 handler(headless 安装期同样会加载 JNA/libffi,活锁代价一样)。
+        //   旁路关闭(默认)时不装 handler,回到系统默认 SIGBUS 行为。
         init_bypassDyldLibValidation();
+        ame_installTolerantSigbusHandlerIfBypassEnabled();
     } else {
         NSLog(@"[DyldLVBypass] Hook disabled! Loading unsigned dylib will cause code signature error.");
     }
@@ -2892,6 +3121,15 @@ int launchHeadlessJVM(NSString *mainClass, NSArray<NSString *> *args, int minJav
     PUSH_HARGV_FORMAT(@"-Djava.library.path=%@/Frameworks", NSBundle.mainBundle.bundlePath);
     PUSH_HARGV_FORMAT(@"-Duser.dir=%@", gameDir);
     PUSH_HARGV_FORMAT(@"-Duser.home=%@", procHome);
+    // ★ [VER-ISOLATE] 每实例 Java 临时目录（对齐 launchJVM）：Forge/NeoForge 直装
+    //   processors 会下载/解包到临时目录，分实例后不与运行期 JVM / 其它实例互相覆盖。
+    {
+        NSString *viTmpDirH = ameVIInstanceSubdir(@"tmp");
+        if (viTmpDirH.length > 0) {
+            PUSH_HARGV_FORMAT(@"-Djava.io.tmpdir=%@", viTmpDirH);
+            NSLog(@"[VER-ISOLATE] headless java.io.tmpdir -> %@", viTmpDirH);
+        }
+    }
     PUSH_HARGV_FORMAT(@"-Duser.timezone=%@", NSTimeZone.localTimeZone.name);
     PUSH_HARGV_LITERAL("-Dlog4j2.formatMsgNoLookups=true");
     // Workaround random stack guard allocation crashes（对齐 launchJVM）
@@ -2902,8 +3140,14 @@ int launchHeadlessJVM(NSString *mainClass, NSArray<NSString *> *args, int minJav
     PUSH_HARGV_LITERAL("-XX:ReservedCodeCacheSize=64m");
     PUSH_HARGV_LITERAL("-XX:InitialCodeCacheSize=16m");
     PUSH_HARGV_LITERAL("-XX:CodeCacheExpansionSize=4m");
+    // ★ [ISSUE-FIX] #70：同 launchJVM —— Java 8 的 JVM 不支持 MirrorMappedCodeCache，
+    //   否则 installer/headless JVM 也会因未知 VM 参数启动失败。
     if (@available(iOS 26.0, *)) {
-        PUSH_HARGV_LITERAL("-XX:+MirrorMappedCodeCache");
+        if (!isJava8) {
+            PUSH_HARGV_LITERAL("-XX:+MirrorMappedCodeCache");
+        } else {
+            NSLog(@"[ISSUE-FIX] #70: (headless) Java 8 runtime -> skip -XX:+MirrorMappedCodeCache");
+        }
     }
     if (!getEntitlementValue(@"com.apple.developer.kernel.extended-virtual-addressing")) {
         PUSH_HARGV_LITERAL("-XX:-UseCompressedClassPointers");
@@ -2948,7 +3192,12 @@ int launchHeadlessJVM(NSString *mainClass, NSArray<NSString *> *args, int minJav
     // Cr4shed known issue（对齐 launchJVM）：重置信号处理器让 JVM 能捕获崩溃信号
     signal(SIGSEGV, SIG_DFL);
     signal(SIGPIPE, SIG_DFL);
-    signal(SIGBUS, SIG_DFL);
+    // ★ [DYLD-BYPASS] SIGBUS 例外:这里原写 signal(SIGBUS, SIG_DFL),会让启动期
+    //   的 SIGBUS 直接按默认行为终止(此前甚至是被旁路改成 SIG_IGN 的静默活锁)。
+    //   HotSpot 在 arm64 上不使用 SIGBUS(上面复位 SIGSEGV/SIGPIPE 是让 JVM 接管),
+    //   故旁路开启时保留容错 handler:前若干次记 pc/镜像后放行,连续超限再转 SIG_DFL。
+    //   ★ [DYLD-SWITCH] 旁路关闭(默认)时不装 handler,恢复原句 signal(SIGBUS, SIG_DFL)。
+    ame_installTolerantSigbusHandlerIfBypassEnabled();
     signal(SIGILL, SIG_DFL);
     signal(SIGFPE, SIG_DFL);
 
